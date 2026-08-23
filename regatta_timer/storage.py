@@ -1,0 +1,221 @@
+"""Persistence (spec §6.7).
+
+SQLite with WAL + synchronous=FULL so a crash cannot lose a committed result
+(N4). Foreign keys are enabled on EVERY connection. Commits happen on a single
+writer thread, never on the trigger path (§6.5). Deletion is soft
+(``deleted=1``); sequences are never reused.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+import threading
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS race (
+    id                INTEGER PRIMARY KEY,
+    name              TEXT NOT NULL,
+    boot_id           TEXT NOT NULL,
+    t0_monotonic      REAL NOT NULL,
+    t0_wall           REAL NOT NULL,
+    t0_reconstructed  INTEGER NOT NULL DEFAULT 0,
+    start_mode        TEXT NOT NULL,
+    radio_delay_ms    REAL NOT NULL DEFAULT 0,
+    delta_used        REAL NOT NULL,
+    viewing_mode      TEXT NOT NULL,
+    fps_nominal       REAL,
+    notes             TEXT,
+    created_at        TEXT NOT NULL,
+    CHECK (start_mode   IN ('direct','radio','external')),
+    CHECK (viewing_mode IN ('water','screen'))
+);
+
+CREATE TABLE IF NOT EXISTS capture (
+    id              INTEGER PRIMARY KEY,
+    race_id         INTEGER NOT NULL REFERENCES race(id),
+    sequence        INTEGER NOT NULL,
+    t_press         REAL NOT NULL,
+    t_press_wall    REAL NOT NULL,
+    elapsed_s       REAL NOT NULL,
+    delta_used      REAL NOT NULL,
+    bow_number      TEXT,
+    primary_image   TEXT,
+    image_flag      TEXT,
+    debounce_suspect INTEGER NOT NULL DEFAULT 0,
+    deleted         INTEGER NOT NULL DEFAULT 0,
+    notes           TEXT,
+    UNIQUE (race_id, sequence),
+    CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
+);
+
+CREATE TABLE IF NOT EXISTS capture_frame (
+    id              INTEGER PRIMARY KEY,
+    capture_id      INTEGER NOT NULL REFERENCES capture(id),
+    t_recv          REAL NOT NULL,
+    offset_ms       REAL NOT NULL,
+    path            TEXT NOT NULL,
+    is_primary      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_capture_race ON capture(race_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_frame_capture ON capture_frame(capture_id, t_recv);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_primary ON capture_frame(capture_id)
+    WHERE is_primary = 1;
+"""
+
+
+def current_boot_id() -> str:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return "unknown"
+
+
+class Storage:
+    def __init__(self, data_root: Path):
+        self.data_root = Path(data_root)
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.data_root / "regatta.db"
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.executescript(SCHEMA)
+        self._conn.commit()
+
+    # --- race -------------------------------------------------------------
+    def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
+                    delta_used, viewing_mode, fps_nominal=None, boot_id=None,
+                    notes=None) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO race (name, boot_id, t0_monotonic, t0_wall, "
+                "start_mode, radio_delay_ms, delta_used, viewing_mode, "
+                "fps_nominal, notes, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (name, boot_id or current_boot_id(), t0_monotonic, t0_wall,
+                 start_mode, radio_delay_ms, delta_used, viewing_mode,
+                 fps_nominal, notes, _utcnow()))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def get_race(self, race_id: int):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM race WHERE id=?", (race_id,)).fetchone()
+
+    def list_races(self):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT id, name, created_at FROM race ORDER BY id DESC").fetchall()
+
+    def mark_race_reconstructed(self, race_id: int, t0_reconstructed_mono: float) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE race SET t0_reconstructed=1, t0_monotonic=? WHERE id=?",
+                (t0_reconstructed_mono, race_id))
+            self._conn.commit()
+
+    # --- capture ----------------------------------------------------------
+    def next_sequence(self, race_id: int) -> int:
+        """Including soft-deleted rows, so numbers are never reused (§6.7)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(sequence),0)+1 AS n FROM capture WHERE race_id=?",
+                (race_id,)).fetchone()
+            return int(row["n"])
+
+    def insert_capture(self, race_id, sequence, t_press, t_press_wall, elapsed_s,
+                       delta_used, image_flag=None, debounce_suspect=0,
+                       bow_number=None, notes=None) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
+                "elapsed_s, delta_used, image_flag, debounce_suspect, bow_number, "
+                "notes) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (race_id, sequence, t_press, t_press_wall, elapsed_s, delta_used,
+                 image_flag, debounce_suspect, bow_number, notes))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def update_capture(self, capture_id, **fields) -> None:
+        allowed = {"bow_number", "primary_image", "image_flag", "deleted", "notes"}
+        sets = []
+        vals = []
+        for k, v in fields.items():
+            if k not in allowed:
+                raise ValueError(f"cannot update column {k}")
+            sets.append(f"{k}=?")
+            vals.append(v)
+        if not sets:
+            return
+        vals.append(capture_id)
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE capture SET {', '.join(sets)} WHERE id=?", vals)
+            self._conn.commit()
+
+    def capture(self, capture_id: int):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM capture WHERE id=?", (capture_id,)).fetchone()
+
+    def captures_for_race(self, race_id: int, include_deleted: bool = False):
+        q = "SELECT * FROM capture WHERE race_id=?"
+        if not include_deleted:
+            q += " AND deleted=0"
+        q += " ORDER BY sequence"
+        with self._lock:
+            return self._conn.execute(q, (race_id,)).fetchall()
+
+    # --- capture_frame ----------------------------------------------------
+    def insert_frame(self, capture_id, t_recv, offset_ms, path, is_primary=0) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO capture_frame (capture_id, t_recv, offset_ms, path, "
+                "is_primary) VALUES (?,?,?,?,?)",
+                (capture_id, t_recv, offset_ms, path, is_primary))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def frames_for_capture(self, capture_id: int):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM capture_frame WHERE capture_id=? ORDER BY t_recv",
+                (capture_id,)).fetchall()
+
+    def set_primary(self, capture_id: int, frame_id: int) -> None:
+        """Promote *frame_id* to primary; demote others (unique index enforces)."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE capture_frame SET is_primary=0 WHERE capture_id=?",
+                (capture_id,))
+            self._conn.execute(
+                "UPDATE capture_frame SET is_primary=1 WHERE id=? AND capture_id=?",
+                (frame_id, capture_id))
+            row = self._conn.execute(
+                "SELECT path FROM capture_frame WHERE id=?", (frame_id,)).fetchone()
+            if row:
+                self._conn.execute(
+                    "UPDATE capture SET primary_image=? WHERE id=?",
+                    (row["path"], capture_id))
+            self._conn.commit()
+
+    def integrity_ok(self) -> bool:
+        with self._lock:
+            row = self._conn.execute("PRAGMA integrity_check").fetchone()
+            return bool(row and row[0] == "ok")
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.commit()
+            self._conn.close()
+
+
+def _utcnow() -> str:
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
