@@ -65,11 +65,11 @@ class TestReviewDialog(unittest.TestCase):
         self.storage.close()
         self.tmp.cleanup()
 
-    def test_cycles_and_edits_bow(self):
+    def test_lists_all_captures_and_edits_bow(self):
         dlg = RaceReviewDialog(self.controller, self.controller.race_id,
                                self.data_root)
         self.assertEqual(len(dlg._captures), 3)
-        self.assertEqual(dlg.counter.text(), "1 / 3")
+        self.assertEqual(len(dlg._edits), 3)
 
         first = self.storage.captures_for_race(self.controller.race_id)[0]
 
@@ -79,16 +79,23 @@ class TestReviewDialog(unittest.TestCase):
             self.controller.set_bow_number(cap["id"], value or None)
 
         dlg.bow_edited.connect(persist)
-        dlg.bow_edit.setText("07")
-        dlg._emit_bow()
+        seq1 = first["sequence"]
+        dlg._edits[seq1].setText("07")
+        dlg._edits[seq1].editingFinished.emit()
         self.assertEqual(self.storage.capture(first["id"])["bow_number"], "07")
 
-        dlg._next()
-        self.assertEqual(dlg.counter.text(), "2 / 3")
-        dlg._next()
-        self.assertEqual(dlg.counter.text(), "3 / 3")
-        dlg._prev()
-        self.assertEqual(dlg.counter.text(), "2 / 3")
+        dlg.close()
+
+    def test_delete_removes_row(self):
+        dlg = RaceReviewDialog(self.controller, self.controller.race_id,
+                               self.data_root)
+        self.assertEqual(len(dlg._captures), 3)
+        first = self.storage.captures_for_race(self.controller.race_id)[0]
+        seq = first["sequence"]
+        dlg._delete(seq)
+        self.assertEqual(len(dlg._captures), 2)
+        self.assertNotIn(seq, dlg._edits)
+        self.assertEqual(len(dlg._edits), 2)
         dlg.close()
 
 
