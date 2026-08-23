@@ -215,6 +215,8 @@ class MainWindow(QMainWindow):
         self.controller.start_race(t_press, name=time.strftime("Race-%Y%m%d-%H%M"))
         if self.controller.running:
             self._race_over = False
+            self._last_capture = None
+            self.list.clear_captures()
             self.end_btn.setEnabled(True)
         self._dismiss_banner()
         self.start_btn.setText("Arm Start Race (Ctrl+S)")

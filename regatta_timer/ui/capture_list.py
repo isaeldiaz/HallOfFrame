@@ -106,6 +106,12 @@ class CaptureList(QListWidget):
         self._thumb_cache[path] = pm
         return pm
 
+    def clear_captures(self) -> None:
+        """Remove all rows (called when a new race starts)."""
+        self.clear()
+        self._thumb_cache.clear()
+        self._bow_edits.clear()
+
     def update_bow(self, sequence: int, value: str) -> None:
         """Set a row's bow-field text without re-emitting (keeps the main list
         in sync when the bow is edited from elsewhere, e.g. the review dialog)."""
