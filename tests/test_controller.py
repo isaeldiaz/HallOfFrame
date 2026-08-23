@@ -292,6 +292,27 @@ class TestCalibrationValidation(Base):
         self.assertFalse(ok)
         self.assertIn("FPS CHANGED", detail)
 
+    def test_calibration_status_startup_burst_no_false_alarm(self):
+        # A burst of frames within a short span (startup) reads an inflated
+        # instantaneous fps; the check must defer rather than flag stale.
+        import json
+        from PIL import Image
+        import io as _io
+        bio = _io.BytesIO()
+        Image.new("RGB", (1440, 1080), (120, 120, 120)).save(bio, "JPEG")
+        self._seed_real_jpeg(self.buffer, bio.getvalue(), fps=30)
+        # collapse all frame timestamps into a tiny span to emulate a burst
+        burst = list(self.buffer._buf)
+        for i, f in enumerate(burst):
+            f.t_recv = burst[0].t_recv + i * 0.001
+        (self.data_root / "calibration.json").write_text(json.dumps({
+            "latency_median_ms": 94.0, "resolution": "1440x1080",
+            "fps": 30}))
+        from regatta_timer.controller import calibration_status
+        ok, detail = calibration_status(self.config, self.buffer)
+        self.assertTrue(ok)
+        self.assertEqual(detail, "")
+
 
 if __name__ == "__main__":
     unittest.main()

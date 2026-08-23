@@ -429,9 +429,13 @@ def _measure_live(buffer):
     except Exception:
         pass
     res = f"{w}x{h}" if w and h else ""
-    # fps from frame timestamps
+    # fps from frame timestamps. Only report when the sampled window spans a
+    # meaningful duration; at startup frames arrive in a burst so a short window
+    # reads an inflated instantaneous rate and would spuriously flag the
+    # calibration as stale. fps=0 defers the check to the stream health instead.
     if len(frames) >= 2:
-        fps = (len(frames) - 1) / (frames[-1].t_recv - frames[0].t_recv)
+        span = frames[-1].t_recv - frames[0].t_recv
+        fps = (len(frames) - 1) / span if span >= 0.5 else 0.0
     else:
         fps = 0.0
     return res, mean, fps
