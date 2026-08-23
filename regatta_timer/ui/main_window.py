@@ -9,12 +9,14 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel,
-                               QMainWindow, QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QMainWindow, QPushButton, QVBoxLayout,
+                               QWidget)
 
 from ..controller import CaptureController
 from ..export import export_csv
 from ..framebuffer import FrameBuffer
+from ..races import load_race_names, write_example
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.capture_list import CaptureList, FrameReviewPanel
 from ..ui.preview_widget import PreviewWidget
@@ -64,6 +66,13 @@ class MainWindow(QMainWindow):
         root.addLayout(mid, 1)
 
         controls = QHBoxLayout()
+        self.race_label = QLabel("Race:")
+        controls.addWidget(self.race_label)
+        self.race_selector = QComboBox()
+        self._populate_race_selector()
+        self.race_selector.setToolTip(
+            "Race names come from the races Excel file (one per row, column A).")
+        controls.addWidget(self.race_selector)
         self.start_btn = QPushButton("Arm Start Race (Ctrl+S)")
         self.start_btn.clicked.connect(self._arm_start)
         controls.addWidget(self.start_btn)
@@ -115,6 +124,7 @@ class MainWindow(QMainWindow):
         self._cal_detail = ""
         self._last_capture: int | None = None
         self._review_dialog = None
+        self._race_names = []
         self._flash_timer = QTimer(self)
         self._flash_timer.setSingleShot(True)
         self._flash_timer.timeout.connect(self._end_flash)
@@ -160,7 +170,8 @@ class MainWindow(QMainWindow):
             fps = self.trigger.fps if self.trigger else 0.0
             last = f"  · last capture #{self._last_capture:03d}" if self._last_capture else ""
             self.status.setText(
-                f"REC {_fmt_clock(el)}   {fps:.1f} fps{last}")
+                f"REC {self._current_race_name()}  {_fmt_clock(el)}   "
+                f"{fps:.1f} fps{last}")
             return
         if self._race_over:
             self.status.setText(self._race_over_detail)
@@ -197,6 +208,29 @@ class MainWindow(QMainWindow):
         else:
             self.status.setText(f"No race · stream OK ({fps:.1f} fps)")
 
+    def _populate_race_selector(self) -> None:
+        """Load race names from the races Excel file; create a starter file if
+        none exists yet, then repopulate."""
+        import os
+        races_cfg = self.config.section("races")
+        excel_path = os.path.expanduser(races_cfg["excel_path"])
+        self._race_names = load_race_names(excel_path)
+        if not self._race_names:
+            try:
+                write_example(excel_path)
+                self._race_names = load_race_names(excel_path)
+            except Exception:
+                self._race_names = []
+        self.race_selector.clear()
+        for n in self._race_names:
+            self.race_selector.addItem(n)
+        if self.race_selector.count():
+            self.race_selector.setCurrentIndex(0)
+
+    def _current_race_name(self) -> str:
+        name = self.race_selector.currentText().strip()
+        return name or time.strftime("Race-%Y%m%d-%H%M%S")
+
     def _arm_start(self) -> None:
         # Confirmation happens BEFORE arming (§5.3, §7.4); the next press on the
         # start keycode is t0.
@@ -212,12 +246,14 @@ class MainWindow(QMainWindow):
         if not self._armed:
             return
         self._armed = False
-        self.controller.start_race(t_press, name=time.strftime("Race-%Y%m%d-%H%M"))
+        name = self._current_race_name()
+        self.controller.start_race(t_press, name=name)
         if self.controller.running:
             self._race_over = False
             self._last_capture = None
             self.list.clear_captures()
             self.end_btn.setEnabled(True)
+            self.race_selector.setEnabled(False)
         self._dismiss_banner()
         self.start_btn.setText("Arm Start Race (Ctrl+S)")
 
@@ -234,6 +270,7 @@ class MainWindow(QMainWindow):
         self._race_over = True
         self._race_over_detail = f"RACE OVER — {n} ends · {last}"
         self.end_btn.setEnabled(False)
+        self.race_selector.setEnabled(True)
         self.review_btn.setEnabled(True)
         self._show_banner(
             f"RACE OVER — {n} ends recorded. Archive stopped; trigger keyboard "

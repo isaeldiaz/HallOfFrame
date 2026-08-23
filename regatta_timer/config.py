@@ -56,6 +56,9 @@ DEFAULTS: dict[str, Any] = {
         "end_keycodes": [88],  # KEY_F12 — finish the race (see §6.4)
         "grab_device": True,
     },
+    "races": {
+        "excel_path": "~/regatta-data/races.xlsx",
+    },
     "archive": {
         "enabled": True,
         "every_nth_frame": 1,

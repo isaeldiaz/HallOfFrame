@@ -1,7 +1,7 @@
 """Application entry point (spec §12).
 
 Wires everything together: transport, MJPEGReader, FrameBuffer, TriggerListener,
-CaptureController, storage, archive, logging, and the Qt UI. Under normal
+CaptureController, storage, logging, and the Qt UI. Under normal
 operation the whole app runs under ``systemd-inhibit`` (INSTALL.md §7).
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ class _TriggerBridge(QObject):
 
 
 def build_core(config):
-    """Construct transport, reader, buffer, storage, archive and controller.
+    """Construct transport, reader, buffer, storage and controller.
     Returns a dict of the parts so headless tests can reuse it without Qt."""
     import time
     from .controller import CaptureController
@@ -53,10 +53,7 @@ def build_core(config):
     buffer = FrameBuffer(seconds=float(stream["buffer_seconds"]),
                          assumed_fps=int(stream["assumed_fps"]))
 
-    archive_cfg = config.section("archive")
-
-    controller = CaptureController(config, storage, buffer,
-                                   archive_enabled=bool(archive_cfg["enabled"]))
+    controller = CaptureController(config, storage, buffer)
 
     auth = None
     if stream["username"]:
@@ -64,12 +61,6 @@ def build_core(config):
 
     def _ingest(frame):
         buffer.append(frame)
-        # Continuous recording is per-race (spec F7 / §6.6): the controller
-        # creates+starts its own ArchiveWriter in races/<race>/archive when a
-        # race starts (and None between races), so route to it here.
-        aw = controller.archive_writer
-        if aw is not None:
-            aw.submit(frame)
 
     reader = MJPEGReader(stream["url"], _ingest, auth=auth,
                          require_content_length=bool(stream["require_content_length"]))
@@ -218,7 +209,7 @@ def main(argv=None) -> int:
 
     def _cleanup():
         _monitor_stop.set()
-        core["controller"].stop()  # also stops the per-race ArchiveWriter (§6.6)
+        core["controller"].stop()
         if listener:
             listener.stop()
         core["reader"].stop()

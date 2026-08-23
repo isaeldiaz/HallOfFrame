@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 
 from . import storage as storage_mod
-from .archive import ArchiveWriter
 from .framebuffer import FrameBuffer
 from .mjpeg import Frame
 from .storage import Storage
@@ -37,13 +36,11 @@ class Capture:
 
 class CaptureController:
     def __init__(self, config, storage: Storage, framebuffer: FrameBuffer,
-                 logger=None, archive_enabled: bool = True):
+                 logger=None):
         self.config = config
         self.storage = storage
         self.buffer = framebuffer
         self.logger = logger
-        self.archive_enabled = archive_enabled
-        self.archive_writer: ArchiveWriter | None = None
 
         self.t0: float | None = None
         self.t0_wall: float | None = None
@@ -129,13 +126,10 @@ class CaptureController:
             fps_nominal=self.preview_fps)
         self.race_id = race_id
 
-        self.race_dir = self.storage.data_root / "races" / f"{name}"
-
-        if self.archive_enabled:
-            self.archive_writer = ArchiveWriter(
-                self.race_dir / "archive",
-                every_nth_frame=int(self.config.section("archive")["every_nth_frame"]))
-            self.archive_writer.start()
+        # Race directory is keyed by the unique, never-reused race_id so two
+        # races with the same display name (or two started in the same minute)
+        # can never collide and overwrite each other's captures.
+        self.race_dir = self._race_dir(race_id, name)
 
         if self.signal_race_started:
             try:
@@ -164,10 +158,7 @@ class CaptureController:
             self.storage.mark_race_reconstructed(race_id, self.t0)
             self._warn(f"race {race_id}: t0 reconstructed from wall clock "
                        "(boot_id mismatch); times flagged t0_reconstructed")
-        self.race_dir = self.storage.data_root / "races" / row["name"]
-        if self.archive_enabled:
-            self.archive_writer = ArchiveWriter(self.race_dir / "archive")
-            self.archive_writer.start()
+        self.race_dir = self._race_dir(race_id, row["name"])
 
     def end_race(self, t_end: float | None = None) -> int | None:
         """Finish the current race (spec: an explicit End-Race so the operator
@@ -186,10 +177,6 @@ class CaptureController:
         rows = self.storage.captures_for_race(self.race_id)
         self.ended_capture_count = len(rows)
 
-        if self.archive_writer is not None:
-            self.archive_writer.stop()
-            self.archive_writer = None
-
         self.storage.mark_race_ended(self.race_id, t_end)
 
         if self.logger:
@@ -202,6 +189,13 @@ class CaptureController:
             except Exception:
                 pass
         return self.race_id
+
+    def _race_dir(self, race_id: int, name: str):
+        """Unique, deterministic per-race directory: races/<id>_<sanitized name>."""
+        clean = "".join(c if (c.isalnum() or c in "._- ") else "_"
+                        for c in name).strip()
+        clean = clean or "race"
+        return self.storage.data_root / "races" / f"{race_id:04d}_{clean}"
 
     # --- delta ------------------------------------------------------------
     def _compute_delta(self) -> float:
@@ -225,7 +219,12 @@ class CaptureController:
         elapsed = t_press - self.t0
         target = t_press - self.delta
         # Fast path: enqueue, return immediately. Nothing on this path hits disk.
+        # Snapshot the race identity NOW: the writer thread (and the deferred
+        # image selector) may run after this race has ended and the next started,
+        # so they must attribute to the race that actually owned the press.
         self._queue.put(("capture", {
+            "race_id": self.race_id,
+            "race_dir": self.race_dir,
             "t_press": t_press,
             "elapsed_s": elapsed,
             "target": target,
@@ -245,7 +244,8 @@ class CaptureController:
                 break
 
     def _handle_capture(self, payload: dict) -> None:
-        race_id = self.race_id
+        race_id = payload["race_id"]
+        race_dir = payload["race_dir"]
         t_press = payload["t_press"]
         elapsed = payload["elapsed_s"]
         target = payload["target"]
@@ -280,7 +280,7 @@ class CaptureController:
         def _fire() -> None:
             with self._timers_lock:
                 self._timers.discard(timer)
-            self._select_images(capture_id, sequence, target)
+            self._select_images(capture_id, sequence, target, race_dir)
 
         timer = threading.Timer(delay, _fire)
         timer.daemon = True
@@ -295,11 +295,12 @@ class CaptureController:
                              image_flag=image_flag,
                              debounce_suspect=int(payload["debounce_suspect"]))
 
-    def _select_images(self, capture_id: int, sequence: int, target: float) -> None:
-        if self.race_dir is None:
+    def _select_images(self, capture_id: int, sequence: int, target: float,
+                       race_dir) -> None:
+        if race_dir is None:
             return
         frames = self.buffer.window(target, self.window_before_s, self.window_after_s)
-        captures_dir = self.race_dir / "captures"
+        captures_dir = race_dir / "captures"
         captures_dir.mkdir(parents=True, exist_ok=True)
 
         primary = self.buffer.nearest(target)
@@ -360,8 +361,6 @@ class CaptureController:
                 t.cancel()
                 self._timers.discard(t)
         self._queue.put(("stop", None))
-        if self.archive_writer:
-            self.archive_writer.stop()
 
 
 def timing_viewing(config) -> str:
