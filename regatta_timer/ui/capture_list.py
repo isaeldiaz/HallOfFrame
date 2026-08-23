@@ -57,6 +57,7 @@ class CaptureList(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.itemClicked.connect(self._on_click)
         self._thumb_cache = {}
+        self._bow_edits = {}  # sequence -> QLineEdit
 
     def add_capture(self, sequence: int, elapsed_s: float, thumb_path: str | None,
                     bow: str = "", suspect: bool = False,
@@ -78,6 +79,7 @@ class CaptureList(QListWidget):
         bow_edit.setFixedWidth(60)
         bow_edit.editingFinished.connect(
             lambda e=bow_edit: self.bow_edited.emit(sequence, e.text()))
+        self._bow_edits[sequence] = bow_edit
         lay.addWidget(bow_edit)
         if image_flag == "missing":
             lay.addWidget(QLabel("NO IMAGE"))
@@ -103,6 +105,13 @@ class CaptureList(QListWidget):
         pm = QPixmap.fromImage(img)
         self._thumb_cache[path] = pm
         return pm
+
+    def update_bow(self, sequence: int, value: str) -> None:
+        """Set a row's bow-field text without re-emitting (keeps the main list
+        in sync when the bow is edited from elsewhere, e.g. the review dialog)."""
+        edit = self._bow_edits.get(sequence)
+        if edit is not None and edit.text() != value:
+            edit.setText(value)
 
     def _on_click(self, item) -> None:
         seq = item.data(Qt.UserRole)

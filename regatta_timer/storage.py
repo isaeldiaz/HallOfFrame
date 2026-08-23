@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS race (
     fps_nominal       REAL,
     notes             TEXT,
     created_at        TEXT NOT NULL,
+    ended_at          TEXT,
+    t_end_monotonic   REAL,
     CHECK (start_mode   IN ('direct','radio','external')),
     CHECK (viewing_mode IN ('water','screen'))
 );
@@ -85,7 +87,17 @@ class Storage:
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns added after the initial schema (spec §6.7 N4: survive an
+        upgrade with an existing on-disk database)."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(race)")}
+        if "ended_at" not in cols:
+            self._conn.execute("ALTER TABLE race ADD COLUMN ended_at TEXT")
+        if "t_end_monotonic" not in cols:
+            self._conn.execute("ALTER TABLE race ADD COLUMN t_end_monotonic REAL")
 
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
@@ -112,6 +124,13 @@ class Storage:
         with self._lock:
             return self._conn.execute(
                 "SELECT id, name, created_at FROM race ORDER BY id DESC").fetchall()
+
+    def mark_race_ended(self, race_id: int, t_end_mono: float) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE race SET ended_at=?, t_end_monotonic=? WHERE id=?",
+                (_utcnow(), t_end_mono, race_id))
+            self._conn.commit()
 
     def mark_race_reconstructed(self, race_id: int, t0_reconstructed_mono: float) -> None:
         with self._lock:

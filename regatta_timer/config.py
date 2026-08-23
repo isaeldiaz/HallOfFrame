@@ -53,6 +53,7 @@ DEFAULTS: dict[str, Any] = {
         "device_path": "/dev/input/event3",  # internal keyboard
         "crossing_keycodes": [57],  # KEY_SPACE — operator choice (see §6.4)
         "start_keycodes": [28],  # KEY_ENTER
+        "end_keycodes": [88],  # KEY_F12 — finish the race (see §6.4)
         "grab_device": True,
     },
     "archive": {

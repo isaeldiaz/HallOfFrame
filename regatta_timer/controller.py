@@ -51,6 +51,8 @@ class CaptureController:
         self.race_dir: Path | None = None
         self.delta = 0.0
         self.running = False
+        self.ended_at_mono: float | None = None  # monotonic time of end_race()
+        self.ended_capture_count = 0  # non-deleted ends at the moment of ending
         self.preview_fps = float(config.section("stream")["assumed_fps"])
 
         timing = config.section("timing")
@@ -68,6 +70,7 @@ class CaptureController:
         # Qt-signal-like hooks for the UI (a real Qt app swaps these).
         self.signal_capture_added = None  # callable(capture)
         self.signal_race_started = None   # callable(race_id)
+        self.signal_race_ended = None     # callable(race_id)
         self.signal_warning = None        # callable(str)
 
         # Deferred selection timing (ms). Margin so after-window frames exist.
@@ -115,6 +118,8 @@ class CaptureController:
             self._warn(f"race NOT started: {exc}")
             return self.race_id
         self.running = True
+        self.ended_at_mono = None
+        self.ended_capture_count = 0
 
         race_id = self.storage.create_race(
             name=name, t0_monotonic=t_press, t0_wall=self.t0_wall,
@@ -149,6 +154,8 @@ class CaptureController:
         self.start_mode = row["start_mode"]
         self.radio_delay_ms = row["radio_delay_ms"]
         self.running = True
+        self.ended_at_mono = None
+        self.ended_capture_count = 0
         if row["boot_id"] == boot_id:
             self.t0 = row["t0_monotonic"]
         else:
@@ -161,6 +168,40 @@ class CaptureController:
         if self.archive_enabled:
             self.archive_writer = ArchiveWriter(self.race_dir / "archive")
             self.archive_writer.start()
+
+    def end_race(self, t_end: float | None = None) -> int | None:
+        """Finish the current race (spec: an explicit End-Race so the operator
+        knows when the last end is in and the race is over).
+
+        Stops continuous archiving, persists ``ended_at``/``t_end_monotonic``,
+        clears ``running`` (which the UI's grab-sync timer uses to release the
+        trigger keyboard), and emits ``signal_race_ended``. Does NOT tear down
+        the persistence writer thread — a new race can start next."""
+        if not self.running or self.race_id is None:
+            self._warn("end ignored: no race running")
+            return None
+        t_end = time.monotonic() if t_end is None else t_end
+        self.running = False
+        self.ended_at_mono = t_end
+        rows = self.storage.captures_for_race(self.race_id)
+        self.ended_capture_count = len(rows)
+
+        if self.archive_writer is not None:
+            self.archive_writer.stop()
+            self.archive_writer = None
+
+        self.storage.mark_race_ended(self.race_id, t_end)
+
+        if self.logger:
+            self.logger.info("controller", "race_ended",
+                             race_id=self.race_id, ends=self.ended_capture_count,
+                             t_end=t_end)
+        if self.signal_race_ended:
+            try:
+                self.signal_race_ended(self.race_id)
+            except Exception:
+                pass
+        return self.race_id
 
     # --- delta ------------------------------------------------------------
     def _compute_delta(self) -> float:

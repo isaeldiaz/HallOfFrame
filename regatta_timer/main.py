@@ -25,6 +25,7 @@ class _TriggerBridge(QObject):
     as a queued connection to the main thread's event loop (§6.4, §6.5)."""
     crossing = Signal(float, int)   # (t_press, keycode)
     start = Signal(float)           # (t_press)
+    end = Signal(float)             # (t_press)
     capture = Signal(object)        # (Capture)
 
 
@@ -82,7 +83,7 @@ def build_core(config):
     }
 
 
-def build_trigger(config, on_crossing, on_start, logger=None):
+def build_trigger(config, on_crossing, on_start, on_end=None, logger=None):
     """Construct a TriggerListener from config; fall back to Qt if unavailable.
     Returns (listener_or_None, used_fallback: bool)."""
     from .trigger import TriggerError, TriggerListener
@@ -92,6 +93,8 @@ def build_trigger(config, on_crossing, on_start, logger=None):
         return None, True
     handlers = {int(c): on_crossing for c in trig["crossing_keycodes"]}
     handlers.update({int(c): on_start for c in trig["start_keycodes"]})
+    if on_end is not None:
+        handlers.update({int(c): on_end for c in trig["end_keycodes"]})
     try:
         listener = TriggerListener(
             device, handlers,
@@ -138,11 +141,15 @@ def main(argv=None) -> int:
     bridge = _TriggerBridge()
     bridge.start.connect(win.on_evdev_start)
     bridge.crossing.connect(win.on_evdev_crossing)
+    bridge.end.connect(win.on_evdev_end)
     bridge.capture.connect(win.on_capture)
     # The controller emits capture-added from its persistence writer thread; reroute
     # it through the bridge instead of letting MainWindow._connect_controller point
-    # it straight at the Qt widgets.
+    # it straight at the Qt widgets. signal_race_ended is emitted from end_race(),
+    # which always runs on the GUI thread (button or queued evdev end), so it can
+    # call the window directly.
     core["controller"].signal_capture_added = lambda cap: bridge.capture.emit(cap)
+    core["controller"].signal_race_ended = win.on_race_ended
 
     def _crossing(t_press, code, suspect=False):
         bridge.crossing.emit(t_press, code)
@@ -150,7 +157,10 @@ def main(argv=None) -> int:
     def _start(t_press, code, suspect=False):
         bridge.start.emit(t_press)
 
-    listener, fallback = build_trigger(config, _crossing, _start, logger)
+    def _end(t_press, code, suspect=False):
+        bridge.end.emit(t_press)
+
+    listener, fallback = build_trigger(config, _crossing, _start, _end, logger)
     if fallback:
         # Qt key-event fallback (§6.4): degraded precision, say so.
         logger.warning("trigger", "qt_fallback")

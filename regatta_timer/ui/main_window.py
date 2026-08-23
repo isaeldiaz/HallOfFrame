@@ -18,6 +18,7 @@ from ..framebuffer import FrameBuffer
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.capture_list import CaptureList, FrameReviewPanel
 from ..ui.preview_widget import PreviewWidget
+from ..ui.review_dialog import RaceReviewDialog
 
 
 def keycode_names(codes) -> str:
@@ -66,16 +67,29 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("Arm Start Race (Ctrl+S)")
         self.start_btn.clicked.connect(self._arm_start)
         controls.addWidget(self.start_btn)
+        self.end_btn = QPushButton("End Race")
+        self.end_btn.setEnabled(False)
+        self.end_btn.clicked.connect(self._end_race)
+        controls.addWidget(self.end_btn)
         self.cal_btn = QPushButton("Calibrate")
         self.cal_btn.clicked.connect(self._calibrate)
         controls.addWidget(self.cal_btn)
+        self.review_btn = QPushButton("Review Race")
+        self.review_btn.setEnabled(False)
+        self.review_btn.clicked.connect(self._open_review_dialog)
+        controls.addWidget(self.review_btn)
         self.export_btn = QPushButton("Export CSV")
         self.export_btn.clicked.connect(self._export)
         controls.addWidget(self.export_btn)
+        quit_btn = QPushButton("Quit (Ctrl+Q)")
+        quit_btn.clicked.connect(self._quit)
+        controls.addWidget(quit_btn)
         trig = self.config.section("trigger")
         start_keys = keycode_names(trig["start_keycodes"])
+        end_keys = keycode_names(trig["end_keycodes"])
         self.trigger_label = QLabel(
-            f"Start: {start_keys}  ({trig['device_path'] or 'Qt fallback'})")
+            f"Start: {start_keys} · End: {end_keys}  "
+            f"({trig['device_path'] or 'Qt fallback'})")
         controls.addWidget(self.trigger_label)
         root.addLayout(controls)
 
@@ -93,11 +107,14 @@ class MainWindow(QMainWindow):
         self.status_timer.start(500)
 
         self._armed = False
+        self._race_over = False
+        self._race_over_detail = ""
         self._stream_down_notified = False
         self._cal_stale_notified = False
         self._cal_check_at = 0.0
         self._cal_detail = ""
         self._last_capture: int | None = None
+        self._review_dialog = None
         self._flash_timer = QTimer(self)
         self._flash_timer.setSingleShot(True)
         self._flash_timer.timeout.connect(self._end_flash)
@@ -144,6 +161,9 @@ class MainWindow(QMainWindow):
             last = f"  · last capture #{self._last_capture:03d}" if self._last_capture else ""
             self.status.setText(
                 f"REC {_fmt_clock(el)}   {fps:.1f} fps{last}")
+            return
+        if self._race_over:
+            self.status.setText(self._race_over_detail)
             return
         alive, fps, _ = self.buffer.health()
         if not alive:
@@ -193,11 +213,35 @@ class MainWindow(QMainWindow):
             return
         self._armed = False
         self.controller.start_race(t_press, name=time.strftime("Race-%Y%m%d-%H%M"))
+        if self.controller.running:
+            self._race_over = False
+            self.end_btn.setEnabled(True)
         self._dismiss_banner()
         self.start_btn.setText("Arm Start Race (Ctrl+S)")
 
     def on_evdev_crossing(self, t_press: float, code: int) -> None:
         self.controller.record_crossing(t_press)
+
+    def on_evdev_end(self, t_press: float) -> None:
+        self._end_race()
+
+    def on_race_ended(self, race_id: int) -> None:
+        n = self.controller.ended_capture_count
+        last = (f"last capture #{self._last_capture:03d}"
+                if self._last_capture else "no ends recorded")
+        self._race_over = True
+        self._race_over_detail = f"RACE OVER — {n} ends · {last}"
+        self.end_btn.setEnabled(False)
+        self.review_btn.setEnabled(True)
+        self._show_banner(
+            f"RACE OVER — {n} ends recorded. Archive stopped; trigger keyboard "
+            "released (you can use Ctrl+Q or Quit).")
+
+    def _end_race(self) -> None:
+        self.controller.end_race()
+
+    def _quit(self) -> None:
+        self.close()
 
     def on_capture(self, cap) -> None:
         primary = cap.primary_image if hasattr(cap, "primary_image") else None
@@ -222,8 +266,15 @@ class MainWindow(QMainWindow):
         fl = [(str(self.config.data_root / f["path"]), f["offset_ms"])
               for f in frames]
         panel = FrameReviewPanel(cap["id"], fl, self)
+        # Without the Window flag a parented QWidget is a child and just draws
+        # inside the main window; make it a real, raisable top-level window.
+        panel.setWindowFlag(Qt.Window, True)
         panel.setWindowTitle(f"Capture {sequence}")
+        panel.resize(max(640, panel.sizeHint().width()),
+                     max(480, panel.sizeHint().height()))
         panel.show()
+        panel.raise_()
+        panel.activateWindow()
 
     def _bow_edited(self, sequence: int, value: str) -> None:
         if self.controller.race_id is None:
@@ -232,6 +283,7 @@ class MainWindow(QMainWindow):
         cap = next((c for c in race if c["sequence"] == sequence), None)
         if cap:
             self.controller.set_bow_number(cap["id"], value or None)
+        self.list.update_bow(sequence, value)
 
     def _delete(self, sequence: int) -> None:
         if self.controller.race_id is None:
@@ -248,6 +300,24 @@ class MainWindow(QMainWindow):
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dlg.show()
 
+    def _open_review_dialog(self) -> None:
+        if self.controller.race_id is None:
+            return
+        if self._review_dialog is not None:
+            self._review_dialog.show()
+            self._review_dialog.raise_()
+            self._review_dialog.activateWindow()
+            return
+        dlg = RaceReviewDialog(self.controller, self.controller.race_id,
+                               self.config.data_root, self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.bow_edited.connect(self._bow_edited)
+        dlg.delete_requested.connect(self._delete)
+        dlg.open_frames.connect(self._open_review)
+        dlg.destroyed.connect(lambda: setattr(self, "_review_dialog", None))
+        self._review_dialog = dlg
+        dlg.show()
+
     def _export(self) -> None:
         if self.controller.race_id is None:
             return
@@ -261,6 +331,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self._arm_start)
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.controller.undo_last)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=lambda: None)
+        QShortcut(QKeySequence("Ctrl+Q"), self, activated=self._quit)
 
 
 def _fmt_clock(secs: float) -> str:
