@@ -104,7 +104,7 @@ development-branch release, and a reason not to "stabilise" it onto an LTS.
 ## 3. Input group (evdev trigger)
 
 Spec §6.4 requires reading `/dev/input/event*`, which are `root:input`, mode
-`crw-rw----`. The audit confirms user `isael` is **not** in `input`.
+`crw-rw----`. The audit confirms the operator user is **not** in `input`.
 
 ```bash
 sudo usermod -aG input "$USER"

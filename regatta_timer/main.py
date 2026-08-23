@@ -132,7 +132,7 @@ def main(argv=None) -> int:
 
     from .ui.main_window import MainWindow
     win = MainWindow(config, core["controller"], core["buffer"])
-    win.show()
+    win.showFullScreen()
 
     # Bridge worker-thread events (evdev triggers AND the controller's capture
     # completion) back onto the Qt main thread (§6.4, §6.5). Every Qt-facing

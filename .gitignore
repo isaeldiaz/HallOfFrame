@@ -2,3 +2,13 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# runtime / private data (normally lives in ~/regatta-data/)
+regatta-data/
+config.toml
+calibration.json
+*.db
+*.sqlite
+logs/
+races/
+.env

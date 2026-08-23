@@ -163,7 +163,7 @@ Two deviations from the spec's stated environment ("Xubuntu latest release", Pyt
 | `python3-pip` / `python3-venv` | §9.1 | Virtualenv creation (**neither pip nor ensurepip is present**) |
 | Python `PySide6` | §7 | GUI |
 | Python `evdev` | §6.4 | Precise trigger |
-| `input` group membership for user `isael` | §6.4 | Reading `/dev/input/event*` |
+| `input` group membership for the operator user `<user>` | §6.4 | Reading `/dev/input/event*` |
 
 ### 4.3 Python environment
 
@@ -179,9 +179,9 @@ System-wide `requests` and `Pillow` exist, but the venv (created without
 
 ## 5. Permissions and privilege notes
 
-- User `isael` is in: `adm, cdrom, sudo, dip, plugdev, users, lpadmin, lxd`.
+- Operator user `<user>` is in: `adm, cdrom, sudo, dip, plugdev, users, lpadmin, lxd`.
 - **Not in `input`** → evdev trigger will fail with permission denied until
-  `sudo usermod -aG input isael` plus logout/login (§6.4). The app's Qt-fallback warning
+  `sudo usermod -aG input <user>` plus logout/login (§6.4). The app's Qt-fallback warning
   path would engage if unaddressed.
 - `sudo` requires a password (no passwordless sudo) — the one-time setup commands need
   interactive execution; they cannot be scripted silently.
@@ -189,7 +189,7 @@ System-wide `requests` and `Pillow` exist, but the venv (created without
 ## 6. Project directory state
 
 ```
-/home/isael/regatta/
+<repo-path>/
     regatta-finish-timer-spec.md   # build specification (v1.0)
     system-environment.md          # this file
     new, session_log.md            # scratch/log files
