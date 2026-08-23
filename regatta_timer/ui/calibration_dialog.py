@@ -255,7 +255,7 @@ class CalibrationDialog(QDialog):
         cal.write_calibration(
             self.data_root, result["latency_median_ms"], result["latency_iqr_ms"],
             result["samples_ms"], self.config.section("timing")["viewing_mode"],
-            resolution=resolution, fps=int(self.buffer.assumed_fps), lens="",
+            resolution=resolution, fps=_measure_fps(self.captured), lens="",
             mean_frame_bytes=mean_bytes)
         QMessageBox.information(
             self, "Calibration",
@@ -263,6 +263,16 @@ class CalibrationDialog(QDialog):
             f"IQR      = {result['latency_iqr_ms']:.1f} ms\n\n"
             "Latency written to calibration.json.")
         self.accept()
+
+
+def _measure_fps(frames):
+    """Actual stream fps from the captured frames' arrival timestamps."""
+    if len(frames) < 2:
+        return 0.0
+    dt = abs(frames[-1].t_recv - frames[0].t_recv)
+    if dt <= 0:
+        return 0.0
+    return (len(frames) - 1) / dt
 
 
 def _measure_format(frames):
