@@ -17,13 +17,13 @@ import shutil
 import time
 
 from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QMimeData
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication, QFileDialog, QLineEdit,
-                               QMainWindow, QStackedWidget, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from ..controller import CaptureController, calibration_status
-from ..export import export_csv
+from ..export import clipboard_data
 from ..framebuffer import FrameBuffer
 from ..races import load_race_names, write_example
 from ..ui import styles
@@ -34,6 +34,25 @@ from ..ui.ready_screen import ReadyScreen
 from ..ui.review_screen import ReviewScreen
 from ..ui.state import AppState, derive_state
 from ..ui.widgets import KeyBar, StateBand, Toast
+
+
+class _ExcelMimeData(QMimeData):
+    """Clipboard payload carrying both TSV and an Excel-compatible HTML table."""
+
+    def __init__(self, tsv: str, markup: str):
+        super().__init__()
+        self._tsv = tsv
+        self._markup = markup
+        self.setData("text/html", markup.encode("utf-8"))
+
+    def formats(self) -> list[str]:
+        return ["text/html", "text/plain"]
+
+    def hasText(self) -> bool:
+        return True
+
+    def text(self) -> str:
+        return self._tsv
 
 
 def keycode_names(codes) -> str:
@@ -322,11 +341,11 @@ class MainWindow(QMainWindow):
             kb.add("↑/↓", "Select crossing", True)
             kb.add("Tab", "Next bow field")
             kb.add("Del", "Soft-delete")
-            kb.add("E", "Export CSV", callback=self._export)
+            kb.add("E", "Copy as Excel", callback=self._export)
             kb.add("Esc", "Back to Ready", callback=self._close_review)
         elif state == AppState.RACE_OVER:
             kb.add("R", "Review crossings", True, callback=self._open_review)
-            kb.add("E", "Export CSV", callback=self._export)
+            kb.add("E", "Copy as Excel", callback=self._export)
             kb.add("N", "Next race", callback=self._next_race)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
         elif state == AppState.RECALIBRATE:
@@ -336,7 +355,7 @@ class MainWindow(QMainWindow):
             kb.add("Ctrl+S", "Arm", True, callback=self._arm_start)
             kb.add("C", "Calibrate", callback=self._calibrate)
             kb.add("R", "Review last race", callback=self._open_review)
-            kb.add("E", "Export CSV", callback=self._export)
+            kb.add("E", "Copy as Excel", callback=self._export)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
             if state == AppState.STREAM_DOWN:
                 kb.set_note("Stream down — race starts timing-only (no photos)")
@@ -506,11 +525,10 @@ class MainWindow(QMainWindow):
         if self.controller.race_id is None:
             self._show_toast("No race to export yet.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export CSV", str(self.config.data_root / "export.csv"),
-            "CSV (*.csv)")
-        if path:
-            export_csv(self.controller.storage, self.controller.race_id, path)
+        tsv, markup = clipboard_data(self.controller.storage, self.controller.race_id)
+        cb = QApplication.clipboard()
+        cb.setMimeData(_ExcelMimeData(tsv, markup))
+        self._show_toast("Copied to clipboard — paste into Excel.")
 
     def _quit(self) -> None:
         self.close()
