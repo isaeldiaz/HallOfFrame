@@ -28,10 +28,15 @@ class ArmedScreen(QWidget):
         col = QVBoxLayout()
         col.setSpacing(10)
         self.title = QLabel("Press to start the race")
+        self.title.setMinimumWidth(1)
         self.title.setStyleSheet(
             f"color:{styles.TEXT_PRIMARY}; font-size:46px; font-weight:600;")
         col.addWidget(self.title)
         self.sub = QLabel("")
+        # Prose, and it carries the device path: wrap it so the sentence cannot
+        # set the window's minimum width.
+        self.sub.setWordWrap(True)
+        self.sub.setMinimumWidth(1)
         self.sub.setStyleSheet(f"color:{styles.TEXT_DIM}; font-size:22px;")
         col.addWidget(self.sub)
         mid.addLayout(col)

@@ -10,7 +10,7 @@ Flags use words, not punctuation: ``NO IMAGE`` (missing), ``APPROX``
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QScrollArea, QVBoxLayout, QWidget)
@@ -121,11 +121,16 @@ class _BowEdit(QLineEdit):
         self._seq = sequence
         self.returnPressed.connect(lambda: self.advance.emit(self._seq))
 
-    def keyPressEvent(self, event):  # noqa: N802
-        if event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+    def event(self, event):
+        # Tab has to be taken in event(): QWidget::event() spends it on focus
+        # navigation before keyPressEvent() is ever called, so a Tab branch there
+        # never runs (it moved focus to the list's scroll area instead of
+        # advancing). Leaving the field emits editingFinished, which persists it.
+        if (event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)):
             self.advance.emit(self._seq)
-            return
-        super().keyPressEvent(event)
+            return True
+        return super().event(event)
 
 
 class _ReviewRow(_RowBase):
@@ -187,6 +192,7 @@ class CrossingLog(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._host)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFocusPolicy(Qt.NoFocus)
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
         lay.addWidget(scroll, 1)
 

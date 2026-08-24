@@ -51,10 +51,16 @@ class Base(unittest.TestCase):
 
 
 class TestController(Base):
-    def _wait_for_frames(self, capture_id, timeout=3.0):
+    def _wait_for_frames(self, capture_id, timeout=3.0, spanning=False):
+        """Wait for the deferred selection. ``spanning`` waits for the whole
+        window: _select_images commits one frame at a time, so the first row
+        appears while the after-window frames are still being written."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.storage.frames_for_capture(capture_id):
+            frames = self.storage.frames_for_capture(capture_id)
+            if frames and (not spanning
+                           or (any(f["offset_ms"] <= 0 for f in frames)
+                               and any(f["offset_ms"] >= 0 for f in frames))):
                 return True
             time.sleep(0.02)
         return False
@@ -77,7 +83,7 @@ class TestController(Base):
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
-        self.assertTrue(self._wait_for_frames(row["id"]))
+        self.assertTrue(self._wait_for_frames(row["id"], spanning=True))
         frames = self.storage.frames_for_capture(row["id"])
         self.assertTrue(any(f["offset_ms"] <= 0 for f in frames))
         self.assertTrue(any(f["offset_ms"] >= 0 for f in frames))

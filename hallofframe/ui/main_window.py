@@ -18,8 +18,9 @@ import time
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QFileDialog, QMainWindow, QStackedWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QFileDialog, QLineEdit,
+                               QMainWindow, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from ..controller import CaptureController, calibration_status
 from ..export import export_csv
@@ -147,20 +148,44 @@ class MainWindow(QMainWindow):
     def _install_shortcuts(self) -> None:
         # ApplicationShortcut context: these never lose to a focused button (§4).
         def sc(key, fn):
-            QShortcut(QKeySequence(key), self, activated=fn,
-                      context=Qt.ApplicationShortcut)
+            return QShortcut(QKeySequence(key), self, activated=fn,
+                             context=Qt.ApplicationShortcut)
         sc("Ctrl+S", self._arm_start)
         sc("Ctrl+Z", self.controller.undo_last)
         sc("Ctrl+Q", self._quit)
-        sc("C", self._calibrate)
-        sc("E", self._export)
-        sc("R", self._open_review)
-        sc("N", self._next_race)
         sc("Esc", self._esc)
         sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
-        sc("Return", lambda: self.on_evdev_start(time.monotonic()))
-        sc("Enter", lambda: self.on_evdev_start(time.monotonic()))
-        sc("Space", lambda: self.controller.record_crossing(time.monotonic()))
+        letters = [sc("C", self._calibrate), sc("E", self._export),
+                   sc("R", self._open_review), sc("N", self._next_race)]
+        race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
+                sc("Enter", lambda: self.on_evdev_start(time.monotonic())),
+                sc("Space",
+                   lambda: self.controller.record_crossing(time.monotonic()))]
+        # Beating a focused button (§4) also means beating a focused text field:
+        # every shortcut whose key can be typed has to stand down while a bow
+        # number or race name is being entered, or the character never arrives.
+        self._typable_shortcuts = letters + race
+        # The race controls are unreachable from REVIEW anyway (_arm_start
+        # refuses it) and Enter/Space belong to the review screen there — a real
+        # trigger press still arrives through the evdev bridge, not a shortcut.
+        self._race_shortcuts = race
+        app = QApplication.instance()
+        if app is not None:
+            # Bound method, not a lambda: Qt drops the connection when this
+            # window is destroyed instead of calling into a dead object.
+            app.focusChanged.connect(self._focus_changed)
+
+    def _focus_changed(self, _old=None, _new=None) -> None:
+        self._sync_shortcuts()
+
+    def _sync_shortcuts(self) -> None:
+        """Silence the typable shortcuts while typing, and in REVIEW."""
+        typing = isinstance(QApplication.focusWidget(), QLineEdit)
+        for shortcut in self._typable_shortcuts:
+            shortcut.setEnabled(not typing)
+        for shortcut in self._race_shortcuts:
+            shortcut.setEnabled(not typing and self._last_state
+                                is not AppState.REVIEW)
 
     # ---------------------------------------------------------------- state band
     def _health_labels(self) -> list[str]:
@@ -256,6 +281,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_band(state)
         self._apply_keybar(state)
+        self._sync_shortcuts()
         if state == AppState.READY:
             self.ready.set_checks(self._pre_race_checks())
             self.ready.set_lag(self._measure_lag())

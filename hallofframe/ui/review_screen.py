@@ -7,16 +7,30 @@ list with an inline bow field per row on the right. ``↑/↓`` select a crossin
 primary photo and focuses its bow field so the bow can be typed in the same
 view, then ``Enter``/``Tab`` in the field commits the bow and moves to the next
 crossing. ``Del`` soft-deletes, ``Esc`` returns to READY.
+
+Two Qt constraints shape the key handling. ``Tab`` is spent by
+``QWidget::event()`` on focus navigation *before* ``keyPressEvent()`` runs, so it
+has to be intercepted in ``event()``; and ``Enter``/``Space`` are application-wide
+shortcuts (main_window §4) that win over the focused widget, so MainWindow
+silences them while REVIEW is on screen and while a text field has focus.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QScrollArea, QVBoxLayout, QWidget)
 
 from . import styles
 from .crossing_list import ReviewList
+
+# Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
+# flag, bow field), but resizeEvent() keeps it under a share of the screen: a
+# hard 700 px floor made the page's minimum width exceed the 1920 px panel and
+# put the list and its bow fields off the right edge entirely.
+PANEL_W = 700
+PANEL_MIN_W = 660   # a row's natural width: below this the bow field clips
+PANEL_SHARE = 0.4
 
 
 class _Scrubber(QWidget):
@@ -27,8 +41,28 @@ class _Scrubber(QWidget):
         self.setFixedHeight(72)
         self._ticks: list[dict] = []  # {frame, label, offset_ms}
         self._selected = -1
-        self._host = None
-        self._lay = None
+        self._sel_widget = None
+
+        # One tick per frame: at 30 fps a +/-500 ms window is ~30 ticks, ~1600
+        # px. Without the scroll area that became the window's minimum width and
+        # pushed the crossing list off the right edge of the screen, so the ticks
+        # scroll and the widget itself is free to shrink.
+        self._host = QWidget()
+        self._lay = QHBoxLayout(self._host)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(6)
+        self._area = QScrollArea()
+        self._area.setWidget(self._host)
+        self._area.setWidgetResizable(True)
+        self._area.setFrameShape(QFrame.NoFrame)
+        self._area.setFocusPolicy(Qt.NoFocus)
+        self._area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._area.setStyleSheet("QScrollArea{background:transparent;}")
+        wrap = QVBoxLayout(self)
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.addWidget(self._area)
+        self.setMinimumWidth(1)
 
     def set_frames(self, frames: list, selected_offset_ms: float) -> None:
         self._ticks = []
@@ -47,22 +81,29 @@ class _Scrubber(QWidget):
         self._rebuild()
 
     def _rebuild(self) -> None:
-        if self._host is None:
-            self._host = QWidget()
-            self._lay = QHBoxLayout(self._host)
-            self._lay.setContentsMargins(0, 0, 0, 0)
-            self._lay.setSpacing(6)
-            wrap = QVBoxLayout(self)
-            wrap.setContentsMargins(0, 0, 0, 0)
-            wrap.addWidget(self._host)
         while self._lay.count():
             item = self._lay.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
+        self._sel_widget = None
         for i, t in enumerate(self._ticks):
-            self._lay.addWidget(self._make_tick(i, t))
+            tick = self._make_tick(i, t)
+            if i == self._selected:
+                self._sel_widget = tick
+            self._lay.addWidget(tick)
         self._lay.addStretch(1)
+        # One event-loop turn later: the ticks have just been recreated and
+        # their positions are only final once this rebuild has been laid out.
+        QTimer.singleShot(0, self._scroll_to_selection)
+
+    def _scroll_to_selection(self) -> None:
+        """Centre the selected tick — the ticks scroll, so stepping must follow."""
+        if self._sel_widget is None:
+            return
+        bar = self._area.horizontalScrollBar()
+        centre = self._sel_widget.x() + self._sel_widget.width() // 2
+        bar.setValue(centre - self._area.viewport().width() // 2)
 
     def _make_tick(self, idx: int, t: dict) -> QWidget:
         sel = idx == self._selected
@@ -109,6 +150,41 @@ class _Scrubber(QWidget):
         super().mousePressEvent(event)
 
 
+class _Photo(QLabel):
+    """Letterboxed frame view; rescales the frame to whatever size it is given.
+
+    The pane has to keep the scaled pixmap and the source apart: a QLabel
+    reports its pixmap's size as its minimum size, so scaling to the label's
+    current rect and nothing else both ratchets the pane wider and leaves the
+    photo at the size the pane happened to have when the frame was first shown.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumSize(1, 1)
+        self.setStyleSheet(f"background:{styles.LETTERBOX};")
+        self._src: QPixmap | None = None
+
+    def set_frame(self, pixmap: QPixmap | None, empty_text: str = "") -> None:
+        self._src = pixmap
+        if pixmap is None:
+            self.setText(empty_text)
+            return
+        self._render()
+
+    def _render(self) -> None:
+        if self._src is None:
+            return
+        if self.width() > 1 and self.height() > 1:
+            self.setPixmap(self._src.scaled(self.size(), Qt.KeepAspectRatio,
+                                            Qt.SmoothTransformation))
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._render()
+
+
 class ReviewScreen(QWidget):
     def __init__(self, controller, data_root, race_id: int | None = None,
                  parent=None):
@@ -119,6 +195,7 @@ class ReviewScreen(QWidget):
         self._captures: list[dict] = []
         self._selected_seq: int | None = None
         self._frame_paths: dict[int, list] = {}  # capture_id -> [frame dicts]
+        self.panel: QWidget | None = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -140,9 +217,7 @@ class ReviewScreen(QWidget):
         header.addWidget(step_hint)
         lv.addLayout(header)
 
-        self.photo = QLabel("")
-        self.photo.setAlignment(Qt.AlignCenter)
-        self.photo.setStyleSheet(f"background:{styles.LETTERBOX};")
+        self.photo = _Photo()
         lv.addWidget(self.photo, 1)
 
         scrub_hdr = QHBoxLayout()
@@ -162,6 +237,10 @@ class ReviewScreen(QWidget):
 
         self.scrubber = _Scrubber()
         lv.addWidget(self.scrubber)
+        # The photo column yields first on a narrow screen: the crossing list is
+        # what the operator is aiming at, and nothing in this column may set a
+        # floor that pushes the list past the right edge.
+        left.setMinimumWidth(1)
         root.addWidget(left, 1)
 
         # --- right: crossing list with bow fields ---
@@ -176,12 +255,16 @@ class ReviewScreen(QWidget):
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
         rlay.addWidget(self.list)
-        right.setFixedWidth(700)
+        self.panel = right
+        right.setFixedWidth(PANEL_W)
         root.addWidget(right)
 
     # --- public API -------------------------------------------------------
     def load_captures(self) -> None:
-        self._captures = [c for c in
+        # dict(), not the sqlite3.Row it came from: _commit_selected_frame()
+        # writes the new primary_image back into these rows, and a Row is
+        # read-only (it raised TypeError on every Tab/Enter save).
+        self._captures = [dict(c) for c in
                           self.controller.storage.captures_for_race(self.race_id)
                           if not c["deleted"]]
         self.list.clear()
@@ -212,7 +295,7 @@ class ReviewScreen(QWidget):
     def _show_capture(self, sequence: int) -> None:
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
         if cap is None:
-            self.photo.setText("no crossing")
+            self.photo.set_frame(None, "no crossing")
             self._current_capture = None
             return
         frames = self.controller.storage.frames_for_capture(cap["id"])
@@ -224,13 +307,13 @@ class ReviewScreen(QWidget):
     def _show_primary(self) -> None:
         cap = getattr(self, "_current_capture", None)
         if cap is None:
-            self.photo.setText("no crossing selected")
+            self.photo.set_frame(None, "no crossing selected")
             self.scrubber.set_frames([], 0)
             self.offset_lbl.setText("")
             return
         frames = self._frame_paths.get(cap["id"], [])
         if not frames:
-            self.photo.setText("no window frames")
+            self.photo.set_frame(None, "no window frames")
             self.scrubber.set_frames([], 0)
             self.offset_lbl.setText("")
             return
@@ -242,16 +325,11 @@ class ReviewScreen(QWidget):
     def _show_frame(self, path: str, offset_ms: float) -> None:
         off = float(offset_ms)
         self.offset_lbl.setText(f"{off:+.0f} ms")
-        reader = QImageReader(path)
-        img = reader.read()
+        img = QImageReader(path).read()
         if img.isNull():
-            self.photo.setText("image unreadable")
+            self.photo.set_frame(None, "image unreadable")
             return
-        pm = QPixmap.fromImage(img)
-        area = self.photo.rect()
-        if area.width() and area.height():
-            pm = pm.scaled(area.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.photo.setPixmap(pm)
+        self.photo.set_frame(QPixmap.fromImage(img))
 
     # --- persistence ------------------------------------------------------
     def _bow_edited(self, sequence: int, value: str) -> None:
@@ -270,7 +348,28 @@ class ReviewScreen(QWidget):
         if self._captures:
             self._select(self._captures[0]["sequence"])
 
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if self.panel is None:
+            return
+        width = min(PANEL_W, max(PANEL_MIN_W, int(self.width() * PANEL_SHARE)))
+        if self.panel.width() != width:
+            self.panel.setFixedWidth(width)
+
     # --- keyboard ---------------------------------------------------------
+    def event(self, event):
+        """Intercept Tab before Qt spends it on focus navigation.
+
+        ``QWidget::event()`` hands Tab to ``focusNextPrevChild()`` and calls
+        ``keyPressEvent()`` only if that fails, so a Tab branch in
+        ``keyPressEvent`` can never run while the screen has a focusable child.
+        """
+        if (event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)):
+            self._save_and_focus_bow()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):  # noqa: N802
         # Let focused text inputs (bow fields) handle their own keys first.
         if isinstance(self.focusWidget(), QLineEdit):
@@ -295,11 +394,6 @@ class ReviewScreen(QWidget):
             f = self.scrubber.selected_frame()
             if f:
                 self._show_frame(f["path"], f["offset_ms"])
-            return
-        if key == Qt.Key_Tab:
-            # Save the selected frame as primary, then drop into the current
-            # crossing's bow field so the bow can be typed before advancing.
-            self._save_and_focus_bow()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
             # Save the selected frame and move to the next crossing's bow.

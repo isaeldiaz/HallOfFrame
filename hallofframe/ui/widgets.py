@@ -47,6 +47,11 @@ class KeyBar(QWidget):
         self.lay.setSpacing(14)
         self.lay.addStretch(1)
         self._note = None
+        # A full key bar wants ~2300 px. That must not become the window's
+        # minimum width (the window is full-screen on a 1920 px panel, and Qt
+        # sizes a window up to its layout minimum, pushing content off-screen):
+        # the caps clip on a narrow screen instead.
+        self.setMinimumWidth(1)
 
     def clear(self) -> None:
         while self.lay.count():

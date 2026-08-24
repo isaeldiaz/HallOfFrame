@@ -143,6 +143,9 @@ class RaceScreen(QWidget):
             f"font-family:'{styles.FONT_MONO}'; font-size:186px; font-weight:600;"
             f" color:{styles.TEXT_PRIMARY}; letter-spacing:-0.03em;"
             " line-height:.82;")
+        # 186 px digits report a ~1600 px minimum; let it clip on a narrow
+        # screen rather than force the whole window wider than the display.
+        self.clock.setMinimumWidth(1)
         header.addWidget(self.clock)
         header.addSpacing(36)
 
@@ -158,6 +161,7 @@ class RaceScreen(QWidget):
             f"font-family:'{styles.FONT_MONO}'; font-size:96px; font-weight:600;"
             f" color:{styles.TEXT_PRIMARY}; line-height:.85;")
         count_col.addWidget(count_cap)
+        self.count_lbl.setMinimumWidth(1)
         count_col.addWidget(self.count_lbl)
         header.addLayout(count_col)
         header.addStretch(1)
