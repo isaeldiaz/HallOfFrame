@@ -83,7 +83,6 @@ class TestReviewScreen(unittest.TestCase):
         self.config = _config(root)
         self.storage = Storage(root)
         self.buffer = FrameBuffer(assumed_fps=30)
-        # REVIEW is only reachable with a live stream (STREAM_DOWN outranks it).
         self.buffer.health = lambda: (True, 30.0, 0.1)
         self.controller = CaptureController(self.config, self.storage, self.buffer)
         self.race_id = self.storage.create_race("R", 0.0, time.time(), "direct",

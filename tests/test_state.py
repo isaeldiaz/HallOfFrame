@@ -35,9 +35,19 @@ class TestDeriveState(unittest.TestCase):
     def test_stream_down_beats_recalibrate(self):
         self.assertIs(self.state(alive=False, cal_ok=False), AppState.STREAM_DOWN)
 
-    def test_recalibrate_beats_review_and_race_over(self):
-        self.assertIs(self.state(cal_ok=False, reviewing=True, race_over=True),
-                      AppState.RECALIBRATE)
+    def test_stream_down_beats_ready(self):
+        self.assertIs(self.state(alive=False), AppState.STREAM_DOWN)
+
+    def test_review_beats_stream_down(self):
+        # Timing-only races run with the stream down; their crossings must
+        # still be reviewable (bow numbers), so REVIEW outranks STREAM_DOWN.
+        self.assertIs(self.state(alive=False, reviewing=True, race_over=True),
+                      AppState.REVIEW)
+
+    def test_race_over_beats_stream_down(self):
+        # A finished timing-only race must reach RACE_OVER (Review/Export/Next)
+        # even while the stream is down.
+        self.assertIs(self.state(alive=False, race_over=True), AppState.RACE_OVER)
 
     def test_review_beats_race_over(self):
         self.assertIs(self.state(reviewing=True, race_over=True), AppState.REVIEW)

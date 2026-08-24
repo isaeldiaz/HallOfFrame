@@ -7,10 +7,13 @@ pure, Qt-free ``derive_state()`` so the precedence rules are unit-testable.
 
 Precedence when several conditions hold at once (highest first):
 
-    RECORDING > ARMED > STREAM_DOWN > RECALIBRATE > REVIEW > RACE_OVER > READY
+    RECORDING > ARMED > REVIEW > RACE_OVER > STREAM_DOWN > RECALIBRATE > READY
 
-A stream drop mid-race must NOT knock the UI out of RECORDING — timing continues
-regardless; it is surfaced as a health readout instead (§1).
+A stream drop must NOT knock the UI out of RECORDING — timing continues
+regardless; it is surfaced as a health readout instead (§1). Nor may it knock
+the operator out of REVIEW or RACE_OVER: in timing-only mode the stream is down
+for the whole race, yet the finished race must still be reviewed (bow numbers)
+and exported, so those explicit screens outrank stream-health.
 """
 from __future__ import annotations
 
@@ -43,13 +46,13 @@ def derive_state(controller, buffer, cal_ok: bool, armed: bool,
         return AppState.RECORDING
     if armed:
         return AppState.ARMED
+    if reviewing:
+        return AppState.REVIEW
+    if race_over:
+        return AppState.RACE_OVER
     alive, _fps, _age = buffer.health()
     if not alive:
         return AppState.STREAM_DOWN
     if not cal_ok:
         return AppState.RECALIBRATE
-    if reviewing:
-        return AppState.REVIEW
-    if race_over:
-        return AppState.RACE_OVER
     return AppState.READY
