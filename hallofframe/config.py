@@ -1,4 +1,4 @@
-"""Configuration load for the regatta timer.
+"""Configuration load for HallOfFrame.
 
 config.toml is HAND-EDITED and never written by the application (spec v1.2
 §6.7, §8). Everything machine-produced — the latency calibration result — lives

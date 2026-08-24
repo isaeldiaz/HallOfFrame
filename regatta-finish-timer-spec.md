@@ -528,7 +528,7 @@ free-threaded build — are irrelevant here: this application uses `threading`
 only, and must be run on the ordinary GIL build. Package layout:
 
 ```
-regatta_timer/
+hallofframe/
     __init__.py
     main.py              # entry point, wires everything together
     config.py            # config load/save, dataclass

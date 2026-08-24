@@ -113,7 +113,7 @@ def main(argv=None) -> int:
 
     from .log import start_logging
     logger = start_logging(config.data_root / "logs", race_id=None)
-    logger.info("app", "start", version=__import__("regatta_timer").__version__)
+    logger.info("app", "start", version=__import__("hallofframe").__version__)
 
     core = build_core(config)
     app = QApplication(sys.argv)

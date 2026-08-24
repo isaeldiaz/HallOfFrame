@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from regatta_timer.config import Config
-from regatta_timer.export import export_csv, format_elapsed, utc_iso
-from regatta_timer.storage import Storage
+from hallofframe.config import Config
+from hallofframe.export import export_csv, format_elapsed, utc_iso
+from hallofframe.storage import Storage
 
 
 def make_config(data_root):

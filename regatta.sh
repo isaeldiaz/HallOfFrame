@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launcher for the Regatta Finish-Line Timer.
+# Launcher for HallOfFrame, the finish-line timer.
 #
 # Starts the app full-screen under systemd-inhibit so a lid-close or idle
 # timeout cannot suspend the session mid-heat (INSTALL.md §7). Run it from a
@@ -20,10 +20,10 @@ if [ ! -x "$venv_py" ]; then
 fi
 
 if [ "${REGATTA_NO_INHIBIT:-0}" = "1" ]; then
-    exec "$venv_py" -m regatta_timer
+    exec "$venv_py" -m hallofframe
 fi
 
 exec systemd-inhibit \
     --what=handle-lid-switch:sleep:idle \
     --who="regatta-timer" --why="finish-line timing in progress" \
-    "$venv_py" -m regatta_timer
+    "$venv_py" -m hallofframe

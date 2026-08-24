@@ -1,7 +1,7 @@
 """Unit tests for the Appendix C MJPEG parse loop (spec §6.2)."""
 import unittest
 
-from regatta_timer.mjpeg import (StreamError, feed, find_headers_end, jpeg_end,
+from hallofframe.mjpeg import (StreamError, feed, find_headers_end, jpeg_end,
                                  parse_boundary)
 
 

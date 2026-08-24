@@ -151,7 +151,7 @@ Code changes:
 
 ## §3 GUI smoke test (T7) — resolved 2026-08-22
 
-`python -m regatta_timer` on the live X session, phone streaming over USB:
+`python -m hallofframe` on the live X session, phone streaming over USB:
 
 - App launches its own `iproxy` (spec §6.1 wiring added to `main.py`) and the
   window appears (1280x720, "Regatta Finish-Line Timer").
@@ -162,7 +162,7 @@ Code changes:
   configured yet (`[trigger] device_path = ""`).
 
 Fixes made during this test:
-- `regatta_timer/__main__.py` added (INSTALL §7 invokes `python -m regatta_timer`).
+- `hallofframe/__main__.py` added (INSTALL §7 invokes `python -m hallofframe`).
 - `ui/preview_widget.py`: `QImageReader` needs a `QBuffer`, not `io.BytesIO`; and
   `drawImage` (not `drawPixmap`) for a `QImage`.
 - `log.py`: `QueueListener` was given a `QueueHandler` instead of the underlying

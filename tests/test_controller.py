@@ -6,11 +6,11 @@ import time
 import unittest
 from pathlib import Path
 
-from regatta_timer.config import Config
-from regatta_timer.controller import CaptureController
-from regatta_timer.framebuffer import FrameBuffer
-from regatta_timer.mjpeg import Frame
-from regatta_timer.storage import Storage
+from hallofframe.config import Config
+from hallofframe.controller import CaptureController
+from hallofframe.framebuffer import FrameBuffer
+from hallofframe.mjpeg import Frame
+from hallofframe.storage import Storage
 
 
 def make_config(data_root, window_ms=50, viewing="screen"):
@@ -242,7 +242,7 @@ class TestCalibrationValidation(Base):
 
     # --- calibration_status (proactive UI indicator) ----------------------
     def test_calibration_status_missing(self):
-        from regatta_timer.controller import calibration_status
+        from hallofframe.controller import calibration_status
         ok, detail = calibration_status(self.config, self.buffer)
         self.assertFalse(ok)
         self.assertIn("no calibration.json", detail)
@@ -257,7 +257,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1440x1080",
             "fps": 30}))
-        from regatta_timer.controller import calibration_status
+        from hallofframe.controller import calibration_status
         ok, detail = calibration_status(self.config, self.buffer)
         self.assertTrue(ok)
         self.assertEqual(detail, "")
@@ -272,7 +272,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1440x1080",
             "fps": 30}))
-        from regatta_timer.controller import calibration_status
+        from hallofframe.controller import calibration_status
         ok, detail = calibration_status(self.config, self.buffer)
         self.assertFalse(ok)
         self.assertIn("RESOLUTION CHANGED", detail)
@@ -287,7 +287,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1440x1080",
             "fps": 30}))
-        from regatta_timer.controller import calibration_status
+        from hallofframe.controller import calibration_status
         ok, detail = calibration_status(self.config, self.buffer)
         self.assertFalse(ok)
         self.assertIn("FPS CHANGED", detail)
@@ -308,7 +308,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1440x1080",
             "fps": 30}))
-        from regatta_timer.controller import calibration_status
+        from hallofframe.controller import calibration_status
         ok, detail = calibration_status(self.config, self.buffer)
         self.assertTrue(ok)
         self.assertEqual(detail, "")

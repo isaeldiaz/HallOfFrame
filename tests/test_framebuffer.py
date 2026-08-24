@@ -2,8 +2,8 @@
 import threading
 import unittest
 
-from regatta_timer.framebuffer import FrameBuffer
-from regatta_timer.mjpeg import Frame
+from hallofframe.framebuffer import FrameBuffer
+from hallofframe.mjpeg import Frame
 
 
 def make_frames(t0=1000.0, fps=30, count=300):

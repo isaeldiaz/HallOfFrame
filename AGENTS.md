@@ -33,7 +33,7 @@ the spec's reasoning first** (see the "How to use this document" note and §3).
 ## Repo layout
 
 ```
-regatta_timer/
+hallofframe/
   main.py            Entry point: wires transport, reader, buffer, storage,
                      controller, trigger, Qt UI, and the worker→Qt signal bridge.
   controller.py      Capture orchestration: start_race / end_race / record_crossing,
@@ -87,7 +87,7 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 
 ```bash
 # run (installed deps in venv; typically under systemd-inhibit, see INSTALL.md §7)
-~/regatta/venv/bin/python -m regatta_timer   # or ./venv/bin/python -m regatta_timer
+~/regatta/venv/bin/python -m hallofframe   # or ./venv/bin/python -m hallofframe
 
 # tests
 ./venv/bin/python -m pytest -q
@@ -103,4 +103,4 @@ Race button) ends the race**, releasing the keyboard → `Ctrl+Q`/Quit exits.
   selection, calibration, export, archive, and (recently added) **End Race +
   Quit**. If a request mentions an end/quit problem, that is implemented —
   check the current `end_race()`/UI wiring before assuming it's missing.
-- Version in `regatta_timer/__init__.py` (`__version__`).
+- Version in `hallofframe/__init__.py` (`__version__`).

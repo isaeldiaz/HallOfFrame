@@ -432,7 +432,7 @@ own power daemon. Run the application under it:
 systemd-inhibit \
   --what=handle-lid-switch:sleep:idle \
   --who="regatta-timer" --why="finish-line timing in progress" \
-  ~/regatta/venv/bin/python -m regatta_timer
+  ~/regatta/venv/bin/python -m hallofframe
 ```
 
 Do both. A session suspend mid-heat takes `usbmuxd` down with it and the race is

@@ -42,7 +42,7 @@ class MainWindow(QMainWindow):
         self.buffer = buffer
         self.trigger = trigger
 
-        self.setWindowTitle("Regatta Finish-Line Timer")
+        self.setWindowTitle("HallOfFrame — Finish-Line Timer")
         self.resize(1280, 720)
 
         central = QWidget()

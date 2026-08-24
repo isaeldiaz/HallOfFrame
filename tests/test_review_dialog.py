@@ -11,12 +11,12 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from regatta_timer.config import Config
-from regatta_timer.controller import CaptureController
-from regatta_timer.framebuffer import FrameBuffer
-from regatta_timer.mjpeg import Frame
-from regatta_timer.storage import Storage
-from regatta_timer.ui.review_dialog import RaceReviewDialog
+from hallofframe.config import Config
+from hallofframe.controller import CaptureController
+from hallofframe.framebuffer import FrameBuffer
+from hallofframe.mjpeg import Frame
+from hallofframe.storage import Storage
+from hallofframe.ui.review_dialog import RaceReviewDialog
 
 try:
     from PySide6.QtWidgets import QApplication

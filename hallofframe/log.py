@@ -1,6 +1,6 @@
 """Structured JSON-lines logging (spec §6.9).
 
-Every event is written to <data_root>/logs/regatta-<race_id>.jsonl with
+Every event is written to <data_root>/logs/hallofframe-<race_id>.jsonl with
 ``t_mono``, ``t_wall``, ``level``, ``component``, ``event`` plus event-specific
 fields.
 
@@ -38,12 +38,12 @@ class JsonlFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-class RegattaLogger:
+class HallOfFrameLogger:
     """Owns the file target and the queue/listener pair for one log file."""
 
     def __init__(self, log_path: Path):
         self.log_path = log_path
-        self.logger = logging.getLogger(f"regatta:{log_path.stem}")
+        self.logger = logging.getLogger(f"hallofframe:{log_path.stem}")
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
 
@@ -85,9 +85,9 @@ class RegattaLogger:
         self.emit(component, event, logging.ERROR, **fields)
 
 
-def start_logging(log_dir: Path, race_id: int | None) -> RegattaLogger:
+def start_logging(log_dir: Path, race_id: int | None) -> HallOfFrameLogger:
     log_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"regatta-{race_id}" if race_id is not None else "regatta-app"
-    logger = RegattaLogger(log_dir / f"{stem}.jsonl")
+    stem = f"hallofframe-{race_id}" if race_id is not None else "hallofframe-app"
+    logger = HallOfFrameLogger(log_dir / f"{stem}.jsonl")
     logger.start()
     return logger
