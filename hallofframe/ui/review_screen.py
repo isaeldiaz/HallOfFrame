@@ -378,10 +378,10 @@ class ReviewScreen(QWidget):
         key = event.key()
         mods = event.modifiers()
         if key == Qt.Key_Up:
-            self._move_selection(-1)
+            self._move_selection(1)
             return
         if key == Qt.Key_Down:
-            self._move_selection(1)
+            self._move_selection(-1)
             return
         if key == Qt.Key_Left and mods & Qt.ShiftModifier:
             self.scrubber.step(-1)
