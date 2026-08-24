@@ -7,7 +7,7 @@ draggable, persisted finish-line overlay.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, Qt, Signal
+from PySide6.QtCore import QBuffer, QTimer, Qt, Signal
 from PySide6.QtGui import QImageReader, QPainter, QPen, QColor
 from PySide6.QtWidgets import QWidget
 
@@ -21,6 +21,9 @@ class PreviewWidget(QWidget):
         super().__init__(parent)
         self.buffer = buffer
         self._preview_fps = 10
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(1000 // self._preview_fps)
         self._preview_scale = 0.25  # 1080p -> ~480px
         self.finish_line_x = 0.5
         self._last_frame: bytes | None = None
