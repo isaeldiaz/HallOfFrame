@@ -55,6 +55,7 @@ class CaptureController:
         timing = config.section("timing")
         self.start_mode = timing["start_mode"]
         self.radio_delay_ms = float(timing["radio_delay_ms"])
+        self.image_mode = timing["image_mode"]  # "auto" | "off" (timing-only)
 
         self._queue: queue.Queue = queue.Queue()
         self._writer_thread = threading.Thread(target=self._writer_loop,
@@ -110,11 +111,17 @@ class CaptureController:
         # Validate calibration against the live stream BEFORE starting (spec §8):
         # refuse to start with a stale or mismatched Δ. Runs off the timing path's
         # per-crossing work, so a one-time decode here is acceptable.
-        try:
-            self.delta = self._compute_delta()
-        except CalibrationError as exc:
-            self._warn(f"race NOT started: {exc}")
-            return self.race_id
+        #
+        # Timing-only mode ("off") needs no camera, so skip calibration entirely:
+        # there are no images to select, hence no latency to compensate (§6.5).
+        if self.image_mode == "off":
+            self.delta = 0.0
+        else:
+            try:
+                self.delta = self._compute_delta()
+            except CalibrationError as exc:
+                self._warn(f"race NOT started: {exc}")
+                return self.race_id
         self.running = True
         self.ended_at_mono = None
         self.ended_capture_count = 0
@@ -254,7 +261,11 @@ class CaptureController:
 
         # Does the buffer have any frames yet? (§6.5 edge cases)
         span = self.buffer.span()
-        if span is None:
+        if self.image_mode == "off":
+            # Timing-only mode never attaches an image, regardless of the buffer.
+            image_flag = "missing"
+        elif span is None:
+            # Stream down: record the time anyway, flag the missing photo (§6.5).
             image_flag = "missing"
         elif target < span[0]:
             image_flag = "approximate"
@@ -276,18 +287,20 @@ class CaptureController:
         # Deferred image selection: schedule after window_after + margin so the
         # after-window frames exist (spec §6.5). The timer removes itself from
         # the set when it fires so the set does not grow for every capture.
-        delay = self.window_after_s + self._margin_s
+        # Skipped entirely in timing-only ("off") mode — no images to attach.
+        if self.image_mode != "off":
+            delay = self.window_after_s + self._margin_s
 
-        def _fire() -> None:
+            def _fire() -> None:
+                with self._timers_lock:
+                    self._timers.discard(timer)
+                self._select_images(capture_id, sequence, target, race_dir)
+
+            timer = threading.Timer(delay, _fire)
+            timer.daemon = True
             with self._timers_lock:
-                self._timers.discard(timer)
-            self._select_images(capture_id, sequence, target, race_dir)
-
-        timer = threading.Timer(delay, _fire)
-        timer.daemon = True
-        with self._timers_lock:
-            self._timers.add(timer)
-        timer.start()
+                self._timers.add(timer)
+            timer.start()
 
         if self.logger:
             self.logger.info("controller", "capture",

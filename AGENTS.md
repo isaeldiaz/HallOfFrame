@@ -70,13 +70,19 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 - **No modal dialogs during a race** (spec §7.5); errors surface as a banner.
 - **Calibration (`delta`)** is validated at race start against the live stream
   (§8): water mode requires `calibration.json` matching live resolution/fps;
-  screen mode needs none.
+  screen mode needs none; `image_mode = "off"` (timing-only) skips calibration
+  entirely so races start with the stream down.
 
 ## Data & config (the single source of truth)
 
 - **`~/regatta-data/`** (`data_root`) — **do not change the default**.
   - `config.toml` — hand-edited. Trigger keys: `crossing_keycodes` (SPACE=57),
-    `start_keycodes` (ENTER=28), `end_keycodes` (F12=88); `grab_device`.
+    `start_keycodes` (ENTER=28), `end_keycodes` (F12=88); `grab_device`;
+  `[timing] image_mode` = `"auto"` (default) | `"off"` (timing-only — no camera,
+  no calibration, no image selection; races start with the stream down). This is
+  config-only and fixed for the life of a race — there is no mid-race GUI toggle,
+  because a feed that dies mid-race is auto-detected (empty buffer → the time is
+  recorded with `image_flag = "missing"`, no photo).
   - `regatta.db` — SQLite (`race`, `capture`, `capture_frame`).
   - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
   - `logs/regatta-app.jsonl` — structured log; useful for reproducing issues.

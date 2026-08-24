@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "debounce_ms": 20,
         "start_mode": "direct",
         "radio_delay_ms": 0.0,
+        "image_mode": "auto",  # "auto" | "off" — off = timing-only, no camera
     },
     "capture": {
         "window_before_ms": 500,
@@ -99,6 +100,9 @@ def _validate(raw: dict[str, Any], path: Path) -> None:
     if timing.get("start_mode", "direct") not in ("direct", "radio", "external"):
         raise ConfigError(
             f"{path}: [timing] start_mode must be direct|radio|external")
+    if timing.get("image_mode", "auto") not in ("auto", "off"):
+        raise ConfigError(
+            f"{path}: [timing] image_mode must be 'auto' or 'off'")
 
 
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:

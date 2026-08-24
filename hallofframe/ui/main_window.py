@@ -299,7 +299,10 @@ class MainWindow(QMainWindow):
             kb.add("E", "Export CSV", callback=self._export)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
             if state == AppState.STREAM_DOWN:
-                kb.set_note("Stream down — arming refused")
+                if self.config.section("timing")["image_mode"] == "off":
+                    kb.set_note("Stream down — timing-only mode, arming allowed")
+                else:
+                    kb.set_note("Stream down — arming refused")
 
     def _grab_note(self) -> str:
         trig = self.config.section("trigger")
@@ -343,10 +346,16 @@ class MainWindow(QMainWindow):
     def _arm_start(self) -> None:
         if self._armed:
             return
-        if self._last_state in (AppState.STREAM_DOWN, AppState.RECALIBRATE,
-                                AppState.ARMED, AppState.RECORDING, AppState.REVIEW):
+        if self._last_state in (AppState.ARMED, AppState.RECORDING,
+                                AppState.REVIEW):
             self._show_toast("Can't arm in this state.")
             return
+        # Timing-only mode needs no stream and no calibration, so it may be armed
+        # (and a race started) while STREAM_DOWN or RECALIBRATE (§6.5).
+        if self._last_state in (AppState.STREAM_DOWN, AppState.RECALIBRATE):
+            if self.config.section("timing")["image_mode"] != "off":
+                self._show_toast("Can't arm in this state.")
+                return
         trig = self.config.section("trigger")
         start_keys = keycode_names(trig["start_keycodes"])
         device = trig["device_path"] or "keyboard"

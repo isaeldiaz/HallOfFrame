@@ -78,6 +78,11 @@ and displays both together in a reviewable list on screen.
 The photograph exists so that a race jury can verify the recorded placing and
 read the boat's bow number, especially for close finishes.
 
+The photograph is optional. With `image_mode = "off"` (config, §8) the system
+runs as a plain finish-line stopwatch — race name, start time and annotated
+elapsed times, no camera required — and every timing guarantee in §5 still
+holds. See §6.5.
+
 ---
 
 ## 2. Requirements
@@ -892,6 +897,7 @@ Edge cases that must be handled explicitly:
 |---|---|
 | No race started yet | Reject the trigger, flash a UI warning. Do not record. |
 | Buffer empty (stream down) | Record the time anyway with `image_id = NULL`. **The time is the primary datum; never discard a time because the camera failed.** Mark the row visually as "no image". |
+| `image_mode = "off"` (timing-only) | Calibration is not required and `Δ = 0`; races start with the stream down. `record_crossing` still writes every time; deferred image selection is skipped entirely, so captures carry `image_flag = "missing"` and no capture files/dirs are created. |
 | `target` older than buffer span | Record the time; attach the oldest available frame; flag the row as "image approximate". |
 | `target` newer than newest frame | Record the time; attach the newest frame; flag as "image approximate". |
 
@@ -899,6 +905,28 @@ That second row is the most important behaviour in this table. A regatta result
 with a missing photo is recoverable. A missing time is not. §6.4's debounce
 handling follows the same rule: a suspected double-press is recorded and
 flagged, never dropped.
+
+**Timing-only mode (`image_mode = "off"`).** A config switch for running the
+system as a plain stopwatch with no camera. It does not change the timing model
+in the slightest — `elapsed = t_press − t0` is still driven by evdev kernel
+timestamps (§5) — it only removes the photographic half. Concretely:
+`start_race` skips the §8 calibration gate and sets `Δ = 0.0`, and
+`_handle_capture` skips scheduling deferred image selection, so every capture is
+recorded with `image_flag = "missing"` and no capture JPEGs or directories are
+written. CSV export is unchanged; the `image_file` column is simply empty. This
+makes the system usable immediately and offline when the phone, cable or
+`iproxy` tunnel is unavailable.
+
+**A mid-race switch is unnecessary.** A feed that dies *during* a race is already
+handled by the empty-buffer edge case above: the time is recorded with
+`image_flag = "missing"` and no photo, so timing continues automatically. There
+is deliberately **no GUI toggle**. The `image_mode` setting is config-only and
+exists for a different, genuinely config-shaped reason: starting a race with no
+camera at all. In particular `image_mode = "off"` skips the §8 calibration gate
+so a **water-mode** race can *start* with the stream down (`screen` mode already
+can, since its `Δ = R` needs no calibration). The calibration gate cannot be
+evaluated mid-race — it is a pre-race check (§5.5, §8) — so the mode is fixed
+for the life of a race and must be decided in `config.toml` before arming.
 
 #### Resuming after a restart
 
@@ -1282,6 +1310,7 @@ reaction_offset_ms = 0.0     # operator-tuned component
 debounce_ms = 20             # suspect presses are RECORDED and flagged (§6.4)
 start_mode = "direct"        # "direct" | "radio" | "external" (§5.3.1)
 radio_delay_ms = 0.0         # measured; only meaningful when start_mode="radio"
+image_mode = "auto"          # "auto" | "off" — off = timing-only (§6.5)
 # Δ itself is NOT stored here. It is derived at race start from
 # calibration.json + reaction_offset_ms. See §5.4 and §6.7.
 
@@ -1342,6 +1371,14 @@ At race start the application computes `Δ` per §5.4 and refuses to start if
 That check replaces v1.0's `delta_ms == 0` rule, which was wrong in both
 directions — a correctly calibrated water-watching `Δ` is legitimately near
 zero, while a stale non-zero `Δ` sailed through.
+
+**Timing-only operation (`image_mode = "off"`).** When the camera is absent or
+the operator wants plain stopwatch timing with no photographs, the entire
+calibration gate is skipped and `Δ` is forced to `0.0`, so a race starts even
+with the stream down. See §6.5 for the controller behaviour and the edge-case
+table. The recorded data — race name, start `t0`, and annotated elapsed times —
+is identical; only image attachment and the `calibration.json` requirement are
+dropped.
 
 ---
 

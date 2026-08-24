@@ -13,12 +13,13 @@ from hallofframe.mjpeg import Frame
 from hallofframe.storage import Storage
 
 
-def make_config(data_root, window_ms=50, viewing="screen"):
+def make_config(data_root, window_ms=50, viewing="screen", image_mode="auto"):
     data = {
         "paths": {"data_root": str(data_root)},
         "stream": {"assumed_fps": 30, "buffer_seconds": 10.0},
         "timing": {"viewing_mode": viewing, "reaction_offset_ms": 0.0,
-                   "debounce_ms": 20, "start_mode": "direct", "radio_delay_ms": 0.0},
+                   "debounce_ms": 20, "start_mode": "direct", "radio_delay_ms": 0.0,
+                   "image_mode": image_mode},
         "capture": {"window_before_ms": window_ms, "window_after_ms": window_ms},
         "archive": {"enabled": False, "every_nth_frame": 1},
     }
@@ -205,6 +206,29 @@ class TestCalibrationValidation(Base):
         c = CaptureController(cfg, self.storage, self.buffer)
         self.assertIsNotNone(c.start_race(1000.0, name="Race-T"))
         c.stop()
+
+    def test_timing_only_mode_starts_without_calibration(self):
+        # image_mode="off": timing-only, no camera, no calibration needed — even
+        # in water viewing mode, and with an empty buffer (stream off).
+        cfg = make_config(self.data_root, viewing="water", image_mode="off")
+        c = CaptureController(cfg, self.storage, self.buffer)
+        try:
+            race_id = c.start_race(1000.0, name="Timing-Only")
+            self.assertIsNotNone(race_id)
+            self.assertEqual(c.delta, 0.0)
+            cap = c.record_crossing(1020.0)
+            self.assertIsNone(cap)  # fast path; committed off-thread
+            deadline = time.monotonic() + 3.0
+            rows = []
+            while time.monotonic() < deadline:
+                rows = self.storage.captures_for_race(race_id)
+                if rows:
+                    break
+                time.sleep(0.02)
+        finally:
+            c.stop()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["image_flag"], "missing")
 
     def test_water_mode_mismatched_resolution_refuses(self):
         import json
