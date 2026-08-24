@@ -223,6 +223,36 @@ class TestCalibrationValidation(Base):
         row = self.storage.get_race(race_id)
         self.assertEqual(row["image_off"], 1)
 
+    def test_stale_frames_after_stream_drop_degrades(self):
+        # Regression: the stream dies after the race was armed. The ring still
+        # holds seconds of frames from before it went down, so span() is NOT
+        # None — yet the stream is down. The race must still degrade to
+        # timing-only rather than attach a stale pre-arming frame to crossings.
+        seed_buffer(self.buffer)
+        # Emulate the stream having stopped ~5 s ago.
+        self.buffer._last_append_mono = time.monotonic() - 5.0
+        cfg = make_config(self.data_root, viewing="water", image_mode="auto")
+        c = CaptureController(cfg, self.storage, self.buffer)
+        try:
+            race_id = c.start_race(1000.0, name="Race-Drop")
+            self.assertIsNotNone(race_id)
+            self.assertTrue(c.image_off)
+            self.assertEqual(c.delta, 0.0)
+            c.record_crossing(1000.0 + 5.0)
+            deadline = time.monotonic() + 3.0
+            rows = []
+            while time.monotonic() < deadline:
+                rows = self.storage.captures_for_race(race_id)
+                if rows:
+                    break
+                time.sleep(0.02)
+        finally:
+            c.stop()
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["primary_image"])
+        self.assertEqual(rows[0]["image_flag"], "missing")
+        self.assertEqual(self.storage.get_race(race_id)["image_off"], 1)
+
     def test_water_mode_matching_calibration_starts(self):
         from PIL import Image
         import json

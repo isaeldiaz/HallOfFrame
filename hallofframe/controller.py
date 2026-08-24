@@ -117,13 +117,17 @@ class CaptureController:
         #
         # Two cases skip calibration entirely and race timing-only (§6.5):
         #   1. Config image_mode = "off" (the operator never wants video).
-        #   2. The stream is DOWN at start (no frames in the buffer). Calibration
-        #      requires the live stream to measure latency against, so it cannot
-        #      be validated; the race auto-degrades to timing-only rather than
-        #      refusing to start. There is no photo to mis-time, so Δ = 0 is safe.
-        # A buffer with no frames means the stream is down (the ring only holds
-        # ~15 s, so an empty buffer == no live stream).
-        if self.image_mode == "off" or self.buffer.span() is None:
+        #   2. The stream is DOWN at start (no frames arriving recently).
+        #      Calibration requires the live stream to measure latency against,
+        #      so it cannot be validated; the race auto-degrades to timing-only
+        #      rather than refusing to start. There is no photo to mis-time, so
+        #      Δ = 0 is safe.
+        # The stream is "down" when no frame has arrived recently (buffer.health),
+        # not merely when the ring is empty: if it died seconds ago the ring still
+        # holds stale frames, and attaching those to a fresh race would show a
+        # pre-arming frame that predates the crossing.
+        alive, _fps, _age = self.buffer.health()
+        if self.image_mode == "off" or not alive:
             self.image_off = True
             self.delta = 0.0
         else:

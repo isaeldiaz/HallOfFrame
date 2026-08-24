@@ -24,11 +24,18 @@ class FrameBuffer:
         self._buf: deque[Frame] = deque(maxlen=self.maxlen)
         self._lock = threading.Lock()
         self._resize_warning_emitted = False
+        # Real-clock time of the last append. This is the liveness signal: a
+        # stream is "down" when no frame has arrived for a while, even though the
+        # ring still holds seconds of now-stale frames (their t_recv is in the
+        # capture-clock domain and cannot double as a wall-clock liveness check).
+        self._last_append_mono: float | None = None
 
     def append(self, frame: Frame) -> None:
         """Thread-safe. O(1)."""
+        import time
         with self._lock:
             self._buf.append(frame)
+            self._last_append_mono = time.monotonic()
 
     def _snapshot(self) -> list[Frame]:
         return list(self._buf)
@@ -78,17 +85,19 @@ class FrameBuffer:
     def health(self, stale_after_s: float = 1.5):
         """Stream health: (alive: bool, fps: float, newest_age_s: float | None).
 
-        ``alive`` is False when the buffer is empty or the newest frame is older
-        than *stale_after_s* (stream stalled / never started). fps is derived
-        from the frame timestamps. Returns (False, 0.0, None) for an empty buffer.
+        ``alive`` is False when no frame has arrived within *stale_after_s*
+        (stream never started / stalled — even if the ring still holds stale
+        frames from before it went down). Liveness is measured against the
+        real-clock append time, independent of the capture-clock t_recv. fps is
+        derived from the frame timestamps. Returns (False, 0.0, None) when no
+        frame has ever been appended.
         """
         import time
         with self._lock:
             frames = list(self._buf)
-        if not frames:
+        if self._last_append_mono is None:
             return False, 0.0, None
-        newest = frames[-1].t_recv
-        age = time.monotonic() - newest
+        age = time.monotonic() - self._last_append_mono
         if len(frames) >= 2:
             fps = (len(frames) - 1) / (frames[-1].t_recv - frames[0].t_recv)
         else:

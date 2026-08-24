@@ -119,8 +119,10 @@ class TestFrameBuffer(unittest.TestCase):
         import time
         now = time.monotonic()
         fb = FrameBuffer()
-        old = now - 10.0
-        fb.append(Frame(old, old, 1, b"\xff\xd8\xff\xd9"))
+        fb.append(Frame(now, now, 1, b"\xff\xd8\xff\xd9"))
+        # No frame has arrived for a while -> the stream is down, even though
+        # the ring still holds a frame (its t_recv is recent, the append is not).
+        fb._last_append_mono = now - 10.0
         alive, fps, age = fb.health()
         self.assertFalse(alive)
         self.assertGreater(age, 1.5)
