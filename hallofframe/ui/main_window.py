@@ -1,26 +1,38 @@
-"""Main window (spec §7). Status bar, live preview, capture list, controls.
+"""Main window (REDESIGN-PLAN §1, §3–§7; spec §7).
 
-During a race there are NO modal dialogs (§7.5); errors appear as a dismissible
-banner. Start-Race is armed via Qt but the actual t0 timestamp comes from evdev
-(§5.3, §7.4).
+One full-screen surface that changes with application state. A single ``AppState``
+enum (``ui/state.py``) drives everything: the state band on top, the centre pane
+(ready / armed / recording / race-over / review), and the key bar at the bottom.
+The red banner is retired as a general-purpose channel — warnings go to a
+bottom-right toast, the band is persistent, and capture confirmation is the
+last-capture panel flash.
+
+Timing is untouched: ``t_press`` still comes from evdev kernel timestamps
+(``trigger.py``); this window only renders and orchestrates. No modal dialogs
+during a race (§7.5).
 """
 from __future__ import annotations
 
+import shutil
 import time
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (QFileDialog, QMainWindow, QStackedWidget,
+                               QVBoxLayout, QWidget)
 
-from ..controller import CaptureController
+from ..controller import CaptureController, calibration_status
 from ..export import export_csv
 from ..framebuffer import FrameBuffer
 from ..races import load_race_names, write_example
+from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
-from ..ui.capture_list import CaptureList, FrameReviewPanel
-from ..ui.preview_widget import PreviewWidget
-from ..ui.review_dialog import RaceReviewDialog
+from ..ui.misc_screens import ArmedScreen, RaceOverScreen
+from ..ui.race_screen import RaceScreen
+from ..ui.ready_screen import ReadyScreen
+from ..ui.review_screen import ReviewScreen
+from ..ui.state import AppState, derive_state
+from ..ui.widgets import KeyBar, StateBand, Toast
 
 
 def keycode_names(codes) -> str:
@@ -45,172 +57,443 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("HallOfFrame — Finish-Line Timer")
         self.resize(1280, 720)
 
-        central = QWidget()
-        root = QVBoxLayout(central)
-        self.banner = QLabel("")
-        self.banner.setStyleSheet("background:#c0392b; color:white; padding:4px;")
-        self.banner.hide()
-        root.addWidget(self.banner)
+        root = QWidget()
+        root.setObjectName("Root")
+        self._root_lay = QVBoxLayout(root)
+        self._root_lay.setContentsMargins(0, 0, 0, 0)
+        self._root_lay.setSpacing(0)
 
-        self.status = QLabel("No race")
-        root.addWidget(self.status)
+        # --- state band (top) ---
+        self.band = StateBand()
+        self._root_lay.addWidget(self.band)
 
-        mid = QHBoxLayout()
-        self.preview = PreviewWidget(buffer)
-        mid.addWidget(self.preview, 3)
-        self.list = CaptureList()
-        self.list.capture_clicked.connect(self._open_review)
-        self.list.bow_edited.connect(self._bow_edited)
-        self.list.delete_requested.connect(self._delete)
-        mid.addWidget(self.list, 2)
-        root.addLayout(mid, 1)
+        # --- centre pane (one page per state) ---
+        self.center = QStackedWidget()
+        self.ready = ReadyScreen(buffer)
+        self.ready.finish_line_changed.connect(self._finish_line_changed)
+        self.armed = ArmedScreen(on_start=lambda: self.on_evdev_start(time.monotonic()))
+        self.recording = RaceScreen()
+        self.race_over = RaceOverScreen()
+        self.center.addWidget(self.ready)
+        self.center.addWidget(self.armed)
+        self.center.addWidget(self.recording)
+        self.center.addWidget(self.race_over)
+        self._root_lay.addWidget(self.center, 1)
 
-        controls = QHBoxLayout()
-        self.race_label = QLabel("Race:")
-        controls.addWidget(self.race_label)
-        self.race_selector = QComboBox()
-        self._populate_race_selector()
-        self.race_selector.setToolTip(
-            "Race names come from the races Excel file (one per row, column A).")
-        controls.addWidget(self.race_selector)
-        self.start_btn = QPushButton("Arm Start Race (Ctrl+S)")
-        self.start_btn.clicked.connect(self._arm_start)
-        controls.addWidget(self.start_btn)
-        self.end_btn = QPushButton("End Race")
-        self.end_btn.setEnabled(False)
-        self.end_btn.clicked.connect(self._end_race)
-        controls.addWidget(self.end_btn)
-        self.cal_btn = QPushButton("Calibrate")
-        self.cal_btn.clicked.connect(self._calibrate)
-        controls.addWidget(self.cal_btn)
-        self.review_btn = QPushButton("Review Race")
-        self.review_btn.setEnabled(False)
-        self.review_btn.clicked.connect(self._open_review_dialog)
-        controls.addWidget(self.review_btn)
-        self.export_btn = QPushButton("Export CSV")
-        self.export_btn.clicked.connect(self._export)
-        controls.addWidget(self.export_btn)
-        quit_btn = QPushButton("Quit (Ctrl+Q)")
-        quit_btn.clicked.connect(self._quit)
-        controls.addWidget(quit_btn)
-        trig = self.config.section("trigger")
-        start_keys = keycode_names(trig["start_keycodes"])
-        end_keys = keycode_names(trig["end_keycodes"])
-        self.trigger_label = QLabel(
-            f"Start: {start_keys} · End: {end_keys}  "
-            f"({trig['device_path'] or 'Qt fallback'})")
-        controls.addWidget(self.trigger_label)
-        root.addLayout(controls)
+        # --- key bar (bottom) ---
+        self.keybar = KeyBar()
+        self.keybar.setStyleSheet(f"background:{styles.PANEL};"
+                                  f" border-top:1px solid {styles.PANEL_BORDER};")
+        self._root_lay.addWidget(self.keybar)
 
-        self.setCentralWidget(central)
+        self.setCentralWidget(root)
 
-        # Preview timer (§7.2)
-        preview_fps = float(self.config.section("ui")["preview_fps"])
-        self.preview_timer = QTimer(self)
-        self.preview_timer.timeout.connect(self.preview.refresh)
-        self.preview_timer.start(int(1000 / preview_fps))
+        # Toast floats over the centre pane (bottom-right), as a child of root
+        # so move() is parent-relative and it overlays the stacked pages.
+        self.toast = Toast(root)
+        self._toast_initialized = False
 
-        # Status timer
+        # --- timers ---
+        self.clock_timer = QTimer(self)
+        self.clock_timer.timeout.connect(self._tick_clock)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._update_status)
         self.status_timer.start(500)
 
+        # --- state fields ---
         self._armed = False
         self._race_over = False
-        self._race_over_detail = ""
-        self._stream_down_notified = False
-        self._cal_stale_notified = False
-        self._cal_check_at = 0.0
+        self._reviewing = False
+        self._review_screen: ReviewScreen | None = None
+        self._cal_ok = True
         self._cal_detail = ""
+        self._cal_check_at = 0.0
         self._last_capture: int | None = None
-        self._review_dialog = None
-        self._race_names = []
-        self._flash_timer = QTimer(self)
-        self._flash_timer.setSingleShot(True)
-        self._flash_timer.timeout.connect(self._end_flash)
+        self._last_state = None
+        self._race_names: list[str] = []
+        # Set by main.py to keep the trigger device grab tied to state (§9/Opt A).
+        self.on_state_changed = None
+
+        self._populate_race_selector()
+        self.ready.set_races(self._race_names)
+        self.ready.race_selected.connect(self._on_race_selected)
+        self.ready.set_finish_line(float(self.config.section("ui")["finish_line_x"]))
+        self._set_trigger_label()
+
         self._connect_controller()
         self._install_shortcuts()
+        self._apply_state(derive_state(self.controller, self.buffer,
+                                       self._cal_ok, self._armed,
+                                       self._reviewing, self._race_over))
+        self._update_status()
 
+    # ------------------------------------------------------------------ wiring
     def _connect_controller(self) -> None:
-        # signal_capture_added is overridden in main.py to route through the Qt
-        # bridge; this default keeps the controller usable outside Qt (tests).
+        # capture_added and image_ready are routed through the bridge in main.py;
+        # these defaults keep the window usable outside Qt (tests).
         self.controller.signal_capture_added = self.on_capture
-        self.controller.signal_warning = self._show_banner
+        self.controller.signal_image_ready = self.on_image_ready
+        self.controller.signal_race_ended = self.on_race_ended
+        self.controller.signal_warning = self._show_toast
 
-    def _flash_capture(self, cap) -> None:
-        """Transient on-screen confirmation that a crossing registered."""
-        if self._armed:
-            # Arming text is more important; don't clobber it. Still give a
-            # small flash so the press is visibly acknowledged.
-            self.status.setText(
-                f"CAPTURE #{cap.sequence:03d}  {_fmt_clock(cap.elapsed_s)}")
+    def _set_trigger_label(self) -> None:
+        trig = self.config.section("trigger")
+        start = keycode_names(trig["start_keycodes"])
+        end = keycode_names(trig["end_keycodes"])
+        device = trig["device_path"] or "Qt fallback"
+        self.armed.set_trigger_label(
+            f"({device}). {end} or Esc to disarm.")
+
+    def _install_shortcuts(self) -> None:
+        # ApplicationShortcut context: these never lose to a focused button (§4).
+        def sc(key, fn):
+            QShortcut(QKeySequence(key), self, activated=fn,
+                      context=Qt.ApplicationShortcut)
+        sc("Ctrl+S", self._arm_start)
+        sc("Ctrl+Z", self.controller.undo_last)
+        sc("Ctrl+Q", self._quit)
+        sc("C", self._calibrate)
+        sc("E", self._export)
+        sc("R", self._open_review)
+        sc("N", self._next_race)
+        sc("Esc", self._esc)
+        sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
+        sc("Return", lambda: self.on_evdev_start(time.monotonic()))
+        sc("Enter", lambda: self.on_evdev_start(time.monotonic()))
+        sc("Space", lambda: self.controller.record_crossing(time.monotonic()))
+
+    # ---------------------------------------------------------------- state band
+    def _health_labels(self) -> list[str]:
+        if self._last_state == AppState.RECORDING:
+            return ["Stream", "Archive", "Disk"]
+        return ["Stream", "Δ latency", "Disk"]
+
+    def _update_health(self) -> None:
+        _, fps, _ = self.buffer.health()
+        fps = self.trigger.fps if (self.trigger and fps <= 0) else fps
+        free = shutil.disk_usage(self.config.data_root).free / 1e9
+        self.band.set_health(self._health_labels())
+        self.band.set_health_value("Stream", f"{fps:.1f} fps",
+                                   styles.GREEN_TEXT if fps > 0 else styles.RED_TEXT)
+        self.band.set_health_value("Disk", f"{int(free)} GB")
+        if self._last_state == AppState.RECORDING:
+            self.band.set_health_value(
+                "Archive", "writing" if self.controller.running else "stopped",
+                styles.GREEN_TEXT if self.controller.running else styles.TEXT_DIM)
         else:
-            self.banner.setText(
-                f"CAPTURE #{cap.sequence:03d}  {_fmt_clock(cap.elapsed_s)}")
-            self.banner.show()
-        self._flash_timer.start(900)
+            lag = self._cal_latency_ms()
+            self.band.set_health_value(
+                "Δ latency", f"{lag:.0f} ms" if lag else "—")
 
-    def _end_flash(self) -> None:
-        # Let the normal status/elapsed update resume; the last capture stays
-        # visible in the running status line until the next tick.
-        if self.controller.running:
-            return
-        self.banner.hide()
+    def _cal_latency_ms(self) -> float | None:
+        import json as _json
+        p = self.config.data_root / "calibration.json"
+        if not p.exists():
+            return None
+        try:
+            return float(_json.loads(p.read_text()).get("latency_median_ms", 0.0))
+        except Exception:
+            return None
 
-    def _show_banner(self, msg: str) -> None:
-        self.banner.setText(msg)
-        self.banner.show()
-
-    def _dismiss_banner(self) -> None:
-        self.banner.hide()
-
+    # ------------------------------------------------------------------- status
     def _update_status(self) -> None:
-        if self.controller.running:
-            el = time.monotonic() - self.controller.t0
-            fps = self.trigger.fps if self.trigger else 0.0
-            last = f"  · last capture #{self._last_capture:03d}" if self._last_capture else ""
-            self.status.setText(
-                f"REC {self._current_race_name()}  {_fmt_clock(el)}   "
-                f"{fps:.1f} fps{last}")
-            return
-        if self._race_over:
-            self.status.setText(self._race_over_detail)
-            return
-        alive, fps, _ = self.buffer.health()
-        if not alive:
-            self.status.setText("No race · STREAM DOWN")
-            if not self._stream_down_notified:
-                self._stream_down_notified = True
-                self._cal_stale_notified = False
-                self._show_banner(
-                    "STREAM DOWN — no frames arriving. Check the phone camera "
-                    "app and cable (tunnel on 8081).")
-            return
+        self._update_health()
+        self._recompute_state()
 
-        self._stream_down_notified = False
-        # Re-check calibration against the live stream ~every 3 s (decodes a
-        # frame for resolution, so avoid doing it every 500 ms).
-        if time.monotonic() - self._cal_check_at >= 3.0:
-            from ..controller import calibration_status
+    def _recompute_state(self) -> None:
+        # Calibration is only gateable in water mode; screen mode cancels
+        # latency entirely and needs no calibration.json (§5.4, §8).
+        if self.config.section("timing")["viewing_mode"] == "screen":
+            self._cal_ok, self._cal_detail = True, ""
+        # Re-check calibration ~every 3 s (decodes a frame for resolution).
+        elif time.monotonic() - self._cal_check_at >= 3.0:
             self._cal_check_at = time.monotonic()
-            ok, self._cal_detail = calibration_status(self.config, self.buffer)
-            if ok:
-                self._cal_stale_notified = False
-
-        if self._cal_detail:
-            self.status.setText(
-                f"No race · stream OK ({fps:.1f} fps) · {self._cal_detail}")
-            if not self._cal_stale_notified:
-                self._cal_stale_notified = True
-                self._show_banner(
-                    f"RECALIBRATION NEEDED — {self._cal_detail}. "
-                    "Click Calibrate before starting.")
+            self._cal_ok, self._cal_detail = calibration_status(self.config, self.buffer)
+        state = derive_state(self.controller, self.buffer, self._cal_ok,
+                             self._armed, self._reviewing, self._race_over)
+        if state != self._last_state:
+            self._apply_state(state)
         else:
-            self.status.setText(f"No race · stream OK ({fps:.1f} fps)")
+            # keep the band race name / fix fresh even if state unchanged
+            self._refresh_band(state)
 
+    def _race_name(self) -> str:
+        if self.controller.race_id is not None:
+            row = self.controller.storage.get_race(self.controller.race_id)
+            if row and row["name"]:
+                return row["name"]
+        return self.ready.current_race_name()
+
+    def _refresh_band(self, state: AppState) -> None:
+        fix = ""
+        if state == AppState.STREAM_DOWN:
+            fix = "No frames arriving — check the camera app and the USB cable"
+        elif state == AppState.RECALIBRATE:
+            fix = f"{self._cal_detail} — press C to calibrate"
+        self.band.set_state(state, self._race_name(), fix)
+
+    # ---------------------------------------------------------------- apply state
+    def _apply_state(self, state: AppState) -> None:
+        self._last_state = state
+        pages = {
+            AppState.READY: self.ready, AppState.ARMED: self.armed,
+            AppState.RECORDING: self.recording,
+            AppState.RACE_OVER: self.race_over, AppState.REVIEW: self._review_screen,
+        }
+        page = pages.get(state)
+        if state in (AppState.STREAM_DOWN, AppState.RECALIBRATE):
+            page = self.ready
+        if page is not None and self.center.currentWidget() is not page:
+            self.center.setCurrentWidget(page)
+
+        # clock timer only during recording
+        if state == AppState.RECORDING:
+            self.recording.begin(self.controller.t0)
+            self.clock_timer.start(50)
+        else:
+            self.recording.end()
+            self.clock_timer.stop()
+
+        self._refresh_band(state)
+        self._apply_keybar(state)
+        if state == AppState.READY:
+            self.ready.set_checks(self._pre_race_checks())
+            self.ready.set_lag(self._measure_lag())
+        if self.on_state_changed is not None:
+            self.on_state_changed(state)
+
+    def _apply_keybar(self, state: AppState) -> None:
+        kb = self.keybar
+        kb.clear()
+        if state == AppState.RECORDING:
+            kb.add("SPACE", "Record crossing", True,
+                   lambda: self.controller.record_crossing(time.monotonic()))
+            kb.add("F12", "End race", callback=self._end_race)
+            kb.add("Ctrl+Z", "Undo last", callback=self.controller.undo_last)
+            kb.set_note(self._grab_note())
+        elif state == AppState.ARMED:
+            trig = self.config.section("trigger")
+            end = keycode_names(trig["end_keycodes"])
+            kb.add(end, "Disarm", callback=lambda: self.on_evdev_end(time.monotonic(), 88))
+            kb.add("Esc", "Cancel", callback=self._esc)
+            kb.set_note(f"Keyboard grabbed while armed — {end} or Esc disarms "
+                        "and releases it, then quit normally.")
+        elif state == AppState.REVIEW:
+            kb.add("↑/↓", "Select crossing", True)
+            kb.add("Tab", "Next bow field")
+            kb.add("Del", "Soft-delete")
+            kb.add("E", "Export CSV", callback=self._export)
+            kb.add("Esc", "Back to Ready", callback=self._close_review)
+        elif state == AppState.RACE_OVER:
+            kb.add("R", "Review crossings", True, callback=self._open_review)
+            kb.add("E", "Export CSV", callback=self._export)
+            kb.add("N", "Next race", callback=self._next_race)
+            kb.add("Ctrl+Q", "Quit", callback=self._quit)
+        elif state == AppState.RECALIBRATE:
+            kb.add("C", "Calibrate", True, callback=self._calibrate)
+            kb.add("Ctrl+Q", "Quit", callback=self._quit)
+        else:  # READY / STREAM_DOWN
+            kb.add("Ctrl+S", "Arm", True, callback=self._arm_start)
+            kb.add("C", "Calibrate", callback=self._calibrate)
+            kb.add("R", "Review last race", callback=self._open_review)
+            kb.add("E", "Export CSV", callback=self._export)
+            kb.add("Ctrl+Q", "Quit", callback=self._quit)
+            if state == AppState.STREAM_DOWN:
+                kb.set_note("Stream down — arming refused")
+
+    def _grab_note(self) -> str:
+        trig = self.config.section("trigger")
+        dev = trig["device_path"] or "Qt fallback"
+        grabbed = "keyboard grabbed" if trig["grab_device"] else "grab disabled"
+        return f"{grabbed} · {dev}"
+
+    def _pre_race_checks(self) -> list[dict]:
+        alive, fps, _ = self.buffer.health()
+        trig = self.config.section("trigger")
+        disk = shutil.disk_usage(self.config.data_root).free / 1e9
+        checks = [
+            {"mark": "✓", "label": "MJPEG stream", "detail": f"{fps:.1f} fps",
+             "accent": styles.GREEN if alive else styles.RED},
+            {"mark": "✓", "label": "Calibration Δ",
+             "detail": self._cal_detail or "ok", "accent": styles.GREEN},
+            {"mark": "✓", "label": "Trigger device",
+             "detail": (trig["device_path"] or "Qt fallback") or "—",
+             "accent": styles.GREEN},
+            {"mark": "✓", "label": "Disk headroom", "detail": f"{int(disk)} GB free",
+             "accent": styles.GREEN},
+        ]
+        lag = self._measure_lag()
+        if lag is not None and lag >= 0.3:
+            checks.append({"mark": "!", "label": "Preview lag",
+                           "detail": f"+{lag:.1f} s · framing only",
+                           "accent": styles.AMBER})
+        return checks
+
+    def _measure_lag(self) -> float | None:
+        # In screen mode the calibration measured glass-to-screen lag directly.
+        if self.config.section("timing")["viewing_mode"] != "screen":
+            return None
+        return self._cal_latency_ms() / 1000.0 if self._cal_latency_ms() else None
+
+    def _tick_clock(self) -> None:
+        if self.controller.running and self.controller.t0 is not None:
+            self.recording.set_clock(time.monotonic() - self.controller.t0)
+
+    # -------------------------------------------------------------------- events
+    def _arm_start(self) -> None:
+        if self._armed:
+            return
+        if self._last_state in (AppState.STREAM_DOWN, AppState.RECALIBRATE,
+                                AppState.ARMED, AppState.RECORDING, AppState.REVIEW):
+            self._show_toast("Can't arm in this state.")
+            return
+        trig = self.config.section("trigger")
+        start_keys = keycode_names(trig["start_keycodes"])
+        device = trig["device_path"] or "keyboard"
+        self._armed = True
+        self._race_over = False
+        self._recompute_state()
+        self._show_toast(f"Armed. Press {start_keys} on the trigger device "
+                         f"({device}) to start.", timeout_ms=0)
+
+    def on_evdev_start(self, t_press: float) -> None:
+        if not self._armed:
+            return
+        self._armed = False
+        self.controller.start_race(t_press, name=self._race_name())
+        if self.controller.running:
+            self._race_over = False
+            self._last_capture = None
+            self.recording.clear_captures()
+        self._recompute_state()
+
+    def on_evdev_crossing(self, t_press: float, code: int, suspect: bool = False) -> None:
+        self.controller.record_crossing(t_press, debounce_suspect=suspect)
+
+    def on_evdev_end(self, t_press: float, code: int = 0) -> None:
+        if self._armed:
+            # Escape hatch while armed: the trigger keyboard is grabbed, so the
+            # Qt shortcuts (Esc / Ctrl+Q) are unreachable. The END key disarms
+            # and releases the grab back to READY, where normal quit works.
+            # Timing is unaffected — this is the pre-race ARMED state, and the
+            # RECORDING end path below is untouched.
+            self._armed = False
+            self._race_over = False
+            self._recompute_state()
+            self._show_toast("Disarmed. Keyboard released.")
+            return
+        if code == 1:
+            # KEY_ESC while recording: ignore so accidental Esc does not end a race.
+            return
+        self._end_race()
+
+    def _end_race(self) -> None:
+        self.controller.end_race()
+
+    def on_race_ended(self, race_id: int) -> None:
+        self._armed = False
+        self._race_over = True
+        self._reviewing = False
+        caps = self.controller.storage.captures_for_race(race_id)
+        self.race_over.set_summary(list(caps))
+        self._recompute_state()
+
+    def on_capture(self, cap) -> None:
+        primary = getattr(cap, "primary_image", None)
+        self.recording.add_capture({
+            "sequence": cap.sequence,
+            "elapsed_s": cap.elapsed_s,
+            "image_path": str(self.config.data_root / primary) if primary else None,
+            "image_flag": cap.image_flag,
+            "suspect": cap.debounce_suspect,
+        })
+        self._last_capture = cap.sequence
+
+    def on_image_ready(self, sequence: int, path: str) -> None:
+        self.recording.update_image(sequence, str(self.config.data_root / path))
+
+    # ---------------------------------------------------------------- review
+    def _open_review(self) -> None:
+        race_id = self.controller.race_id
+        if race_id is None:
+            return
+        if self._review_screen is None:
+            self._review_screen = ReviewScreen(self.controller, self.config.data_root,
+                                               race_id=race_id)
+            self.center.addWidget(self._review_screen)
+        elif self._review_screen.race_id != race_id:
+            self._review_screen.race_id = race_id
+        self._review_screen.load_captures()
+        self._reviewing = True
+        self._recompute_state()
+        self._review_screen.setFocus()
+
+    def _close_review(self) -> None:
+        self._reviewing = False
+        self._recompute_state()
+
+    # ---------------------------------------------------------------- actions
+    def _on_race_selected(self, _index: int) -> None:
+        if self._last_state == AppState.RACE_OVER:
+            self._race_over = False
+            self._recompute_state()
+
+    def _next_race(self) -> None:
+        if self._last_state == AppState.READY:
+            self.ready.next_race()
+        elif self._last_state == AppState.RACE_OVER:
+            self.ready.next_race()
+            self._race_over = False
+            self._recompute_state()
+        else:
+            self._show_toast("Next race only in Ready / Race-over.")
+
+    def _calibrate(self) -> None:
+        dlg = CalibrationDialog(self.buffer, self.config.data_root, self.config, self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.show()
+
+    def _export(self) -> None:
+        if self.controller.race_id is None:
+            self._show_toast("No race to export yet.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", str(self.config.data_root / "export.csv"),
+            "CSV (*.csv)")
+        if path:
+            export_csv(self.controller.storage, self.controller.race_id, path)
+
+    def _quit(self) -> None:
+        self.close()
+
+    def _esc(self) -> None:
+        if self._reviewing:
+            self._close_review()
+        elif self._armed:
+            self._armed = False
+            self._recompute_state()
+        elif self._race_over:
+            self._race_over = False
+            self._recompute_state()
+        else:
+            self._quit()
+
+    def _finish_line_changed(self, x: float) -> None:
+        pass  # value is displayed in ReadyScreen; persistence not required
+
+    # -------------------------------------------------------------------- toast
+    def _show_toast(self, msg: str, timeout_ms: int = 6000) -> None:
+        self._toast_initialized = True
+        self.toast.show_message(msg, timeout_ms)
+        self.toast.reposition(self.ready.width(), self.ready.height())
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if self._toast_initialized:
+            self.toast.reposition(self.ready.width(), self.ready.height())
+
+    # ------------------------------------------------------------------ selector
     def _populate_race_selector(self) -> None:
-        """Load race names from the races Excel file; create a starter file if
-        none exists yet, then repopulate."""
         import os
         races_cfg = self.config.section("races")
         excel_path = os.path.expanduser(races_cfg["excel_path"])
@@ -221,163 +504,3 @@ class MainWindow(QMainWindow):
                 self._race_names = load_race_names(excel_path)
             except Exception:
                 self._race_names = []
-        self.race_selector.clear()
-        for n in self._race_names:
-            self.race_selector.addItem(n)
-        if self.race_selector.count():
-            self.race_selector.setCurrentIndex(0)
-
-    def _current_race_name(self) -> str:
-        name = self.race_selector.currentText().strip()
-        return name or time.strftime("Race-%Y%m%d-%H%M%S")
-
-    def _arm_start(self) -> None:
-        # Confirmation happens BEFORE arming (§5.3, §7.4); the next press on the
-        # start keycode is t0.
-        trig = self.config.section("trigger")
-        start_keys = keycode_names(trig["start_keycodes"])
-        device = trig["device_path"] or "keyboard"
-        self._armed = True
-        self._show_banner(
-            f"Armed. Press {start_keys} on the trigger device ({device}) to start.")
-        self.start_btn.setText(f"Armed — press {start_keys}")
-
-    def on_evdev_start(self, t_press: float) -> None:
-        if not self._armed:
-            return
-        self._armed = False
-        name = self._current_race_name()
-        self.controller.start_race(t_press, name=name)
-        if self.controller.running:
-            self._race_over = False
-            self._last_capture = None
-            self.list.clear_captures()
-            self.end_btn.setEnabled(True)
-            self.race_selector.setEnabled(False)
-        self._dismiss_banner()
-        self.start_btn.setText("Arm Start Race (Ctrl+S)")
-
-    def on_evdev_crossing(self, t_press: float, code: int) -> None:
-        self.controller.record_crossing(t_press)
-
-    def on_evdev_end(self, t_press: float) -> None:
-        self._end_race()
-
-    def on_race_ended(self, race_id: int) -> None:
-        n = self.controller.ended_capture_count
-        last = (f"last capture #{self._last_capture:03d}"
-                if self._last_capture else "no ends recorded")
-        self._race_over = True
-        self._race_over_detail = f"RACE OVER — {n} ends · {last}"
-        self.end_btn.setEnabled(False)
-        self.race_selector.setEnabled(True)
-        self.review_btn.setEnabled(True)
-        self._show_banner(
-            f"RACE OVER — {n} ends recorded. Archive stopped; trigger keyboard "
-            "released (you can use Ctrl+Q or Quit).")
-
-    def _end_race(self) -> None:
-        self.controller.end_race()
-
-    def _quit(self) -> None:
-        self.close()
-
-    def on_capture(self, cap) -> None:
-        primary = cap.primary_image if hasattr(cap, "primary_image") else None
-        self.list.add_capture(cap.sequence, cap.elapsed_s,
-                              str(self.config.data_root / primary) if primary else None,
-                              suspect=cap.debounce_suspect,
-                              image_flag=cap.image_flag)
-        # Instant, non-modal confirmation so the operator sees each press register
-        # (the list row updates a beat later once images are selected). A stale
-        # "last capture" lets the operator know which press ended the sequence.
-        self._last_capture = cap.sequence
-        self._flash_capture(cap)
-
-    def _open_review(self, sequence: int) -> None:
-        if self.controller.race_id is None:
-            return
-        race = self.controller.storage.captures_for_race(self.controller.race_id)
-        cap = next((c for c in race if c["sequence"] == sequence), None)
-        if cap is None:
-            return
-        frames = self.controller.storage.frames_for_capture(cap["id"])
-        fl = [(str(self.config.data_root / f["path"]), f["offset_ms"])
-              for f in frames]
-        panel = FrameReviewPanel(cap["id"], fl, self)
-        # Without the Window flag a parented QWidget is a child and just draws
-        # inside the main window; make it a real, raisable top-level window.
-        panel.setWindowFlag(Qt.Window, True)
-        panel.setWindowTitle(f"Capture {sequence}")
-        panel.resize(max(640, panel.sizeHint().width()),
-                     max(480, panel.sizeHint().height()))
-        panel.show()
-        panel.raise_()
-        panel.activateWindow()
-
-    def _bow_edited(self, sequence: int, value: str) -> None:
-        if self.controller.race_id is None:
-            return
-        race = self.controller.storage.captures_for_race(self.controller.race_id)
-        cap = next((c for c in race if c["sequence"] == sequence), None)
-        if cap:
-            self.controller.set_bow_number(cap["id"], value or None)
-        self.list.update_bow(sequence, value)
-
-    def _delete(self, sequence: int) -> None:
-        if self.controller.race_id is None:
-            return
-        race = self.controller.storage.captures_for_race(self.controller.race_id)
-        cap = next((c for c in race if c["sequence"] == sequence), None)
-        if cap:
-            self.controller.soft_delete(cap["id"])
-
-    def _calibrate(self) -> None:
-        # Non-modal so the full-screen counter can appear on top during capture
-        # (a modal exec() would block it — spec §5.5 constraint 2 is sequential).
-        dlg = CalibrationDialog(self.buffer, self.config.data_root, self.config, self)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dlg.show()
-
-    def _open_review_dialog(self) -> None:
-        if self.controller.race_id is None:
-            return
-        if self._review_dialog is not None:
-            self._review_dialog.show()
-            self._review_dialog.raise_()
-            self._review_dialog.activateWindow()
-            return
-        dlg = RaceReviewDialog(self.controller, self.controller.race_id,
-                               self.config.data_root, self)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dlg.bow_edited.connect(self._bow_edited)
-        dlg.delete_requested.connect(self._delete)
-        dlg.open_frames.connect(self._open_review)
-        dlg.destroyed.connect(lambda: setattr(self, "_review_dialog", None))
-        self._review_dialog = dlg
-        dlg.show()
-
-    def _export(self) -> None:
-        if self.controller.race_id is None:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export CSV", str(self.config.data_root / "export.csv"), "CSV (*.csv)")
-        if path:
-            export_csv(self.controller.storage, self.controller.race_id, path)
-
-    def _install_shortcuts(self) -> None:
-        from PySide6.QtGui import QKeySequence, QShortcut
-        QShortcut(QKeySequence("Ctrl+S"), self, activated=self._arm_start)
-        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.controller.undo_last)
-        QShortcut(QKeySequence("Ctrl+R"), self, activated=lambda: None)
-        QShortcut(QKeySequence("Ctrl+Q"), self, activated=self._quit)
-
-
-def _fmt_clock(secs: float) -> str:
-    ms = int(secs * 1000)
-    hours, rem = divmod(ms, 3600_000)
-    minutes, rem = divmod(rem, 60_000)
-    seconds, millis = divmod(rem, 1000)
-    if hours:
-        return f"{hours}:{minutes:02d}:{seconds:02d}.{millis}"
-    return f"{minutes:02d}:{seconds:02d}.{millis}"

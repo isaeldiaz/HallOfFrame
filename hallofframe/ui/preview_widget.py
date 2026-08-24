@@ -27,6 +27,29 @@ class PreviewWidget(QWidget):
         self._pm = None
         self._dragging = False
         self.setMinimumSize(320, 200)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.lag_s: float | None = None  # measured glass-to-screen lag (screen mode)
+
+    def nudge(self, delta: float) -> None:
+        """Move the finish line by a fraction (0..1). Arrow keys call this."""
+        self.set_finish_line(self.finish_line_x + delta)
+        self.finish_line_moved.emit(self.finish_line_x)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        # ←/→ nudge the finish line; Shift for fine steps (§5). 0.5% / 0.1%.
+        if event.key() == Qt.Key_Left:
+            step = 0.001 if event.modifiers() & Qt.ShiftModifier else 0.005
+            self.nudge(-step)
+            return
+        if event.key() == Qt.Key_Right:
+            step = 0.001 if event.modifiers() & Qt.ShiftModifier else 0.005
+            self.nudge(step)
+            return
+        super().keyPressEvent(event)
+
+    def set_lag(self, lag_s: float | None) -> None:
+        self.lag_s = lag_s
+        self.update()
 
     def set_finish_line(self, x: float) -> None:
         self.finish_line_x = max(0.0, min(1.0, x))
@@ -34,7 +57,7 @@ class PreviewWidget(QWidget):
 
     def refresh(self) -> None:
         """Pull the newest frame from the buffer (called by a QTimer)."""
-        frame = self.buffer.nearest(1e30)
+        frame = self.buffer.newest()  # O(1); nearest(1e30) walked all frames (§2.4)
         if frame is None:
             return
         if frame.jpeg == self._last_frame:

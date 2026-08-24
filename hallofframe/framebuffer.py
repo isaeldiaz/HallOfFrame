@@ -33,6 +33,17 @@ class FrameBuffer:
     def _snapshot(self) -> list[Frame]:
         return list(self._buf)
 
+    def newest(self) -> Optional[Frame]:
+        """Most recently appended frame. O(1) — for preview rendering only.
+
+        The capture path keeps every frame (it needs the full window); this is
+        for the live preview, which wants the latest frame under the lock with
+        none of the O(n) walk that ``nearest(1e30)`` does (§2.4)."""
+        with self._lock:
+            if not self._buf:
+                return None
+            return self._buf[-1]
+
     def nearest(self, target_t: float) -> Optional[Frame]:
         """Frame whose t_recv is closest to target_t."""
         with self._lock:

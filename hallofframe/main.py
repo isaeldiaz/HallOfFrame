@@ -23,10 +23,11 @@ class _TriggerBridge(QObject):
     GUI (which, with the trigger keyboard grabbed during a race, freezes all
     input). Emitting a signal from a worker thread makes Qt deliver the payload
     as a queued connection to the main thread's event loop (§6.4, §6.5)."""
-    crossing = Signal(float, int)   # (t_press, keycode)
+    crossing = Signal(float, int, bool)  # (t_press, keycode, suspect)
     start = Signal(float)           # (t_press)
-    end = Signal(float)             # (t_press)
+    end = Signal(float, int)        # (t_press, keycode)
     capture = Signal(object)        # (Capture)
+    image_ready = Signal(int, str)  # (sequence, primary_path_rel)
 
 
 def build_core(config):
@@ -86,11 +87,26 @@ def build_trigger(config, on_crossing, on_start, on_end=None, logger=None):
     handlers.update({int(c): on_start for c in trig["start_keycodes"]})
     if on_end is not None:
         handlers.update({int(c): on_end for c in trig["end_keycodes"]})
+        # Map KEY_ESC (1) and common laptop F12 non-Fn multimedia codes
+        # (ThinkPad KEY_FAVORITES, BOOKMARKS, CONFIG, PROG1, STAR, BRIGHTNESSUP)
+        # so Esc or unshifted laptop F12 keys can disarm/end while grabbed.
+        handlers.setdefault(1, on_end)      # KEY_ESC
+        handlers.setdefault(364, on_end)    # KEY_FAVORITES (ThinkPad F12 default)
+        handlers.setdefault(156, on_end)    # KEY_BOOKMARKS
+        handlers.setdefault(171, on_end)    # KEY_CONFIG
+        handlers.setdefault(148, on_end)    # KEY_PROG1
+        handlers.setdefault(464, on_end)    # KEY_STAR
+        handlers.setdefault(225, on_end)    # KEY_BRIGHTNESSUP
     try:
+        # Grab is NOT taken at construction: it is driven entirely by the
+        # on_state_changed hook in main() (§9/Opt A). Grabbing here would race
+        # the hook's first sync and could leave the keyboard grabbed outside a
+        # race (e.g. STREAM_DOWN), where Qt shortcuts like Ctrl+Q are then
+        # unreachable and the operator cannot quit.
         listener = TriggerListener(
             device, handlers,
             debounce_ms=float(config.section("timing")["debounce_ms"]),
-            grab=bool(trig["grab_device"]))
+            grab=False)
         listener.start()
         return listener, False
     except TriggerError as exc:
@@ -108,7 +124,6 @@ def main(argv=None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
 
-    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
     from .log import start_logging
@@ -125,6 +140,11 @@ def main(argv=None) -> int:
     win = MainWindow(config, core["controller"], core["buffer"])
     win.showFullScreen()
 
+    # Visual system (§7): one app-wide stylesheet + bundled fonts.
+    from .ui.styles import STYLESHEET, load_fonts
+    load_fonts()
+    app.setStyleSheet(STYLESHEET)
+
     # Bridge worker-thread events (evdev triggers AND the controller's capture
     # completion) back onto the Qt main thread (§6.4, §6.5). Every Qt-facing
     # callback must reach the GUI thread through these queued signals; calling
@@ -134,22 +154,24 @@ def main(argv=None) -> int:
     bridge.crossing.connect(win.on_evdev_crossing)
     bridge.end.connect(win.on_evdev_end)
     bridge.capture.connect(win.on_capture)
-    # The controller emits capture-added from its persistence writer thread; reroute
-    # it through the bridge instead of letting MainWindow._connect_controller point
-    # it straight at the Qt widgets. signal_race_ended is emitted from end_race(),
+    bridge.image_ready.connect(win.on_image_ready)
+    # The controller emits capture-added / image-ready from its persistence or
+    # deferred-timer threads; reroute them through the bridge instead of pointing
+    # them straight at Qt widgets. signal_race_ended is emitted from end_race(),
     # which always runs on the GUI thread (button or queued evdev end), so it can
     # call the window directly.
     core["controller"].signal_capture_added = lambda cap: bridge.capture.emit(cap)
+    core["controller"].signal_image_ready = lambda seq, p: bridge.image_ready.emit(seq, p)
     core["controller"].signal_race_ended = win.on_race_ended
 
     def _crossing(t_press, code, suspect=False):
-        bridge.crossing.emit(t_press, code)
+        bridge.crossing.emit(t_press, code, suspect)
 
     def _start(t_press, code, suspect=False):
         bridge.start.emit(t_press)
 
     def _end(t_press, code, suspect=False):
-        bridge.end.emit(t_press)
+        bridge.end.emit(t_press, int(code))
 
     listener, fallback = build_trigger(config, _crossing, _start, _end, logger)
     if fallback:
@@ -157,16 +179,20 @@ def main(argv=None) -> int:
         logger.warning("trigger", "qt_fallback")
 
     if listener is not None and config.section("trigger")["grab_device"]:
-        # Grab the trigger device only while a race is active (§6.4), so bow
-        # numbers can still be typed between races.
-        def _sync_grab():
+        # Option A: the trigger keyboard is grabbed from ARM through RACE_OVER,
+        # tied directly to state instead of a 250 ms polling timer (§9). Bow
+        # entry moved to REVIEW, so nothing needs the keyboard between arm and
+        # end. Recovery on a freeze is via the separate primary keyboard.
+        from .ui.state import AppState
+        def _sync_grab(state):
             try:
-                listener.set_grab(core["controller"].running)
+                listener.set_grab(state in (AppState.ARMED, AppState.RECORDING))
             except Exception:
                 pass
-        grab_timer = QTimer()
-        grab_timer.timeout.connect(_sync_grab)
-        grab_timer.start(250)
+        win.on_state_changed = _sync_grab
+        # The initial READY was applied before the hook was wired, so fire it
+        # once to release any grab taken at construction (§9/Opt A).
+        _sync_grab(win._last_state)
 
     # Bring up the USB tunnel before the reader connects (spec §6.1, §9.3).
     import threading

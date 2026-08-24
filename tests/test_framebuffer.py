@@ -13,6 +13,16 @@ def make_frames(t0=1000.0, fps=30, count=300):
 
 
 class TestFrameBuffer(unittest.TestCase):
+    def test_newest_returns_last_appended(self):
+        fb = FrameBuffer()
+        frames = make_frames()
+        for f in frames:
+            fb.append(f)
+        self.assertEqual(fb.newest().seq, frames[-1].seq)
+
+    def test_newest_empty(self):
+        self.assertIsNone(FrameBuffer().newest())
+
     def test_nearest_between(self):
         fb = FrameBuffer()
         for f in make_frames():

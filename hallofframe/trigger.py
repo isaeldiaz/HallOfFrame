@@ -35,42 +35,14 @@ class TriggerListener(threading.Thread):
         self.debounce_s = debounce_ms / 1000.0
         self.clock_monotonic = clock_monotonic
         self.grab_requested = grab
+        self._is_grabbed = False
         self._stop = threading.Event()
         self._device = None
         self._last_trigger_mono: float = 0.0
         self.debounce_suspect_count = 0
         self.permission_error = False
 
-    def stop(self) -> None:
-        self._stop.set()
-
-    def set_grab(self, grab: bool) -> None:
-        """Grab/ungrab the device (spec §6.4). Only meaningful when the trigger
-        device is the active keyboard: while grabbed, keystrokes cannot reach Qt,
-        so typing in the bow field is unavailable and trigger keys cannot double
-        through the GUI. Called around race start/stop."""
-        dev = self._device
-        if dev is None:
-            return
-        try:
-            if grab:
-                dev.grab()
-            else:
-                dev.ungrab()
-        except Exception:
-            pass
-
-    def _apply_clock_domain(self) -> None:
-        if not self.clock_monotonic:
-            return
-        import fcntl
-        import time
-        fcntl.ioctl(self._device.fd, EVIOCSCLOCKID,
-                    struct.pack("i", time.CLOCK_MONOTONIC))
-
-    def run(self) -> None:
         import evdev
-        import time
         try:
             self._device = evdev.InputDevice(self.device_path)
         except PermissionError:
@@ -85,11 +57,53 @@ class TriggerListener(threading.Thread):
         if self.grab_requested:
             try:
                 self._device.grab()
+                self._is_grabbed = True
             except Exception:
                 self._device = None
                 raise TriggerError(
                     f"could not grab {self.device_path}; a desktop app (or the "
                     "window manager) already holds it exclusive")
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._is_grabbed and self._device is not None:
+            try:
+                self._device.ungrab()
+                self._is_grabbed = False
+            except Exception:
+                pass
+
+    def set_grab(self, grab: bool) -> None:
+        """Grab/ungrab the device (spec §6.4). Only meaningful when the trigger
+        device is the active keyboard: while grabbed, keystrokes cannot reach Qt,
+        so typing in the bow field is unavailable and trigger keys cannot double
+        through the GUI. Called around race start/stop."""
+        self.grab_requested = grab
+        dev = self._device
+        if dev is None:
+            return
+        try:
+            if grab and not self._is_grabbed:
+                dev.grab()
+                self._is_grabbed = True
+            elif not grab and self._is_grabbed:
+                dev.ungrab()
+                self._is_grabbed = False
+        except Exception:
+            pass
+
+    def _apply_clock_domain(self) -> None:
+        if not self.clock_monotonic or self._device is None:
+            return
+        import fcntl
+        import time
+        fcntl.ioctl(self._device.fd, EVIOCSCLOCKID,
+                    struct.pack("i", time.CLOCK_MONOTONIC))
+
+    def run(self) -> None:
+        import evdev
+        if self._device is None:
+            return
 
         if not self._stop.is_set():
             try:
@@ -111,5 +125,12 @@ class TriggerListener(threading.Thread):
                         self.debounce_suspect_count += 1
                     self._last_trigger_mono = now
                     handler(now, event.code, suspect)
-            except evdev.UInputError:
-                raise TriggerError("trigger device closed")
+            except (evdev.UInputError, OSError):
+                pass
+            finally:
+                if self._is_grabbed and self._device is not None:
+                    try:
+                        self._device.ungrab()
+                        self._is_grabbed = False
+                    except Exception:
+                        pass

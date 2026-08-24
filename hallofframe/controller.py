@@ -66,6 +66,7 @@ class CaptureController:
 
         # Qt-signal-like hooks for the UI (a real Qt app swaps these).
         self.signal_capture_added = None  # callable(capture)
+        self.signal_image_ready = None    # callable(sequence, primary_path)
         self.signal_race_started = None   # callable(race_id)
         self.signal_race_ended = None     # callable(race_id)
         self.signal_warning = None        # callable(str)
@@ -340,6 +341,15 @@ class CaptureController:
 
         if chosen_primary_id is not None:
             self.storage.set_primary(capture_id, chosen_primary_id)
+            # Notify the UI so the last-capture panel / log thumbnails can show
+            # the photo now that the deferred selection landed (§3). Emitted from
+            # the deferred-timer thread, never the trigger path.
+            if self.signal_image_ready:
+                try:
+                    self.signal_image_ready(sequence, str(chosen_primary.relative_to(
+                        self.storage.data_root)))
+                except Exception:
+                    pass
 
     def set_bow_number(self, capture_id: int, value: str | None) -> None:
         self.storage.update_capture(capture_id, bow_number=value)
