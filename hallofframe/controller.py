@@ -56,6 +56,9 @@ class CaptureController:
         self.start_mode = timing["start_mode"]
         self.radio_delay_ms = float(timing["radio_delay_ms"])
         self.image_mode = timing["image_mode"]  # "auto" | "off" (timing-only)
+        # Per-race flag: True when this race records time only (config "off" or
+        # a dead stream at start). Set in start_race(); fixed for the race.
+        self.image_off = self.image_mode == "off"
 
         self._queue: queue.Queue = queue.Queue()
         self._writer_thread = threading.Thread(target=self._writer_loop,
@@ -112,11 +115,19 @@ class CaptureController:
         # refuse to start with a stale or mismatched Δ. Runs off the timing path's
         # per-crossing work, so a one-time decode here is acceptable.
         #
-        # Timing-only mode ("off") needs no camera, so skip calibration entirely:
-        # there are no images to select, hence no latency to compensate (§6.5).
-        if self.image_mode == "off":
+        # Two cases skip calibration entirely and race timing-only (§6.5):
+        #   1. Config image_mode = "off" (the operator never wants video).
+        #   2. The stream is DOWN at start (no frames in the buffer). Calibration
+        #      requires the live stream to measure latency against, so it cannot
+        #      be validated; the race auto-degrades to timing-only rather than
+        #      refusing to start. There is no photo to mis-time, so Δ = 0 is safe.
+        # A buffer with no frames means the stream is down (the ring only holds
+        # ~15 s, so an empty buffer == no live stream).
+        if self.image_mode == "off" or self.buffer.span() is None:
+            self.image_off = True
             self.delta = 0.0
         else:
+            self.image_off = False
             try:
                 self.delta = self._compute_delta()
             except CalibrationError as exc:
@@ -131,7 +142,7 @@ class CaptureController:
             start_mode=self.start_mode,
             radio_delay_ms=self.radio_delay_ms if self.start_mode == "radio" else 0.0,
             delta_used=self.delta, viewing_mode=timing_viewing(self.config),
-            fps_nominal=self.preview_fps)
+            fps_nominal=self.preview_fps, image_off=self.image_off)
         self.race_id = race_id
 
         # Race directory is keyed by the unique, never-reused race_id so two
@@ -153,6 +164,8 @@ class CaptureController:
         boot_id = storage_mod.current_boot_id()
         self.race_id = race_id
         self.delta = row["delta_used"]
+        self.image_off = bool(row["image_off"]) if "image_off" in row.keys() \
+            else self.image_mode == "off"
         self.start_mode = row["start_mode"]
         self.radio_delay_ms = row["radio_delay_ms"]
         self.running = True
@@ -261,8 +274,8 @@ class CaptureController:
 
         # Does the buffer have any frames yet? (§6.5 edge cases)
         span = self.buffer.span()
-        if self.image_mode == "off":
-            # Timing-only mode never attaches an image, regardless of the buffer.
+        if self.image_off:
+            # Timing-only race: never attach an image, regardless of the buffer.
             image_flag = "missing"
         elif span is None:
             # Stream down: record the time anyway, flag the missing photo (§6.5).
@@ -287,8 +300,8 @@ class CaptureController:
         # Deferred image selection: schedule after window_after + margin so the
         # after-window frames exist (spec §6.5). The timer removes itself from
         # the set when it fires so the set does not grow for every capture.
-        # Skipped entirely in timing-only ("off") mode — no images to attach.
-        if self.image_mode != "off":
+        # Skipped entirely in a timing-only race — no images to attach.
+        if not self.image_off:
             delay = self.window_after_s + self._margin_s
 
             def _fire() -> None:

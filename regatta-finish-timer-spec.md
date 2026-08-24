@@ -920,13 +920,23 @@ makes the system usable immediately and offline when the phone, cable or
 **A mid-race switch is unnecessary.** A feed that dies *during* a race is already
 handled by the empty-buffer edge case above: the time is recorded with
 `image_flag = "missing"` and no photo, so timing continues automatically. There
-is deliberately **no GUI toggle**. The `image_mode` setting is config-only and
-exists for a different, genuinely config-shaped reason: starting a race with no
-camera at all. In particular `image_mode = "off"` skips the §8 calibration gate
-so a **water-mode** race can *start* with the stream down (`screen` mode already
-can, since its `Δ = R` needs no calibration). The calibration gate cannot be
-evaluated mid-race — it is a pre-race check (§5.5, §8) — so the mode is fixed
-for the life of a race and must be decided in `config.toml` before arming.
+is deliberately **no GUI toggle**.
+
+**A dead stream auto-degrades to timing-only.** At race start, if the buffer has
+no frames (the ring only holds ~15 s, so an empty buffer == no live stream),
+calibration cannot be validated — it needs the live stream to measure latency
+against (§5.5). Rather than refusing to start, `start_race` degrades that race
+to timing-only: `Δ = 0`, no image selection, every capture `image_flag =
+"missing"`. This is automatic in **any** mode, so a race can start with the
+stream down even without touching the config. The degraded state is persisted
+per-race (`race.image_off`) so a mid-race restart stays timing-only and never
+silently attaches uncalibrated photos if the stream later recovers.
+
+`image_mode = "off"` is then only needed to force timing-only when the stream is
+*up* but the operator wants no photos at all (or no capture directories).
+Everything else about the gate stands: with a live stream in water mode,
+`start_race` refuses to start unless `calibration.json` matches it (§8);
+`RECALIBRATE` (stream up, stale Δ) still blocks arming.
 
 #### Resuming after a restart
 

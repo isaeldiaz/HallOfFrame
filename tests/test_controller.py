@@ -191,6 +191,32 @@ class TestCalibrationValidation(Base):
         self.assertIsNone(c.start_race(1000.0, name="Race-T"))
         c.stop()
 
+    def test_water_mode_starts_with_stream_down(self):
+        # A dead stream (empty buffer) auto-degrades to timing-only in ANY
+        # mode: no calibration required, no image attached (§6.5).
+        cfg = make_config(self.data_root, viewing="water", image_mode="auto")
+        c = CaptureController(cfg, self.storage, self.buffer)
+        try:
+            race_id = c.start_race(1000.0, name="Race-Down")
+            self.assertIsNotNone(race_id)
+            self.assertTrue(c.image_off)
+            self.assertEqual(c.delta, 0.0)
+            c.record_crossing(1020.0)
+            deadline = time.monotonic() + 3.0
+            rows = []
+            while time.monotonic() < deadline:
+                rows = self.storage.captures_for_race(race_id)
+                if rows:
+                    break
+                time.sleep(0.02)
+        finally:
+            c.stop()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["image_flag"], "missing")
+        # The degraded mode is persisted so a restart keeps it timing-only.
+        row = self.storage.get_race(race_id)
+        self.assertEqual(row["image_off"], 1)
+
     def test_water_mode_matching_calibration_starts(self):
         from PIL import Image
         import json

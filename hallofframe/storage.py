@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS race (
     created_at        TEXT NOT NULL,
     ended_at          TEXT,
     t_end_monotonic   REAL,
+    image_off         INTEGER NOT NULL DEFAULT 0,  -- timing-only race (§6.5)
     CHECK (start_mode   IN ('direct','radio','external')),
     CHECK (viewing_mode IN ('water','screen'))
 );
@@ -98,20 +99,23 @@ class Storage:
             self._conn.execute("ALTER TABLE race ADD COLUMN ended_at TEXT")
         if "t_end_monotonic" not in cols:
             self._conn.execute("ALTER TABLE race ADD COLUMN t_end_monotonic REAL")
+        if "image_off" not in cols:
+            self._conn.execute(
+                "ALTER TABLE race ADD COLUMN image_off INTEGER NOT NULL DEFAULT 0")
 
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
                     delta_used, viewing_mode, fps_nominal=None, boot_id=None,
-                    notes=None) -> int:
+                    notes=None, image_off=0) -> int:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO race (name, boot_id, t0_monotonic, t0_wall, "
                 "start_mode, radio_delay_ms, delta_used, viewing_mode, "
-                "fps_nominal, notes, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "fps_nominal, notes, created_at, image_off) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name, boot_id or current_boot_id(), t0_monotonic, t0_wall,
                  start_mode, radio_delay_ms, delta_used, viewing_mode,
-                 fps_nominal, notes, _utcnow()))
+                 fps_nominal, notes, _utcnow(), int(image_off)))
             self._conn.commit()
             return cur.lastrowid
 

@@ -70,8 +70,9 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 - **No modal dialogs during a race** (spec §7.5); errors surface as a banner.
 - **Calibration (`delta`)** is validated at race start against the live stream
   (§8): water mode requires `calibration.json` matching live resolution/fps;
-  screen mode needs none; `image_mode = "off"` (timing-only) skips calibration
-  entirely so races start with the stream down.
+  screen mode needs none. A dead stream (empty buffer) auto-degrades the race to
+  timing-only (skip calibration, `Δ = 0`), and `image_mode = "off"` forces that
+  when the stream is up.
 
 ## Data & config (the single source of truth)
 
@@ -79,10 +80,12 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   - `config.toml` — hand-edited. Trigger keys: `crossing_keycodes` (SPACE=57),
     `start_keycodes` (ENTER=28), `end_keycodes` (F12=88); `grab_device`;
   `[timing] image_mode` = `"auto"` (default) | `"off"` (timing-only — no camera,
-  no calibration, no image selection; races start with the stream down). This is
-  config-only and fixed for the life of a race — there is no mid-race GUI toggle,
-  because a feed that dies mid-race is auto-detected (empty buffer → the time is
-  recorded with `image_flag = "missing"`, no photo).
+  no calibration, no image selection; races start with the stream down). A dead
+  stream auto-degrades to timing-only in ANY mode (`start_race` skips calibration
+  when the buffer is empty, `Δ = 0`, captures `image_flag = "missing"`); the
+  degraded state is persisted as `race.image_off`. `image_mode = "off"` is only
+  needed to force timing-only when the stream is *up*. There is no mid-race GUI
+  toggle.
   - `regatta.db` — SQLite (`race`, `capture`, `capture_frame`).
   - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
   - `logs/regatta-app.jsonl` — structured log; useful for reproducing issues.
