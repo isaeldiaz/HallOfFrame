@@ -63,6 +63,9 @@ Data lives in `~/regatta-data/`:
 - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`
 - `logs/regatta-app.jsonl` — structured log
 - `calibration.json` — latency result from Calibrate
+- `races.xlsx` — the race-name roster (one name per row in column A). On the
+  Ready screen the dropdown gray out races already recorded in `regatta.db`
+  (still selectable to overwrite) and defaults to the next not-yet-recorded one.
 
 ## Tests
 

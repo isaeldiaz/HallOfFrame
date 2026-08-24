@@ -129,6 +129,12 @@ class Storage:
             return self._conn.execute(
                 "SELECT id, name, created_at FROM race ORDER BY id DESC").fetchall()
 
+    def race_names(self) -> set[str]:
+        """Distinct race names already stored, so the UI can gray them out."""
+        with self._lock:
+            rows = self._conn.execute("SELECT DISTINCT name FROM race").fetchall()
+            return {r["name"] for r in rows}
+
     def mark_race_ended(self, race_id: int, t_end_mono: float) -> None:
         with self._lock:
             self._conn.execute(

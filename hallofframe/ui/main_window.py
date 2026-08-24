@@ -111,12 +111,14 @@ class MainWindow(QMainWindow):
         self._cal_check_at = 0.0
         self._last_capture: int | None = None
         self._last_state = None
+        self._advance_race_default = False
         self._race_names: list[str] = []
         # Set by main.py to keep the trigger device grab tied to state (§9/Opt A).
         self.on_state_changed = None
 
         self._populate_race_selector()
-        self.ready.set_races(self._race_names)
+        self.ready.set_races(self._race_names,
+                             recorded=self.controller.storage.race_names())
         self.ready.race_selected.connect(self._on_race_selected)
         self.ready.set_finish_line(float(self.config.section("ui")["finish_line_x"]))
         self._set_trigger_label()
@@ -258,6 +260,12 @@ class MainWindow(QMainWindow):
         self.band.set_state(state, self._race_name(), fix)
 
     # ---------------------------------------------------------------- apply state
+    def _refresh_race_selector(self) -> None:
+        """Re-read recorded races so completed ones turn gray immediately,
+        without disturbing the operator's current selection (overwrite stays
+        available)."""
+        self.ready.refresh_recorded(self.controller.storage.race_names())
+
     def _apply_state(self, state: AppState) -> None:
         self._last_state = state
         pages = {
@@ -283,6 +291,12 @@ class MainWindow(QMainWindow):
         self._apply_keybar(state)
         self._sync_shortcuts()
         if state == AppState.READY:
+            if self._advance_race_default:
+                # A race just finished: jump the default to the next race in the
+                # roster that is not yet recorded (skipping the one we just ran).
+                self.ready.select_first_unrecorded()
+                self._advance_race_default = False
+            self._refresh_race_selector()
             self.ready.set_checks(self._pre_race_checks())
             self.ready.set_lag(self._measure_lag())
         if self.on_state_changed is not None:
@@ -429,6 +443,8 @@ class MainWindow(QMainWindow):
         self._reviewing = False
         caps = self.controller.storage.captures_for_race(race_id)
         self.race_over.set_summary(list(caps))
+        self._advance_race_default = True
+        self._refresh_race_selector()
         self._recompute_state()
 
     def on_capture(self, cap) -> None:

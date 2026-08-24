@@ -90,6 +90,16 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
   - `logs/regatta-app.jsonl` — structured log; useful for reproducing issues.
   - `calibration.json` — latency result produced by Calibrate.
+  - `races.xlsx` (`[races] excel_path`, default `~/regatta-data/races.xlsx`) —
+    the race-name roster, one name per row in column A. The Ready screen shows
+    these in a dropdown and passes the selected name to `start_race`.
+- **Race selector (Ready screen).** Names already stored in `regatta.db`
+  (`Storage.race_names()`, distinct names across all `race` rows) are **grayed
+  out** in the dropdown but stay selectable, so a completed race can be
+  overwritten. The default selection skips recorded names to the **next
+  not-yet-recorded race**; once every race is recorded it wraps to the first.
+  The gray set refreshes whenever the app returns to READY and when a race
+  ends, so a just-finished race turns gray immediately.
 - The app never writes `config.toml`.
 
 ## Run / test
