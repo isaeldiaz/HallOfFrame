@@ -111,6 +111,23 @@ class _RowBase(QWidget):
         self.update()
 
 
+class _BowEdit(QLineEdit):
+    """Bow-number field; Enter or Tab commits and requests advance."""
+
+    advance = Signal(int)  # sequence
+
+    def __init__(self, sequence, *a, **k):
+        super().__init__(*a, **k)
+        self._seq = sequence
+        self.returnPressed.connect(lambda: self.advance.emit(self._seq))
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            self.advance.emit(self._seq)
+            return
+        super().keyPressEvent(event)
+
+
 class _ReviewRow(_RowBase):
     """A crossing row with an inline bow-number QLineEdit."""
 
@@ -119,7 +136,7 @@ class _ReviewRow(_RowBase):
     def __init__(self, data: dict, thumb_w: int, thumb_h: int, parent=None):
         super().__init__(data, thumb_w, thumb_h, parent)
         self._base_border = "transparent"
-        self.bow_edit = QLineEdit(data.get("bow") or "")
+        self.bow_edit = _BowEdit(data["sequence"], data.get("bow") or "")
         self.bow_edit.setPlaceholderText("bow")
         self.bow_edit.setFixedWidth(84)
         self.bow_edit.setFixedHeight(46)
@@ -214,11 +231,18 @@ class ReviewList(CrossingLog):
     bow_edited = Signal(int, str)          # sequence, value
     delete_requested = Signal(int)         # sequence
     selection_changed = Signal(int)        # sequence
+    advance_requested = Signal(int)        # sequence (Enter/Tab in bow field)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._selected: int | None = None
         self._edits: dict[int, QLineEdit] = {}
+
+    def focus_bow(self, sequence: int) -> None:
+        edit = self._edits.get(sequence)
+        if edit is not None:
+            edit.setFocus()
+            edit.selectAll()
 
     def set_selected(self, sequence: int | None) -> None:
         self._selected = sequence
@@ -231,6 +255,7 @@ class ReviewList(CrossingLog):
     def add(self, data: dict) -> None:
         row = _ReviewRow(data, 92, 58, self)
         row.bow_edited.connect(self._on_bow_edited)
+        row.bow_edit.advance.connect(self.advance_requested)
         self._edits[data["sequence"]] = row.bow_edit
         self._rows[data["sequence"]] = row
         self._rebuild()

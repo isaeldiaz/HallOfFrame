@@ -380,6 +380,22 @@ class CaptureController:
     def set_bow_number(self, capture_id: int, value: str | None) -> None:
         self.storage.update_capture(capture_id, bow_number=value)
 
+    def set_primary(self, capture_id: int, frame_id: int) -> str | None:
+        """Promote *frame_id* to the capture's primary photo (operator review).
+
+        Returns the new primary_image path relative to ``data_root`` (or None).
+        Emits ``signal_image_ready`` so list thumbnails refresh.
+        """
+        self.storage.set_primary(capture_id, frame_id)
+        cap = self.storage.capture(capture_id)
+        path = cap["primary_image"] if cap else None
+        if cap and path and self.signal_image_ready:
+            try:
+                self.signal_image_ready(cap["sequence"], path)
+            except Exception:
+                pass
+        return path
+
     def soft_delete(self, capture_id: int) -> None:
         self.storage.update_capture(capture_id, deleted=1)
 

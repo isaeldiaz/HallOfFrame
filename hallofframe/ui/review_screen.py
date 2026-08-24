@@ -3,8 +3,10 @@
 Full-screen, not a dialog. Selected crossing's photo large on the left with a
 frame scrubber underneath (discrete ticks labelled by offset ms); the crossing
 list with an inline bow field per row on the right. ``↑/↓`` select a crossing,
-``Shift+←/→`` step frames, ``Del`` soft-deletes, ``Tab`` moves between bow
-fields, ``Esc`` returns to READY.
+``Shift+←/→`` step frames, ``Tab`` saves the selected frame as the crossing's
+primary photo and focuses its bow field so the bow can be typed in the same
+view, then ``Enter``/``Tab`` in the field commits the bow and moves to the next
+crossing. ``Del`` soft-deletes, ``Esc`` returns to READY.
 """
 from __future__ import annotations
 
@@ -169,6 +171,7 @@ class ReviewScreen(QWidget):
         self.list.bow_edited.connect(self._bow_edited)
         self.list.delete_requested.connect(self._delete)
         self.list.selection_changed.connect(self._select)
+        self.list.advance_requested.connect(self._advance)
         rlay = QVBoxLayout(right)
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
@@ -293,6 +296,15 @@ class ReviewScreen(QWidget):
             if f:
                 self._show_frame(f["path"], f["offset_ms"])
             return
+        if key == Qt.Key_Tab:
+            # Save the selected frame as primary, then drop into the current
+            # crossing's bow field so the bow can be typed before advancing.
+            self._save_and_focus_bow()
+            return
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            # Save the selected frame and move to the next crossing's bow.
+            self._save_and_advance()
+            return
         if key == Qt.Key_Delete:
             if self._selected_seq is not None:
                 self._delete(self._selected_seq)
@@ -306,3 +318,37 @@ class ReviewScreen(QWidget):
                     if c["sequence"] == self._selected_seq), 0)
         idx = (idx + delta) % len(self._captures)
         self._select(self._captures[idx]["sequence"])
+
+    def _advance(self, sequence: int) -> None:
+        """Save the selected frame, then move focus to the next crossing's bow."""
+        self._save_and_advance()
+
+    def _save_and_focus_bow(self) -> None:
+        """Promote the selected frame, then focus the current crossing's bow."""
+        self._commit_selected_frame()
+        if self._selected_seq is not None:
+            self.list.focus_bow(self._selected_seq)
+
+    def _save_and_advance(self) -> None:
+        """Promote the selected frame, then advance to the next crossing."""
+        self._commit_selected_frame()
+        self._move_selection(1)
+        if self._selected_seq is not None:
+            self.list.focus_bow(self._selected_seq)
+
+    def _commit_selected_frame(self) -> bool:
+        """Promote the scrubber's selected frame to the crossing's primary."""
+        cap = getattr(self, "_current_capture", None)
+        if cap is None:
+            return False
+        f = self.scrubber.selected_frame()
+        if f is None:
+            return False
+        path = self.controller.set_primary(cap["id"], f["id"])
+        if not path:
+            return False
+        for c in self._captures:
+            if c["id"] == cap["id"]:
+                c["primary_image"] = path
+        self.list.update_thumb(cap["sequence"], str(self.data_root / path))
+        return True
