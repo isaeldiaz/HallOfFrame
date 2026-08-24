@@ -173,6 +173,14 @@ QComboBox QAbstractItemView {{
     color: {TEXT_PRIMARY};
 }}
 
+QScrollArea {{
+    background: {PANEL};
+    border: none;
+}}
+QScrollArea > QWidget > QWidget {{
+    background: {PANEL};
+}}
+
 QScrollBar:vertical {{
     background: {BG};
     width: 12px;
