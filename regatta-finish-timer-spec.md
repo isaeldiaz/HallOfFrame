@@ -109,6 +109,14 @@ holds. See §6.5.
 | N4 | The system must survive a mid-race application crash without losing already-recorded results. |
 | N5 | Startup from cold (laptop open, phone in hand) to ready-to-time: under 5 minutes. |
 
+> **Results roll-up (post-N3, see §6.8/F6).** A local `results.xlsx` workbook
+> (`[results] xlsx_path`, default `~/regatta-data/results.xlsx`) accumulates one
+> block per race via a manual, one-shot "Save race and copy" action in
+> REVIEW/RACE_OVER. It is plain append-only output on the same machine — the app
+> still performs **no networking**, so N3 is preserved: upload to Google Drive
+> is done out-of-process by an existing desktop sync client that owns the OAuth
+> token, retry, and offline queueing.
+
 ### 2.3 Operating environment
 
 - **Computer:** Lenovo ThinkPad T460s (`borodin`). Intel Core i7-6600U — **two

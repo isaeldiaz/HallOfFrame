@@ -8,9 +8,11 @@ ii  libusbmuxd-tools                        2.1.1-1                             
 ii  usbmuxd                                 1.1.1-7                                    amd64        USB multiplexor daemon for iPhone and iPod Touch devices
 certifi==2026.7.22
 charset-normalizer==3.5.1
+et-xmlfile==2.0.0
 evdev==1.9.3
 idna==3.19
 iniconfig==2.3.0
+openpyxl==3.1.5
 packaging==26.3
 pillow==12.3.0
 pluggy==1.6.0

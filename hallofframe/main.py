@@ -28,6 +28,7 @@ class _TriggerBridge(QObject):
     end = Signal(float, int)        # (t_press, keycode)
     capture = Signal(object)        # (Capture)
     image_ready = Signal(int, str)  # (sequence, primary_path_rel)
+    results_done = Signal(int, str)  # (race_id, outcome "saved"|"error")
 
 
 def build_core(config):
@@ -155,6 +156,8 @@ def main(argv=None) -> int:
     bridge.end.connect(win.on_evdev_end)
     bridge.capture.connect(win.on_capture)
     bridge.image_ready.connect(win.on_image_ready)
+    bridge.results_done.connect(win.on_results_done)
+    win._results_bridge = bridge
     # The controller emits capture-added / image-ready from its persistence or
     # deferred-timer threads; reroute them through the bridge instead of pointing
     # them straight at Qt widgets. signal_race_ended is emitted from end_race(),

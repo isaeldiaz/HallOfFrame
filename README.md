@@ -56,6 +56,10 @@ Hand-edit `~/regatta-data/config.toml` (the app never writes it):
 - `start_keycodes` (default `ENTER`=28)
 - `end_keycodes` (default `F12`=88)
 - `grab_device` — the evdev device to grab.
+- `[results] xlsx_path` — where the append-only results workbook lives
+  (default `~/regatta-data/results.xlsx`). Point it at a folder a desktop sync
+  client (Insync, GNOME Online Accounts, an rclone mount) mirrors to Google
+  Drive. The app itself does no networking — the sync client owns upload.
 
 Data lives in `~/regatta-data/`:
 
@@ -66,6 +70,17 @@ Data lives in `~/regatta-data/`:
 - `races.xlsx` — the race-name roster (one name per row in column A). On the
   Ready screen the dropdown gray out races already recorded in `regatta.db`
   (still selectable to overwrite) and defaults to the next not-yet-recorded one.
+- `results.xlsx` — append-only results workbook, one race block per save
+  (title / header / data rows, blank row between blocks). A save is **manual
+  and one-shot per race**: in REVIEW or Race-over, `Ctrl+E` copies the race to
+  the clipboard *and* appends its block to this workbook, then the button
+  reads **"Copy only"** so the same race can't be appended twice. Saving a race
+  whose name already has a block adds a `(re-recorded — an earlier entry
+  exists)` note to the new block's title; old blocks are never edited. Because
+  it is generated, append-only output, keep hand annotations in a copy. Two
+  accepted limitations: not restart-proof (a save after an app restart appends
+  a second block) and not always-current (edits made after a save don't appear
+  until the next save).
 
 ## Tests
 
@@ -97,7 +112,8 @@ hallofframe/
   framebuffer.py   Timestamped ring buffer.
   storage.py       SQLite persistence (WAL, foreign_keys ON).
   archive.py       Per-race footage writer with disk-space handling.
-  export.py        CSV export.
+  export.py        CSV export + Excel-clipboard copy.
+  results.py       Append race blocks to the results.xlsx workbook.
   config.py        config.toml load + defaults.
   log.py           Structured JSONL logging.
   calibration.py   Latency calibration helpers.

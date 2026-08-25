@@ -93,6 +93,12 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   - `races.xlsx` (`[races] excel_path`, default `~/regatta-data/races.xlsx`) —
     the race-name roster, one name per row in column A. The Ready screen shows
     these in a dropdown and passes the selected name to `start_race`.
+  - `results.xlsx` (`[results] xlsx_path`, default `~/regatta-data/results.xlsx`)
+    — append-only results workbook produced by the manual "Save race and copy"
+    action (REVIEW/RACE_OVER, `Ctrl+E`). One race block per save, written on a
+    background thread via `results.append_race` (atomic temp-file + `os.replace`).
+    The app performs **no networking** — this file is uploaded to Drive by an
+    external desktop sync client, keeping spec N3 intact.
 - **Race selector (Ready screen).** Names already stored in `regatta.db`
   (`Storage.race_names()`, distinct names across all `race` rows) are **grayed
   out** in the dropdown but stay selectable, so a completed race can be

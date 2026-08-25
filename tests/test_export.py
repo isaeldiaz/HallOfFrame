@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from hallofframe.config import Config
-from hallofframe.export import export_csv, format_elapsed, utc_iso
+from hallofframe.export import clipboard_data, export_csv, format_elapsed, utc_iso
 from hallofframe.storage import Storage
 
 
@@ -61,6 +61,20 @@ class TestExport(unittest.TestCase):
 
     def test_utc_iso(self):
         self.assertRegex(utc_iso(0.0), r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+
+    def test_clipboard_data_title_header_rows(self):
+        self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 1.0, 0.0,
+                                    bow_number="07", image_flag="approximate")
+        tsv, markup = clipboard_data(self.storage, self.race_id)
+        lines = tsv.split("\r\n")
+        self.assertTrue(lines[0].rstrip("\t") == "Race-1")
+        self.assertEqual(lines[1], "\t".join(["sequence", "bow_number",
+                                              "elapsed_seconds", "elapsed_formatted",
+                                              "wall_clock_utc", "image_file",
+                                              "image_flag", "notes"]))
+        self.assertTrue(lines[2].startswith("1\t07\t"))
+        self.assertIn("Race-1", markup)
+        self.assertIn('colspan="8"', markup)
 
 
 if __name__ == "__main__":

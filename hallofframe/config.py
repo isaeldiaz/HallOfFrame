@@ -60,6 +60,11 @@ DEFAULTS: dict[str, Any] = {
     "races": {
         "excel_path": "~/regatta-data/races.xlsx",
     },
+    "results": {
+        # Append-only results workbook. Point this at a Drive-synced folder; the
+        # app itself does no networking (spec N3) — the sync client owns upload.
+        "xlsx_path": "~/regatta-data/results.xlsx",
+    },
     "archive": {
         "enabled": True,
         "every_nth_frame": 1,

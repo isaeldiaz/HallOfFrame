@@ -34,7 +34,7 @@ _COLUMNS = ["sequence", "bow_number", "elapsed_seconds", "elapsed_formatted",
             "wall_clock_utc", "image_file", "image_flag", "notes"]
 
 
-def _data_rows(storage: Storage, race_id: int):
+def data_rows(storage: Storage, race_id: int):
     """Yield the exported table as a header row followed by data rows."""
     yield list(_COLUMNS)
     captures = storage.captures_for_race(race_id, include_deleted=False)
@@ -51,11 +51,14 @@ def _data_rows(storage: Storage, race_id: int):
         ]
 
 
+_data_rows = data_rows  # backward-compatible alias
+
+
 def export_csv(storage: Storage, race_id: int, out_path: str | Path) -> Path:
     out_path = Path(out_path)
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        for row in _data_rows(storage, race_id):
+        for row in data_rows(storage, race_id):
             writer.writerow(row)
     return out_path
 
@@ -69,7 +72,7 @@ def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
     """
     race = storage.get_race(race_id)
     title = (race["name"] if race and race["name"] else "") or ""
-    rows = [[title] + [""] * (len(_COLUMNS) - 1)] + list(_data_rows(storage, race_id))
+    rows = [[title] + [""] * (len(_COLUMNS) - 1)] + list(data_rows(storage, race_id))
     tsv = "\r\n".join("\t".join(str(cell) for cell in row) for row in rows) + "\r\n"
     title_cell = f'<th colspan="{len(_COLUMNS)}" style="font-weight:bold">{html.escape(title)}</th>'
     head = "".join(f"<th>{html.escape(str(cell))}</th>" for cell in rows[1])

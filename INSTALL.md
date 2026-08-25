@@ -133,7 +133,7 @@ python3 -m venv ~/regatta/venv
 source ~/regatta/venv/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install PySide6-Essentials requests evdev pillow
+python -m pip install PySide6-Essentials requests evdev pillow openpyxl
 ```
 
 Notes on each choice:
@@ -164,6 +164,11 @@ Notes on each choice:
   so this is a download, not a build. (The system having Pillow 12.1.1 on
   Python 3.14 is *not* evidence for that — Ubuntu's is a distro-built `.deb`
   compiled against the system interpreter, which says nothing about PyPI.)
+- **`openpyxl` is load-bearing.** `races.py` already reads the race roster from
+  an `.xlsx`; now `results.py` appends finished-race results to `results.xlsx`.
+  It ships pure-Python wheels (pull-pull `et-xmlfile`), so it installs offline
+  and compiles nothing. The runtime import is still guarded — a missing library
+  degrades the results-save to a logged toast rather than a traceback.
 - **No TOML writer is needed.** Spec v1.2 §8 settles that the application never
   writes `config.toml`; everything machine-produced goes to `calibration.json`.
   Stdlib `tomllib` suffices, and the `tomli-w` dependency listed in v1.1 is
@@ -178,6 +183,7 @@ python -c "import PySide6; print('PySide6', PySide6.__version__)"
 python -c "from importlib.metadata import version; print('evdev', version('evdev'))"
 python -c "import evdev.ecodes as e; print('KEY_F13 =', e.KEY_F13, ' KEY_F14 =', e.KEY_F14)"
 python -c "import requests, PIL; print('requests/pillow ok')"
+python -c "import openpyxl; print('openpyxl', openpyxl.__version__)"
 ```
 
 Note `importlib.metadata.version('evdev')` — **the module has no
@@ -511,7 +517,7 @@ everything while online:
 # Python side — note `pip wheel`, not `pip download`: it *builds* evdev into a
 # real wheel, so the restore needs no compiler.
 source ~/regatta/venv/bin/activate
-pip wheel -w ~/regatta/wheelhouse PySide6-Essentials requests evdev pillow
+pip wheel -w ~/regatta/wheelhouse PySide6-Essentials requests evdev pillow openpyxl
 
 # Debian side. --reinstall is REQUIRED: §2 already installed these, and a plain
 # --download-only resolves to "0 newly installed" and downloads nothing.
@@ -539,7 +545,7 @@ Restore, with no network:
 sudo dpkg -i ~/regatta/debs/*.deb; sudo apt-get -f install
 python3 -m venv ~/regatta/venv && source ~/regatta/venv/bin/activate
 pip install --no-index --find-links ~/regatta/wheelhouse \
-    PySide6-Essentials requests evdev pillow
+    PySide6-Essentials requests evdev pillow openpyxl
 ```
 
 The wheelhouse is valid only for the same Python minor version and architecture

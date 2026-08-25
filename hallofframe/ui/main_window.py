@@ -13,7 +13,9 @@ during a race (§7.5).
 """
 from __future__ import annotations
 
+import os
 import shutil
+import threading
 import time
 
 from PySide6.QtCore import QTimer, Qt
@@ -26,6 +28,7 @@ from ..controller import CaptureController, calibration_status
 from ..export import clipboard_data
 from ..framebuffer import FrameBuffer
 from ..races import load_race_names, write_example
+from ..results import append_race
 from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
@@ -132,6 +135,10 @@ class MainWindow(QMainWindow):
         self._last_state = None
         self._advance_race_default = False
         self._race_names: list[str] = []
+        self._saved_race_ids: set[int] = set()
+        # Set by main.py: the worker→UI bridge used to marshal the results-save
+        # outcome back onto the GUI thread (§6.4). None when running headless.
+        self._results_bridge = None
         # Set by main.py to keep the trigger device grab tied to state (§9/Opt A).
         self.on_state_changed = None
 
@@ -177,7 +184,8 @@ class MainWindow(QMainWindow):
         sc("Esc", self._esc)
         sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
         letters = [sc("C", self._calibrate), sc("E", self._export),
-                   sc("R", self._open_review), sc("N", self._next_race)]
+                   sc("R", self._open_review), sc("N", self._next_race),
+                   sc("Ctrl+E", self._save_race_and_copy)]
         race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
                 sc("Enter", lambda: self.on_evdev_start(time.monotonic())),
                 sc("Space",
@@ -342,10 +350,12 @@ class MainWindow(QMainWindow):
             kb.add("Tab", "Next bow field")
             kb.add("Del", "Soft-delete")
             kb.add("E", "Copy as Excel", callback=self._export)
+            kb.add("Ctrl+E", self._results_button_label(), callback=self._save_race_and_copy)
             kb.add("Esc", "Back to Ready", callback=self._close_review)
         elif state == AppState.RACE_OVER:
             kb.add("R", "Review crossings", True, callback=self._open_review)
             kb.add("E", "Copy as Excel", callback=self._export)
+            kb.add("Ctrl+E", self._results_button_label(), callback=self._save_race_and_copy)
             kb.add("N", "Next race", callback=self._next_race)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
         elif state == AppState.RECALIBRATE:
@@ -529,6 +539,61 @@ class MainWindow(QMainWindow):
         cb = QApplication.clipboard()
         cb.setMimeData(_ExcelMimeData(tsv, markup))
         self._show_toast("Copied to clipboard — paste into Excel.")
+
+    # ------------------------------------------------------------ results save
+    def _results_target_race_id(self) -> int | None:
+        """The ended race whose data is on screen (REVIEW holds its own id)."""
+        if self._reviewing and self._review_screen is not None:
+            return self._review_screen.race_id
+        return self.controller.race_id
+
+    def _results_button_label(self) -> str:
+        rid = self._results_target_race_id()
+        if rid is not None and rid in self._saved_race_ids:
+            return "Copy only"
+        return "Save race and copy"
+
+    def _save_race_and_copy(self) -> None:
+        rid = self._results_target_race_id()
+        if rid is None:
+            self._show_toast("No race to save.")
+            return
+        race = self.controller.storage.get_race(rid)
+        if race is None or race["ended_at"] is None or self.controller.running:
+            self._show_toast("Save is only available after a race ends.")
+            return
+        # Clipboard copy is synchronous and never fails; the workbook write is
+        # disk/network I/O on a possibly-slow mount, so run it on a short-lived
+        # thread and marshal the outcome back via the bridge signal (§6.4).
+        tsv, markup = clipboard_data(self.controller.storage, rid)
+        QApplication.clipboard().setMimeData(_ExcelMimeData(tsv, markup))
+        if rid in self._saved_race_ids:
+            self._show_toast("Copied to clipboard — already saved.")
+            self._apply_keybar(self._last_state)
+            return
+        out = os.path.expanduser(self.config.section("results")["xlsx_path"])
+
+        def _work():
+            try:
+                result = append_race(self.controller.storage, rid, out)
+            except Exception:
+                outcome = "error"
+            else:
+                outcome = "saved" if result is not None else "error"
+            bridge = self._results_bridge
+            if bridge is not None:
+                bridge.results_done.emit(rid, outcome)
+
+        threading.Thread(target=_work, daemon=True, name="results-save").start()
+
+    def on_results_done(self, race_id: int, outcome: str) -> None:
+        """GUI-thread handler for the results-save worker (spec §6.4)."""
+        if outcome == "saved":
+            self._saved_race_ids.add(race_id)
+            self._show_toast("Saved to results.xlsx and copied to clipboard.")
+        else:
+            self._show_toast("Could not save to results.xlsx — see log.")
+        self._apply_keybar(self._last_state)
 
     def _quit(self) -> None:
         self.close()
