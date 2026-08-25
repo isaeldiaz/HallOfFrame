@@ -1,0 +1,74 @@
+# Regatta Finish-Line Timer — example configuration.
+#
+# Copy this file to your data root (default `~/regatta-data/config.toml`) and
+# edit it. The application NEVER writes config.toml: everything machine-produced
+# (the latency calibration result) lives in calibration.json, and delta is
+# derived at race start. See spec §8 and INSTALL.md §6.
+#
+#   mkdir -p ~/regatta-data
+#   cp config.example.toml ~/regatta-data/config.toml
+#   $EDITOR ~/regatta-data/config.toml
+#
+# The values below are the application's built-in defaults, so a straight copy
+# runs unchanged; change only what you need.
+
+[paths]
+data_root = "~/regatta-data"   # everything (§6.7) is relative to this
+
+[transport]
+local_port = 8081
+device_port = 8081
+udid = ""                    # empty = first device found
+iproxy_path = "iproxy"
+max_restarts_idle = 3        # outside a race
+max_restarts_racing = 0      # 0 = unlimited with backoff (§6.5)
+
+[stream]
+# Path and ports are app- and version-dependent (spec §8, §9.2). The default
+# /video was verified on IP Camera Lite (2026-08-22); confirm in the iOS app.
+url = "http://127.0.0.1:8081/video"
+username = "admin"
+password = "admin"
+buffer_seconds = 10.0
+assumed_fps = 30             # MUST match the phone's actual fps (§6.3)
+require_content_length = true
+
+[timing]
+viewing_mode = "water"       # "water" | "screen" — selects the delta formula (§5.4)
+reaction_offset_ms = 0.0     # operator-tuned component
+debounce_ms = 20             # suspect presses are RECORDED and flagged (§6.4)
+start_mode = "direct"        # "direct" | "radio" | "external" (§5.3.1)
+radio_delay_ms = 0.0         # measured; only meaningful when start_mode="radio"
+image_mode = "auto"          # "auto" | "off" — off = timing-only, no camera (§6.5)
+# Delta itself is NOT stored here. It is derived at race start from
+# calibration.json + reaction_offset_ms. See §5.4 and §6.7.
+
+[capture]
+window_before_ms = 500       # milliseconds, not frames — fps-independent (§6.5)
+window_after_ms = 500
+
+[trigger]
+# device_path empty = Qt fallback; otherwise the evdev device to grab, e.g.
+# /dev/input/event3 (the internal keyboard). grab_device = true is required if
+# using the internal keyboard as the trigger (§6.4). Keycodes are the evdev
+# numeric codes: SPACE=57, ENTER=28, F12=88.
+device_path = "/dev/input/event3"
+crossing_keycodes = [57]     # KEY_SPACE — operator choice (§6.4)
+start_keycodes = [28]        # KEY_ENTER
+end_keycodes = [88]          # KEY_F12 — finish the race (§6.4)
+grab_device = true
+
+[races]
+csv_path = "~/regatta-data/races.csv"   # see races.example.csv
+
+[archive]
+enabled = true
+every_nth_frame = 1
+min_free_gb = 60             # 20 GB buys only 44-75 minutes (§6.6)
+degrade_at_gb = 10           # switch to every_nth_frame = 5
+stop_at_gb = 3               # stop archiving; captures continue
+ballast_gb = 3               # fallocate reserve so the OS cannot be starved
+
+[ui]
+finish_line_x = 0.5          # normalised 0..1 position of the overlay
+preview_fps = 10

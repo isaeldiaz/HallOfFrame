@@ -353,6 +353,25 @@ system again.
 
 Run this before the first heat, every time. Spec §9.4.
 
+### 7.0 First-time config (one-time)
+
+The application never writes `config.toml` or `races.csv` — copy the templates in
+the repo and edit them:
+
+```bash
+mkdir -p ~/regatta-data
+cp config.example.toml ~/regatta-data/config.toml   # every section, defaults filled in
+cp races.example.csv ~/regatta-data/races.csv        # roster → Ready-screen dropdown
+$EDITOR ~/regatta-data/config.toml
+```
+
+`config.example.toml` carries the built-in defaults, so a straight copy runs as-is;
+change only what you need (stream URL/credentials, trigger device, keycodes,
+viewing mode). `races.example.csv` is the roster format the dropdown loads — one
+race per row, columns `race_no,heat_no,name`. The app exits with code 2 if
+`config.toml` is missing, so this step must be done before first launch.
+
+
 ```bash
 #!/usr/bin/env bash
 # race-day-prep.sh — run from a desktop terminal, not over SSH.

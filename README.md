@@ -50,12 +50,26 @@ Race lifecycle (the keyboard is grabbed during a race):
 
 ## Configuration
 
-Hand-edit `~/regatta-data/config.toml` (the app never writes it):
+The app never writes its config — copy the templates and hand-edit:
 
-- `crossing_keycodes` (default `SPACE`=57)
-- `start_keycodes` (default `ENTER`=28)
-- `end_keycodes` (default `F12`=88)
-- `grab_device` — the evdev device to grab.
+```bash
+mkdir -p ~/regatta-data
+cp config.example.toml ~/regatta-data/config.toml   # full example, every section
+cp races.example.csv ~/regatta-data/races.csv        # the race roster for the dropdown
+$EDITOR ~/regatta-data/config.toml
+```
+
+The values in `config.example.toml` are the application's built-in defaults, so a
+straight copy runs unchanged. Highlights:
+
+- `crossing_keycodes` / `start_keycodes` / `end_keycodes` — evdev keycodes
+  (`SPACE`=57, `ENTER`=28, `F12`=88) that record crossings / start / end a race.
+- `grab_device` — the evdev device to grab for timing.
+- `[timing] viewing_mode` — `"water"` or `"screen"` (selects the latency formula).
+- `[races] csv_path` — the roster file shown in the Ready-screen dropdown.
+
+`races.example.csv` is the roster format: one race per row, three columns
+`race_no,heat_no,name` (e.g. `101,1,Men under 18, single, final`).
 
 Data lives in `~/regatta-data/`:
 
@@ -82,6 +96,8 @@ Data lives in `~/regatta-data/`:
 | [INSTALL.md](INSTALL.md) | Environment setup, `systemd-inhibit`, launch. |
 | [TESTING.md](TESTING.md) | Per-stage test procedures. |
 | [system-environment.md](system-environment.md) | Hardware/OS audit. |
+| [config.example.toml](config.example.toml) | Template — copy to `~/regatta-data/config.toml`. |
+| [races.example.csv](races.example.csv) | Template — race roster for the dropdown. |
 | [AGENTS.md](AGENTS.md) | Onboarding notes for AI assistants. |
 | `reports/` | Test/verification reports. |
 
