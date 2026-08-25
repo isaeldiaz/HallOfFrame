@@ -77,6 +77,52 @@ def export_csv(storage: Storage, race_id: int, out_path: str | Path) -> Path:
     return out_path
 
 
+_ALL_COLUMNS = ["race_id", "race_no", "heat_no", "name", "gun_start",
+                "sequence", "bow_number", "elapsed_seconds",
+                "elapsed_formatted", "wall_clock_utc", "captured_frame_link",
+                "image_flag", "notes"]
+
+
+def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
+    """Dump the entire database to a flat CSV: one row per crossing, grouped by
+    race (oldest first) and fastest-to-slowest within a race.
+
+    Every race is listed — a race with no crossings still appears once, with
+    empty capture columns. ``race_id`` disambiguates races that share the same
+    race_no/heat_no/name (overwrites). Soft-deleted crossings are excluded.
+    """
+    out_path = Path(out_path)
+    with open(out_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(_ALL_COLUMNS)
+        for race in storage.all_races():
+            t0_wall = race["t0_wall"] if race["t0_wall"] is not None else None
+            base = [
+                race["id"],
+                race["race_no"] or "",
+                race["heat_no"] or "",
+                race["name"] or "",
+                local_hms(t0_wall) if t0_wall is not None else "",
+            ]
+            captures = storage.captures_for_race(race["id"], include_deleted=False)
+            captures = sorted(captures, key=lambda c: c["elapsed_s"])
+            if not captures:
+                writer.writerow(base + [""] * (len(_ALL_COLUMNS) - len(base)))
+                continue
+            for c in captures:
+                writer.writerow(base + [
+                    c["sequence"],
+                    c["bow_number"] or "",
+                    f"{c['elapsed_s']:.6f}",
+                    format_elapsed(c["elapsed_s"]),
+                    utc_iso(c["t_press_wall"]),
+                    c["primary_image"] or "",
+                    c["image_flag"] or "",
+                    c["notes"] or "",
+                ])
+    return out_path
+
+
 def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
     """Return (tab_separated, html_table) for pasting into Excel with formatting.
 

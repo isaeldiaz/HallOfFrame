@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from hallofframe.config import Config
-from hallofframe.export import (clipboard_data, export_csv, format_elapsed,
-                                utc_iso)
+from hallofframe.export import (clipboard_data, export_all_csv, export_csv,
+                                format_elapsed, utc_iso)
 from hallofframe.storage import Storage
 
 
@@ -68,6 +68,41 @@ class TestExport(unittest.TestCase):
 
     def test_utc_iso(self):
         self.assertRegex(utc_iso(0.0), r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+
+    def test_export_all_csv(self):
+        # Race 1: two crossings (2nd press fastest), one soft-deleted.
+        self.storage.insert_capture(self.race_id, 1, 3000.0, 3000.0, 10.0, 0.0,
+                                    bow_number="09")
+        slow = self.storage.insert_capture(self.race_id, 2, 2000.0, 2000.0, 3.0,
+                                           0.0, bow_number="04")
+        del_cap = self.storage.insert_capture(self.race_id, 3, 4000.0, 4000.0,
+                                              12.0, 0.0)
+        self.storage.update_capture(del_cap, deleted=1)
+        self.storage.update_capture(slow, primary_image="races/001/c.jpg")
+        # Race 2: no crossings.
+        r2 = self.storage.create_race("Heat", 5000.0, 5000.0, "direct", 0.0, 0.0,
+                                      "water", 30, race_no="102", heat_no="1")
+
+        out = self.data_root / "export_all.csv"
+        export_all_csv(self.storage, out)
+        with open(out, newline="", encoding="utf-8") as fh:
+            reader = list(csv.reader(fh))
+
+        self.assertEqual(reader[0][0], "race_id")
+        # every race listed even with zero crossings
+        self.assertEqual(len(reader), 4)  # header + 2 race-1 rows + 1 empty race-2
+        # fastest-first within race 1: bow 04 (3s) before 09 (10s)
+        self.assertEqual(reader[1][1], "101")
+        self.assertEqual(reader[1][6], "04")
+        self.assertEqual(reader[2][6], "09")
+        # soft-deleted crossing excluded
+        self.assertNotIn("12", [r[6] for r in reader])
+        # empty race row present with id and empty capture columns
+        self.assertEqual(reader[3][0], str(r2))
+        self.assertEqual(reader[3][6], "")
+
+
+if __name__ == "__main__":
 
     def test_clipboard_label_value_layout_sorted(self):
         # Insert out of order: 3rd press fastest, 1st press slowest.

@@ -135,6 +135,11 @@ class Storage:
             return self._conn.execute(
                 "SELECT id, name, created_at FROM race ORDER BY id DESC").fetchall()
 
+    def all_races(self):
+        """Every race row, oldest first (for a whole-database export)."""
+        with self._lock:
+            return self._conn.execute("SELECT * FROM race ORDER BY id").fetchall()
+
     def race_names(self) -> set[tuple[str, str, str]]:
         """Distinct (race_no, heat_no, name) already stored, so the UI can gray
         out races that have already been run (still overwritable). Legacy rows
