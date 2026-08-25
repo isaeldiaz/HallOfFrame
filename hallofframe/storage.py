@@ -16,6 +16,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS race (
     id                INTEGER PRIMARY KEY,
     name              TEXT NOT NULL,
+    race_no           TEXT,
+    heat_no           TEXT,
     boot_id           TEXT NOT NULL,
     t0_monotonic      REAL NOT NULL,
     t0_wall           REAL NOT NULL,
@@ -102,20 +104,24 @@ class Storage:
         if "image_off" not in cols:
             self._conn.execute(
                 "ALTER TABLE race ADD COLUMN image_off INTEGER NOT NULL DEFAULT 0")
+        if "race_no" not in cols:
+            self._conn.execute("ALTER TABLE race ADD COLUMN race_no TEXT")
+        if "heat_no" not in cols:
+            self._conn.execute("ALTER TABLE race ADD COLUMN heat_no TEXT")
 
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
                     delta_used, viewing_mode, fps_nominal=None, boot_id=None,
-                    notes=None, image_off=0) -> int:
+                    notes=None, image_off=0, race_no=None, heat_no=None) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO race (name, boot_id, t0_monotonic, t0_wall, "
-                "start_mode, radio_delay_ms, delta_used, viewing_mode, "
+                "INSERT INTO race (name, race_no, heat_no, boot_id, t0_monotonic, "
+                "t0_wall, start_mode, radio_delay_ms, delta_used, viewing_mode, "
                 "fps_nominal, notes, created_at, image_off) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (name, boot_id or current_boot_id(), t0_monotonic, t0_wall,
-                 start_mode, radio_delay_ms, delta_used, viewing_mode,
-                 fps_nominal, notes, _utcnow(), int(image_off)))
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (name, race_no, heat_no, boot_id or current_boot_id(),
+                 t0_monotonic, t0_wall, start_mode, radio_delay_ms, delta_used,
+                 viewing_mode, fps_nominal, notes, _utcnow(), int(image_off)))
             self._conn.commit()
             return cur.lastrowid
 
@@ -129,11 +135,15 @@ class Storage:
             return self._conn.execute(
                 "SELECT id, name, created_at FROM race ORDER BY id DESC").fetchall()
 
-    def race_names(self) -> set[str]:
-        """Distinct race names already stored, so the UI can gray them out."""
+    def race_names(self) -> set[tuple[str, str, str]]:
+        """Distinct (race_no, heat_no, name) already stored, so the UI can gray
+        out races that have already been run (still overwritable). Legacy rows
+        without a race/heat number report an empty string for those fields."""
         with self._lock:
-            rows = self._conn.execute("SELECT DISTINCT name FROM race").fetchall()
-            return {r["name"] for r in rows}
+            rows = self._conn.execute(
+                "SELECT DISTINCT race_no, heat_no, name FROM race").fetchall()
+            return {(r["race_no"] or "", r["heat_no"] or "", r["name"])
+                    for r in rows}
 
     def mark_race_ended(self, race_id: int, t_end_mono: float) -> None:
         with self._lock:

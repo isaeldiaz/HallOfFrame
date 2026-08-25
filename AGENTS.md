@@ -90,9 +90,13 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
   - `logs/regatta-app.jsonl` — structured log; useful for reproducing issues.
   - `calibration.json` — latency result produced by Calibrate.
-  - `races.xlsx` (`[races] excel_path`, default `~/regatta-data/races.xlsx`) —
-    the race-name roster, one name per row in column A. The Ready screen shows
-    these in a dropdown and passes the selected name to `start_race`.
+  - `races.csv` (`[races] csv_path`, default `~/regatta-data/races.csv`) — the
+    race roster, one race per row with three columns: `race_no`, `heat_no`,
+    `name`. The Ready screen shows a single combined string (`race_no-Hheat -
+    name`) in the dropdown but stores/exports the three fields separately. It
+    passes the selected race's fields to `start_race`. A one-column (legacy)
+    CSV or a missing file degrades gracefully (the UI falls back to a timestamp
+    name; `write_example` writes a starter file).
 - **Race selector (Ready screen).** Names already stored in `regatta.db`
   (`Storage.race_names()`, distinct names across all `race` rows) are **grayed
   out** in the dropdown but stay selectable, so a completed race can be

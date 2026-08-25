@@ -58,7 +58,7 @@ DEFAULTS: dict[str, Any] = {
         "grab_device": True,
     },
     "races": {
-        "excel_path": "~/regatta-data/races.xlsx",
+        "csv_path": "~/regatta-data/races.csv",
     },
     "archive": {
         "enabled": True,

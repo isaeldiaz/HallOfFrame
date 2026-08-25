@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
 from ..controller import CaptureController, calibration_status
 from ..export import clipboard_data
 from ..framebuffer import FrameBuffer
-from ..races import load_race_names, write_example
+from ..races import format_display, load_races, write_example
 from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
@@ -131,12 +131,12 @@ class MainWindow(QMainWindow):
         self._last_capture: int | None = None
         self._last_state = None
         self._advance_race_default = False
-        self._race_names: list[str] = []
+        self._races = []
         # Set by main.py to keep the trigger device grab tied to state (§9/Opt A).
         self.on_state_changed = None
 
         self._populate_race_selector()
-        self.ready.set_races(self._race_names,
+        self.ready.set_races(self._races,
                              recorded=self.controller.storage.race_names())
         self.ready.race_selected.connect(self._on_race_selected)
         self.ready.set_finish_line(float(self.config.section("ui")["finish_line_x"]))
@@ -263,11 +263,17 @@ class MainWindow(QMainWindow):
             # keep the band race name / fix fresh even if state unchanged
             self._refresh_band(state)
 
-    def _race_name(self) -> str:
-        if self.controller.race_id is not None:
+    # States where the stored race is the one on screen (still meaningful to show
+    # its name). In READY/ARMED the band should reflect the NEXT race from the
+    # dropdown, not the one that just finished (controller.race_id is not cleared
+    # when a race ends).
+    _ACTIVE_RACE_STATES = (AppState.RECORDING, AppState.RACE_OVER, AppState.REVIEW)
+
+    def _race_name(self, state: AppState) -> str:
+        if state in self._ACTIVE_RACE_STATES and self.controller.race_id is not None:
             row = self.controller.storage.get_race(self.controller.race_id)
-            if row and row["name"]:
-                return row["name"]
+            if row:
+                return format_display(row["race_no"], row["heat_no"], row["name"])
         return self.ready.current_race_name()
 
     def _refresh_band(self, state: AppState) -> None:
@@ -276,7 +282,7 @@ class MainWindow(QMainWindow):
             fix = "No frames arriving — check the camera app and the USB cable"
         elif state == AppState.RECALIBRATE:
             fix = f"{self._cal_detail} — press C to calibrate"
-        self.band.set_state(state, self._race_name(), fix)
+        self.band.set_state(state, self._race_name(state), fix)
 
     # ---------------------------------------------------------------- apply state
     def _refresh_race_selector(self) -> None:
@@ -426,7 +432,9 @@ class MainWindow(QMainWindow):
         if not self._armed:
             return
         self._armed = False
-        self.controller.start_race(t_press, name=self._race_name())
+        race = self.ready.current_race()
+        self.controller.start_race(t_press, name=race.name,
+                                   race_no=race.race_no, heat_no=race.heat_no)
         if self.controller.running:
             self._race_over = False
             self._last_capture = None
@@ -563,11 +571,11 @@ class MainWindow(QMainWindow):
     def _populate_race_selector(self) -> None:
         import os
         races_cfg = self.config.section("races")
-        excel_path = os.path.expanduser(races_cfg["excel_path"])
-        self._race_names = load_race_names(excel_path)
-        if not self._race_names:
+        csv_path = os.path.expanduser(races_cfg["csv_path"])
+        self._races = load_races(csv_path)
+        if not self._races:
             try:
-                write_example(excel_path)
-                self._race_names = load_race_names(excel_path)
+                write_example(csv_path)
+                self._races = load_races(csv_path)
             except Exception:
-                self._race_names = []
+                self._races = []

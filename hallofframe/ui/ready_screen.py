@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
+from ..races import RaceInfo
 from . import styles
 from .preview_widget import PreviewWidget
 
@@ -36,7 +37,7 @@ class ReadyScreen(QWidget):
 
     def __init__(self, buffer, parent=None):
         super().__init__(parent)
-        self._race_names: list[str] = []
+        self._races: list[RaceInfo] = []
         self._race_index = 0
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -154,26 +155,28 @@ class ReadyScreen(QWidget):
             self.race_selected.emit(index)
 
     # --- public API -------------------------------------------------------
-    def set_races(self, names: list[str], recorded: set[str] | None = None,
+    def set_races(self, races: list[RaceInfo],
+                  recorded: set[tuple[str, str, str]] | None = None,
                   index: int | None = None) -> None:
-        """Populate the dropdown. Names already stored in the DB (*recorded*)
-        are grayed out (still selectable, so a race can be overwritten) and the
-        default selection skips them to the next not-yet-recorded race."""
-        self._race_names = list(names)
+        """Populate the dropdown. Races already stored in the DB (*recorded*, a
+        set of ``(race_no, heat_no, name)`` triples) are grayed out (still
+        selectable, so a race can be overwritten) and the default selection
+        skips them to the next not-yet-recorded race."""
+        self._races = list(races)
         self._recorded = set(recorded or ())
         self.race_combo.blockSignals(True)
         self.race_combo.clear()
-        self.race_combo.addItems(self._race_names)
+        self.race_combo.addItems([r.display for r in self._races])
         self._apply_gray()
         if index is None:
             index = self._first_unrecorded()
-        self._race_index = min(max(index, 0), max(0, len(self._race_names) - 1))
+        self._race_index = min(max(index, 0), max(0, len(self._races) - 1))
         if self.race_combo.count():
             self.race_combo.setCurrentIndex(self._race_index)
         self.race_combo.blockSignals(False)
         self._refresh_race()
 
-    def refresh_recorded(self, recorded: set[str] | None = None) -> None:
+    def refresh_recorded(self, recorded: set[tuple[str, str, str]] | None = None) -> None:
         """Re-apply the grayed-out styling from *recorded* without disturbing the
         operator's current selection. Call this whenever the set of recorded
         races changes (e.g. a race just finished), so a completed race turns gray
@@ -183,33 +186,36 @@ class ReadyScreen(QWidget):
 
     def select_first_unrecorded(self) -> None:
         """Jump the default selection to the first race not yet recorded."""
-        if not self._race_names:
+        if not self._races:
             return
         self.race_combo.setCurrentIndex(self._first_unrecorded())
 
     def _apply_gray(self) -> None:
-        for i, name in enumerate(self._race_names):
+        for i, race in enumerate(self._races):
             self.race_combo.setItemData(
-                i, styles.TEXT_FAINT if name in self._recorded else None,
+                i, styles.TEXT_FAINT if race.key in self._recorded else None,
                 Qt.ItemDataRole.ForegroundRole)
 
     def _first_unrecorded(self) -> int:
-        for i, name in enumerate(self._race_names):
-            if name not in self._recorded:
+        for i, race in enumerate(self._races):
+            if race.key not in self._recorded:
                 return i
         return 0
 
     def _refresh_race(self) -> None:
-        n = len(self._race_names)
+        n = len(self._races)
         self._race_hint.setText(
-            f"{self._race_index + 1 if n else 0} of {n} from races.xlsx"
+            f"{self._race_index + 1 if n else 0} of {n} from races.csv"
             " · ↑/↓ or the dropdown to change")
 
-    def current_race_name(self) -> str:
-        if self._race_names:
-            return self._race_names[self._race_index]
+    def current_race(self) -> RaceInfo:
+        if self._races:
+            return self._races[self._race_index]
         import time
-        return time.strftime("Race-%Y%m%d-%H%M%S")
+        return RaceInfo(name=time.strftime("Race-%Y%m%d-%H%M%S"))
+
+    def current_race_name(self) -> str:
+        return self.current_race().display
 
     def next_race(self) -> None:
         self._step_to_next(recorded_skip=True)
@@ -218,13 +224,13 @@ class ReadyScreen(QWidget):
         self._step_to_next(recorded_skip=False)
 
     def _step_to_next(self, recorded_skip: bool) -> None:
-        if not self._race_names:
+        if not self._races:
             return
-        n = len(self._race_names)
+        n = len(self._races)
         start = self._race_index
         for step in range(1, n + 1):
             idx = (start + (step if recorded_skip else -step)) % n
-            if self._race_names[idx] not in self._recorded:
+            if self._races[idx].key not in self._recorded:
                 self.race_combo.setCurrentIndex(idx)
                 return
         # Every race is recorded: fall back to the default (first unrecorded).

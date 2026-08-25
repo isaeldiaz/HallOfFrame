@@ -61,7 +61,7 @@ def _config(data_root):
         "trigger": {"device_path": "", "start_keycodes": [28],
                     "end_keycodes": [88], "crossing_keycodes": [57],
                     "grab_device": False},
-        "races": {"excel_path": str(Path(data_root) / "races.xlsx")},
+        "races": {"csv_path": str(Path(data_root) / "races.csv")},
         "ui": {"finish_line_x": 0.5, "preview_fps": 10},
     }
     return Config(data=data, path=Path(data_root) / "config.toml")

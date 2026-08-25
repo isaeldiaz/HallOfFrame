@@ -100,7 +100,9 @@ class CaptureController:
                 pass
 
     # --- race lifecycle ---------------------------------------------------
-    def start_race(self, t_press: float, name: str = "Race") -> int:
+    def start_race(self, t_press: float, name: str = "Race",
+                   race_no: str | None = None,
+                   heat_no: str | None = None) -> int:
         """t_press is an evdev-sourced timestamp (§5.3). Arming happens
         elsewhere; this call is the actual start."""
         if self.running:
@@ -146,7 +148,8 @@ class CaptureController:
             start_mode=self.start_mode,
             radio_delay_ms=self.radio_delay_ms if self.start_mode == "radio" else 0.0,
             delta_used=self.delta, viewing_mode=timing_viewing(self.config),
-            fps_nominal=self.preview_fps, image_off=self.image_off)
+            fps_nominal=self.preview_fps, image_off=self.image_off,
+            race_no=race_no, heat_no=heat_no)
         self.race_id = race_id
 
         # Race directory is keyed by the unique, never-reused race_id so two
