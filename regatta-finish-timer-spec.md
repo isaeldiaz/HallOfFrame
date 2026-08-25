@@ -15,7 +15,7 @@
 > replacing the §9.1 command block) and **`TESTING.md`** (per-stage test
 > procedures with quantified pass criteria, plus the mandatory file-based
 > failure-reporting protocol referenced by §12.2). A logging requirement was
-> added as §6.9 — without it the failure reports have nothing to draw on.
+> added as §6.10 — without it the failure reports have nothing to draw on.
 
 > **v1.2 changelog.** Revised after an independent adversarial review. This
 > round found defects in the *original* design, not just environment mismatches,
@@ -109,7 +109,7 @@ holds. See §6.5.
 | N4 | The system must survive a mid-race application crash without losing already-recorded results. |
 | N5 | Startup from cold (laptop open, phone in hand) to ready-to-time: under 5 minutes. |
 
-> **Results roll-up (post-N3, see §6.8/F6).** A local `results.xlsx` workbook
+> **Results roll-up (post-N3, see §6.9/F6).** A local `results.xlsx` workbook
 > (`[results] xlsx_path`, default `~/regatta-data/results.xlsx`) accumulates one
 > block per race via a manual, one-shot "Save race and copy" action in
 > REVIEW/RACE_OVER. It is plain append-only output on the same machine — the app
@@ -553,7 +553,7 @@ hallofframe/
     storage.py           # SQLite + filesystem
     archive.py           # ArchiveWriter
     calibration.py       # latency calibration routine
-    log.py               # structured logging setup (§6.9)
+    log.py               # structured logging setup (§6.10)
     ui/
         __init__.py
         main_window.py
@@ -1164,7 +1164,69 @@ CSV columns:
 throughout — the tolerance is 100 ms, but truncating to 0.1 s would make ties
 appear where none exist.
 
-### 6.9 `log.py` — structured logging
+### 6.9 `results.py` — results workbook roll-up
+
+Requirement F6/F7 roll-up (see §2.2 note). Produces a local `results.xlsx`
+workbook that accumulates one block per race. The app performs **no networking**
+(N3): the file is pointed at a Drive-synced folder and upload is done
+out-of-process by an existing desktop sync client that owns the OAuth token,
+retry, and offline queueing.
+
+**Functional requirements (for refactors, preserve all of these):**
+
+- **Manual, one-shot save.** A "Save race and copy" action is offered only in
+  REVIEW/RACE_OVER (never mid-race). It does two things at once:
+  1. copies the race to the clipboard (the existing `export.clipboard_data`
+     path, unchanged), and
+  2. appends that race's results block to the end of `results.xlsx`, leaving one
+     blank spacer row.
+- **Append-only.** A save never touches previously written rows: it loads the
+  workbook, finds the end of the data region, writes the new block
+  (title / header / data rows), writes one blank spacer row, and saves
+  atomically (temp file + `os.replace()`, so a sync client never uploads a
+  half-written file).
+- **One-shot per race, in-memory lock.** After a race has been saved once, the
+  button reads "Copy only" — it still copies to the clipboard but does not append
+  a second block. The flag is an in-memory `set[int]` keyed on **`race_id`**
+  (unique, never reused), not the display name, so a same-named heat re-run in
+  one session is not wrongly locked to Copy-only. No schema change, no DB write.
+- **Re-record note (keyed on the name, not the id).** If the race name being
+  saved already has a block in the sheet, the new block's title carries
+  `(re-recorded — an earlier entry exists)`. Detection scans the existing
+  sheet's column A for an exact (whitespace-trimmed) name match at save time
+  (free, since the workbook is loaded to append anyway). The scan never edits an
+  old block: no SUPERSEDED styling, no row rewrites, no `delete_rows`.
+  Re-recorded races stack as separate blocks in chronological order.
+- **Save guard.** A race is only appended if `get_race(race_id)["ended_at"]`
+  is not `None` and `controller.running is False`. Do not rely on the state enum
+  alone, because REVIEW is also reachable from READY for a previous race.
+- **Layout mirrors `clipboard_data`.** Title row = race name, bold, spanning all
+  columns; header + data rows = exactly `export._COLUMNS` via
+  `export._data_rows` (`include_deleted=False`, so soft-deleted captures are
+  excluded); one blank, **unstyled** spacer row between blocks. `image_file` is
+  the data-root-relative `primary_image`. The single source of truth for columns
+  stays `export._COLUMNS` — never fork the column list.
+- **Blocking I/O off the GUI thread.** `load_workbook` + `wb.save` are disk/network
+  I/O and can block on a slow FUSE mount. Run the append on a short-lived
+  `threading.Thread`, marshal completion back via the Qt signal-bridge
+  (`_TriggerBridge`), and surface the outcome as a toast — never a modal dialog
+  (spec §7.5), never a direct Qt call from the worker thread.
+- **Guarded `openpyxl` import.** On import failure, log and no-op instead of
+  raising (mirrors `races.py`), so a missing library degrades to a logged no-op.
+- **Config:** `[results] xlsx_path` (default `~/regatta-data/results.xlsx`),
+  expanded with `os.path.expanduser` following the `races.excel_path` precedent.
+
+**Documented limitations (accepted):**
+
+- **Not restart-proof.** Append keeps no persisted "this race was saved" marker,
+  so save → restart → save again appends a second block.
+- **Not always current.** The sheet reflects only what was explicitly saved;
+  edits made after a save don't appear. Operator should save once, after final
+  edits.
+- **Re-record duplicates aren't reconciled.** The note tells the operator a prior
+  entry exists, but nothing groups or compares attempts.
+
+### 6.10 `log.py` — structured logging
 
 Absent from v1.0. It is required, because §7.5 forbids interrupting the operator
 with dialogs during a race: every anomaly that is *not* shown to the operator
@@ -1602,7 +1664,7 @@ visible immediately rather than discovered during a heat.
 | **Mid-race restart** | `t0` lost; heat cannot be continued | §6.5: `boot_id` on the race row, `resume_race()`, a UI reconnect action, and unlimited `iproxy` retries while racing |
 | **Disk fills mid-heat** | SQLite commits fail; the whole session degrades | §6.6: continuous monitor, graceful degradation at 10 GB and 3 GB, `fallocate` ballast |
 | **Phone net-discharges on USB** | Stream dies after a few hours | §9.3 step 10: a T460s port supplies 4.5 W, less than the phone draws. Powered hub or battery pack |
-| **Phone thermal throttling in sun** | fps sags, then the camera stops | §9.3 step 11: shade the phone. Detectable as an fps decline in the §6.9 heartbeat |
+| **Phone thermal throttling in sun** | fps sags, then the camera stops | §9.3 step 11: shade the phone. Detectable as an fps decline in the §6.10 heartbeat |
 | **Laptop screen unreadable in daylight** | Operator cannot see the red indicator or fps | §9.3 step 12: sunshade plus an **audible** alarm, not only a visual one |
 | **Total laptop failure** | Regatta lost | §9.3 step 13: mandatory paper backup with a stopwatch |
 | **Tripod vibration at 50 m on telephoto** | Soft images despite a fast shutter | §10.1: weighted tripod, wind shielding |
