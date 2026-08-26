@@ -95,6 +95,7 @@ class ReadyScreen(QWidget):
         self._filter_text: str = ""
         self._filter_active: bool = False
         self._filter_restore_key = None
+        self._provisional: str | None = None
         self.setFocusPolicy(Qt.StrongFocus)
 
         root = QHBoxLayout(self)
@@ -495,11 +496,20 @@ class ReadyScreen(QWidget):
                     steppable=False, dim=True)
 
     def current_selection(self) -> tuple[RaceInfo | None, bool]:
-        """Return ``(race, is_unlisted)`` for the selected row."""
+        """Return ``(race, is_unlisted)`` for the selected row.
+
+        The unlisted race's provisional (timestamp) name is cached so it stays
+        stable across status ticks and through arm→start; it is regenerated for
+        a new unlisted race whenever the selection moves off the sentinel.
+        """
         row = self.current_row()
         if row.kind == "unlisted":
             import time
-            return RaceInfo(name=time.strftime("Race-%Y%m%d-%H%M%S")), True
+            if self._provisional is None:
+                self._provisional = time.strftime("Race-%Y%m%d-%H%M%S")
+            return RaceInfo(name=self._provisional), True
+        # Leaving the sentinel invalidates any pending provisional name.
+        self._provisional = None
         return row.race, False
 
     def current_race(self) -> RaceInfo:
@@ -508,6 +518,11 @@ class ReadyScreen(QWidget):
             return race
         import time
         return RaceInfo(name=time.strftime("Race-%Y%m%d-%H%M%S"))
+
+    def reset_provisional(self) -> None:
+        """Discard the cached provisional name so the next unlisted race gets a
+        fresh timestamp (called when a race ends)."""
+        self._provisional = None
 
     def current_race_name(self) -> str:
         return self.current_race().display

@@ -146,6 +146,39 @@ class TestReadyScreenRaceSelector(unittest.TestCase):
         self.rs.next_race()
         self.assertTrue(self.rs.selected_is_unlisted())
 
+    def test_unlisted_provisional_name_stays_stable(self):
+        self.rs.set_races(self.races,
+                          recorded={r.key for r in self.races})
+        self.assertTrue(self.rs.selected_is_unlisted())
+        first = self.rs.current_race_name()
+        # Repeated reads (e.g. the 500 ms status tick) must not change the name.
+        for _ in range(5):
+            self.assertEqual(self.rs.current_race_name(), first)
+        # reset_provisional() clears the cache so a new name is generated.
+        self.rs.reset_provisional()
+        self.assertIsNone(self.rs._provisional)
+        second = self.rs.current_race_name()
+        for _ in range(3):
+            self.assertEqual(self.rs.current_race_name(), second)
+        self.assertEqual(self.rs._provisional, second)
+
+    def test_leaving_unlisted_invalidates_provisional_name(self):
+        self.rs.set_races(self.races, recorded=set())
+        self.rs.end_select_unlisted()
+        self.rs.current_race_name()
+        self.assertIsNotNone(self.rs._provisional)
+        # Moving to a roster race clears the pending provisional name (the
+        # read that renders the band triggers the clear).
+        self.rs.race_combo.setCurrentIndex(0)
+        self.assertFalse(self.rs.selected_is_unlisted())
+        self.rs.current_race_name()
+        self.assertIsNone(self.rs._provisional)
+        # Back on unlisted, a fresh name is generated and stays stable.
+        self.rs.end_select_unlisted()
+        first = self.rs.current_race_name()
+        for _ in range(3):
+            self.assertEqual(self.rs.current_race_name(), first)
+
     def test_refresh_recorded_preserves_selection(self):
         self.rs.set_races(self.races, recorded={self.rec1})
         self.rs.race_combo.setCurrentIndex(2)  # 103

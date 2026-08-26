@@ -498,6 +498,7 @@ class MainWindow(QMainWindow):
         caps = self.controller.storage.captures_for_race(race_id)
         self.race_over.set_summary(list(caps))
         self._advance_race_default = True
+        self.ready.reset_provisional()
         self._refresh_race_selector()
         self._recompute_state()
 
