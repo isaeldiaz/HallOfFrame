@@ -426,6 +426,12 @@ class MainWindow(QMainWindow):
                                 AppState.REVIEW):
             self._show_toast("Can't arm in this state.")
             return
+        if self._advance_race_default:
+            # A race just finished: advance the default to the next unrecorded
+            # race even when arming straight from RACE_OVER (without passing
+            # READY, which is where _apply_state would otherwise do this).
+            self.ready.select_first_unrecorded()
+            self._advance_race_default = False
         # With no stream, start_race auto-degrades to timing-only (§6.5), so
         # arming is allowed in STREAM_DOWN. RECALIBRATE (stream up, stale Δ) is
         # still blocked: start_race's calibration gate will refuse it anyway.
