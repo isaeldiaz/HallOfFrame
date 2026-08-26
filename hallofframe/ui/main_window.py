@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
         sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
         letters = [sc("C", self._calibrate), sc("E", self._on_e),
                    sc("D", self._export_csv), sc("R", self._open_review),
-                   sc("N", self._next_race), sc("Slash", self._focus_filter),
+                   sc("N", self._next_race), sc("/", self._focus_filter),
                    sc("End", self._end_unlisted)]
         race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
                 sc("Enter", lambda: self.on_evdev_start(time.monotonic())),
