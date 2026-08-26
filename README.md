@@ -1,8 +1,11 @@
-# Regatta Finish-Line Timer
+<h1>
+  <img src="hallofframe/assets/logo.svg" width="40" height="40" align="left" alt="" />
+  HallOfFrame
+</h1>
 
-A single-operator **finish-line timer** for rowing regattas. A phone camera
-streams MJPEG over a USB tunnel; the operator presses keys on the laptop to
-record boat crossing times.
+**Regatta Finish-Line Timer** — a single-operator finish-line timer for rowing
+regattas. A phone camera streams MJPEG over a USB tunnel; the operator presses
+keys on the laptop to record boat crossing times.
 
 - **Millisecond-level timing** driven by **evdev kernel timestamps** — not Qt
   key events or `time.time()`.
@@ -19,6 +22,8 @@ record boat crossing times.
   chosen.
 - Latency calibration (water mode vs. screen mode).
 - CSV export and per-race continuous archive.
+- `F1` About / diagnostics screen: version, environment, paths, key reference,
+  and a copyable support bundle for bug reports.
 - Structured JSONL logging and full-screen launch under `systemd-inhibit`.
 
 ## Requirements
@@ -46,6 +51,7 @@ Race lifecycle (the keyboard is grabbed during a race):
 | Start race (`t0`) | `ENTER`     |
 | Record crossing | `SPACE`        |
 | End race        | `F12`          |
+| About / diagnostics | `F1`       |
 | Quit            | `Ctrl+Q`       |
 
 ## Configuration
@@ -68,9 +74,6 @@ straight copy runs unchanged. Highlights:
 - `[timing] viewing_mode` — `"water"` or `"screen"` (selects the latency formula).
 - `[races] csv_path` — the roster file shown in the Ready-screen dropdown.
 
-`races.example.csv` is the roster format: one race per row, three columns
-`race_no,heat_no,name` (e.g. `101,1,Men under 18, single, final`).
-
 Data lives in `~/regatta-data/`:
 
 - `regatta.db` — SQLite (`race`, `capture`, `capture_frame`)
@@ -81,6 +84,15 @@ Data lives in `~/regatta-data/`:
   `name`). On the Ready screen the dropdown gray out races already recorded in
   `regatta.db` (still selectable to overwrite) and defaults to the next
   not-yet-recorded one.
+
+## Brand
+
+The mark is a camera frame with viewfinder corners and the red finish line
+through its centre — `hallofframe/assets/logo.svg`, drawn from the UI tokens in
+`hallofframe/ui/styles.py` (`TEXT_PRIMARY` #f2f6f8 on `PANEL_BORDER` #2c3942,
+finish line `RED_TEXT` #ff5a42). It reads down to 32 px. The wordmark is IBM
+Plex Mono SemiBold, set as `HallOf` + `Frame` with the second word in the finish
+-line red. The About screen (`F1`) is the only place the lockup appears in-app.
 
 ## Tests
 
@@ -118,6 +130,7 @@ hallofframe/
   config.py        config.toml load + defaults.
   log.py           Structured JSONL logging.
   calibration.py   Latency calibration helpers.
+  assets/          Application logo.
   ui/              PySide6 widgets.
   tools/           Soak-test utility.
 ```

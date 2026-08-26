@@ -33,6 +33,7 @@ from ..ui.misc_screens import ArmedScreen, RaceOverScreen
 from ..ui.race_screen import RaceScreen
 from ..ui.ready_screen import ReadyScreen
 from ..ui.review_screen import ReviewScreen
+from ..ui.about_screen import AboutOverlay
 from ..ui.state import AppState, derive_state
 from ..ui.widgets import Banner, BannerHost, KeyBar, StateBand, Toast
 
@@ -118,6 +119,7 @@ class MainWindow(QMainWindow):
         # so move() is parent-relative and it overlays the stacked pages.
         self.toast = Toast(root)
         self._toast_initialized = False
+        self.about = AboutOverlay(self.config, root)
 
         # --- timers ---
         self.clock_timer = QTimer(self)
@@ -185,6 +187,7 @@ class MainWindow(QMainWindow):
         sc("Ctrl+Q", self._quit)
         sc("Esc", self._esc)
         sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
+        sc("F1", self._toggle_about)
         letters = [sc("C", self._calibrate), sc("E", self._on_e),
                    sc("D", self._export_csv), sc("R", self._open_review),
                    sc("N", self._next_race), sc("/", self._focus_filter),
@@ -706,6 +709,15 @@ class MainWindow(QMainWindow):
                               file=self._roster_path)
         self._apply_roster_result(result)
 
+    def _toggle_about(self) -> None:
+        # The trigger keyboard is grabbed while armed or recording: nothing may
+        # cover the clock or the last-capture panel mid-race (§7.5).
+        if self._last_state in (AppState.ARMED, AppState.RECORDING):
+            self._show_toast("About is unavailable during a race — F12 ends it.")
+            return
+        if self.about.toggle():
+            self.about.setGeometry(self.centralWidget().rect())
+
     def _calibrate(self) -> None:
         dlg = CalibrationDialog(self.buffer, self.config.data_root, self.config, self)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -740,6 +752,9 @@ class MainWindow(QMainWindow):
             self.ready.end_select_unlisted()
 
     def _esc(self) -> None:
+        if self.about.isVisible():
+            self.about.close_about()
+            return
         if self.ready._filter_active:
             self.ready.clear_filter()
             return
@@ -767,6 +782,8 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._toast_initialized:
             self.toast.reposition(self.ready.width(), self.ready.height())
+        if self.about.isVisible():
+            self.about.setGeometry(self.centralWidget().rect())
 
     # ------------------------------------------------------------------ selector
     def _load_races(self, csv_path: str | None = None) -> None:

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>HallOfFrame</title>
+  <rect x="6.5" y="10.5" width="51" height="43" rx="3" stroke="#2c3942" stroke-width="3"></rect>
+  <path d="M14 18 h8 M14 18 v6" stroke="#f2f6f8" stroke-width="3" stroke-linecap="square"></path>
+  <path d="M50 18 h-8 M50 18 v6" stroke="#f2f6f8" stroke-width="3" stroke-linecap="square"></path>
+  <path d="M14 46 h8 M14 46 v-6" stroke="#f2f6f8" stroke-width="3" stroke-linecap="square"></path>
+  <path d="M50 46 h-8 M50 46 v-6" stroke="#f2f6f8" stroke-width="3" stroke-linecap="square"></path>
+  <path d="M32 8 V56" stroke="#ff5a42" stroke-width="3"></path>
+  <rect x="22" y="28" width="9" height="8" rx="1" fill="#f2f6f8"></rect>
+</svg>
