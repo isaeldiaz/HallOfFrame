@@ -307,6 +307,10 @@ class MainWindow(QMainWindow):
 
     def _apply_state(self, state: AppState) -> None:
         self._last_state = state
+        # A state transition means the previous warning's context is gone:
+        # drop any sticky toast (e.g. the persistent "Armed…" hint, calibration
+        # mismatch) so it can't linger past when it stopped being relevant.
+        self.toast.dismiss()
         pages = {
             AppState.READY: self.ready, AppState.ARMED: self.armed,
             AppState.RECORDING: self.recording,

@@ -301,8 +301,14 @@ class Toast(QWidget):
         else:
             self._timer.start(timeout_ms)
 
-    def mousePressEvent(self, event):  # noqa: N802
+    def dismiss(self) -> None:
+        """Stop any pending auto-dismiss and hide immediately. Used to drop a
+        stale warning when the app moves to a state where it no longer applies."""
+        self._timer.stop()
         self.hide()
+
+    def mousePressEvent(self, event):  # noqa: N802
+        self.dismiss()
         super().mousePressEvent(event)
 
     def reposition(self, parent_w: int, parent_h: int) -> None:
