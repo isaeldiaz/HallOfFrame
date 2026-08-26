@@ -191,6 +191,80 @@ class StateBand(QWidget):
         self._fix_label.setVisible(bool(fix))
 
 
+class Banner(QWidget):
+    """Full-width roster-load banner (F10). 16/20 padding, 3 px left border,
+    headline + detail + clickable action buttons. One per failure condition;
+    a BannerHost stacks them."""
+
+    def __init__(self, accent: str, headline: str, detail: str = "",
+                 actions: list = (), parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"QWidget{{background:{_banner_bg(accent)};}}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(18)
+        self.setStyleSheet(
+            f"background:{_banner_bg(accent)};"
+            f" border-left:3px solid {accent};")
+        text = QVBoxLayout()
+        text.setSpacing(4)
+        head = QLabel(headline)
+        head.setWordWrap(True)
+        head.setStyleSheet(
+            f"color:{_banner_text(accent)}; font-size:17px; font-weight:600;")
+        text.addWidget(head)
+        if detail:
+            det = QLabel(detail)
+            det.setWordWrap(True)
+            det.setStyleSheet(f"color:{styles.TEXT_SECONDARY}; font-size:15px;")
+            text.addWidget(det)
+        lay.addLayout(text, 1)
+        for label, cb in actions:
+            btn = QPushButton(label)
+            btn.setFocusPolicy(Qt.NoFocus)
+            btn.setStyleSheet(
+                f"background:transparent; border:none; padding:6px 10px;"
+                f" color:{styles.TEXT_DIM}; font-size:15px; text-align:left;")
+            if cb is not None:
+                btn.clicked.connect(cb)
+            lay.addWidget(btn)
+
+
+def _banner_bg(accent: str) -> str:
+    return {"#e8402a": "#1b0f0d", "#f2a01e": "#1e1608", "#4a90d9": "#0d1620"}\
+        .get(accent, styles.PANEL)
+
+
+def _banner_text(accent: str) -> str:
+    return {"#e8402a": styles.RED_TEXT, "#f2a01e": styles.AMBER_TEXT,
+            "#4a90d9": styles.BLUE_TEXT}.get(accent, styles.TEXT_PRIMARY)
+
+
+class BannerHost(QWidget):
+    """Stack of roster-load banners, shown only when non-empty."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(1)
+        self.hide()
+
+    def clear(self) -> None:
+        while self.lay.count():
+            item = self.lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self.hide()
+
+    def add_banner(self, banner: Banner) -> None:
+        self.lay.addWidget(banner)
+        self.show()
+
+
 class Toast(QWidget):
     """Transient, dismissible warning anchored bottom-right. Never modal."""
 

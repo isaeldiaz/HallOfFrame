@@ -140,15 +140,69 @@ class Storage:
         with self._lock:
             return self._conn.execute("SELECT * FROM race ORDER BY id").fetchall()
 
-    def race_names(self) -> set[tuple[str, str, str]]:
-        """Distinct (race_no, heat_no, name) already stored, so the UI can gray
-        out races that have already been run (still overwritable). Legacy rows
-        without a race/heat number report an empty string for those fields."""
+    def race_keys(self) -> set:
+        """Distinct normalised keys already stored, so the UI can gray out races
+        that have already been run (still overwritable). Identity is the
+        ``(race_no, heat_no)`` pair (BEHAVIOUR §1); the name is not part of it.
+        The SQL is unchanged and keys are built in Python via ``race_key()`` so
+        this can never drift from ``RaceInfo.key``."""
+        from .races import race_key
         with self._lock:
             rows = self._conn.execute(
                 "SELECT DISTINCT race_no, heat_no, name FROM race").fetchall()
-            return {(r["race_no"] or "", r["heat_no"] or "", r["name"])
-                    for r in rows}
+            return {race_key(r["race_no"], r["heat_no"], r["name"]) for r in rows}
+
+    def rename_races(self, key, new_name: str) -> int:
+        """Update ``race.name`` for every recorded race matching the normalised
+        key (the explicit *Also update recorded race* action). Returns the
+        number of rows changed. Never touches the roster."""
+        from .races import race_key
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, race_no, heat_no, name FROM race").fetchall()
+            ids = [r["id"] for r in rows
+                   if race_key(r["race_no"], r["heat_no"], r["name"]) == key]
+            for rid in ids:
+                self._conn.execute(
+                    "UPDATE race SET name=? WHERE id=?", (new_name, rid))
+            self._conn.commit()
+            return len(ids)
+
+    def identify_race(self, race_id: int, race_no, heat_no, name) -> bool:
+        """WP7: set number/heat/name on an unlisted race — permitted exactly
+        once, only when the race has no number yet (no roster row was involved).
+        Returns True if applied."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT race_no, heat_no FROM race WHERE id=?", (race_id,)).fetchone()
+            if row is None or (row["race_no"] or ""):
+                return False
+            self._conn.execute(
+                "UPDATE race SET race_no=?, heat_no=?, name=? WHERE id=?",
+                (race_no or None, heat_no or None, name, race_id))
+            self._conn.commit()
+            return True
+
+    def repoint_race(self, race_id: int, race_no, heat_no, name=None) -> None:
+        """WP6: restyle a recorded race's key to a duplicate row's literal
+        formatting (``0102`` -> ``102``). Refuses a normalised-key change — merge
+        may only restyle, never move a race. Optionally updates ``name``."""
+        from .races import race_key
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM race WHERE id=?", (race_id,)).fetchone()
+            if row is None:
+                return
+            old_key = race_key(row["race_no"], row["heat_no"], row["name"])
+            new_key = race_key(race_no, heat_no, row["name"])
+            if old_key != new_key:
+                raise ValueError("repoint may only restyle a key, never move a race")
+            if name is None:
+                name = row["name"]
+            self._conn.execute(
+                "UPDATE race SET race_no=?, heat_no=?, name=? WHERE id=?",
+                (race_no or None, heat_no or None, name, race_id))
+            self._conn.commit()
 
     def mark_race_ended(self, race_id: int, t_end_mono: float) -> None:
         with self._lock:

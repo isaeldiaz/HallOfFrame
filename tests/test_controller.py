@@ -170,6 +170,55 @@ class TestController(Base):
         # nothing else touched
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
 
+    def test_unlisted_race_creates_provisional_key(self):
+        # WP7: an unlisted race is created with a timestamp name and null
+        # race_no/heat_no, identified once afterwards in review.
+        seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-20260829-134812",
+                                             race_no=None, heat_no=None)
+        row = self.storage.get_race(race_id)
+        self.assertIsNone(row["race_no"])
+        self.assertIsNone(row["heat_no"])
+        self.assertEqual(row["name"], "Race-20260829-134812")
+        self.assertTrue(self.storage.identify_race(race_id, "124", "1", "D U17 2x"))
+        row = self.storage.get_race(race_id)
+        self.assertEqual((row["race_no"], row["heat_no"]), ("124", "1"))
+        # export carries the identified fields
+        from hallofframe.export import export_all_csv
+        out = self.data_root / "export.csv"
+        export_all_csv(self.storage, out)
+        text = out.read_text()
+        self.assertIn("124", text)
+        self.assertIn("D U17 2x", text)
+
+    def test_repoint_leaves_captures_untouched(self):
+        # WP6: a merge re-points the race's key formatting but never touches
+        # capture/capture_frame rows.
+        seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="B",
+                                             race_no="0102", heat_no="1")
+        self.controller.record_crossing(1000.0 + 5.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and self.storage.captures_for_race(
+                race_id) == []:
+            time.sleep(0.02)
+        before = [c["id"] for c in self.storage.captures_for_race(race_id)]
+        self.storage.repoint_race(race_id, "102", "1")
+        self.assertEqual(self.storage.get_race(race_id)["race_no"], "102")
+        after = [c["id"] for c in self.storage.captures_for_race(race_id)]
+        self.assertEqual(after, before)
+
+    def test_race_recognised_after_name_change(self):
+        # WP1: identity is (race_no, heat_no); renaming the roster label must
+        # not un-dimm a recorded race or split the recorded set.
+        self.controller.start_race(1000.0, name="Old name",
+                                   race_no="102", heat_no="1")
+        from hallofframe.races import RaceInfo, race_key
+        recorded = self.storage.race_keys()
+        renamed = RaceInfo(race_no="102", heat_no="1", name="New name")
+        self.assertIn(renamed.key, recorded)
+        self.assertEqual(renamed.key, race_key("102", "1", "anything"))
+
 
 class TestCalibrationValidation(Base):
     """Spec §8: water mode refuses to start unless calibration matches the live

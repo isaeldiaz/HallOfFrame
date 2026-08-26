@@ -116,6 +116,37 @@ class TestArmDisarm(unittest.TestCase):
         self.assertFalse(self.controller.running)
         self.assertEqual(self.win._last_state, AppState.RACE_OVER)
 
+    def test_merge_sources_raw_duplicates_banner_excludes_provisional(self):
+        p = self.data_root / "races.csv"
+        p.write_text("race_no,heat_no,name,source,status\n"
+                     "0102,1,First,sheet,\n"
+                     "102,1,Second,sheet,\n"
+                     "103,1,Heat,sheet,\n", encoding="utf-8")
+        cfg = _make_config(self.data_root)
+        cfg.data["races"] = {"csv_path": str(p)}
+        storage = Storage(self.data_root)
+        buffer = FrameBuffer(assumed_fps=30)
+        ctl = CaptureController(cfg, storage, buffer)
+        # A provisional/unlisted race keys on its timestamp name.
+        ctl.start_race(1000.0, name="Race-20260829-134812",
+                       race_no=None, heat_no=None)
+        win = MainWindow(cfg, ctl, buffer)
+        try:
+            # Merge must source duplicates from the raw rows, not the de-duped
+            # parsed roster.
+            dups = win._has_duplicates()
+            self.assertEqual(len(dups), 1)
+            self.assertEqual([r.name for r in dups[0]], ["First", "Second"])
+            self.assertEqual(win._recorded_count_for_key(("num", "102", "1")), 0)
+            # The provisional (name-keyed) race must NOT fire the blue
+            # "recorded, not in roster" banner.
+            win._render_roster_banner(win._load_result, storage.race_keys())
+            self.assertEqual(win.banner_host.lay.count(), 1)  # amber dup only
+        finally:
+            ctl.stop()
+            storage.close()
+            win.close()
+
     def test_build_trigger_fallback_on_invalid_device(self):
         cfg = _make_config(self.data_root, device_path="/dev/input/nonexistent_device_xyz")
         listener, fallback = build_trigger(cfg, lambda *a: None, lambda *a: None, lambda *a: None)

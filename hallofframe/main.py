@@ -137,7 +137,7 @@ def main(argv=None) -> int:
     trig = None
 
     from .ui.main_window import MainWindow
-    win = MainWindow(config, core["controller"], core["buffer"])
+    win = MainWindow(config, core["controller"], core["buffer"], logger=logger)
     win.showFullScreen()
 
     # Visual system (§7): one app-wide stylesheet + bundled fonts.

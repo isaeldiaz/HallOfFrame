@@ -16,10 +16,10 @@ silences them while REVIEW is on screen and while a text field has focus.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QScrollArea, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from . import styles
 from .crossing_list import ReviewList
@@ -186,6 +186,9 @@ class _Photo(QLabel):
 
 
 class ReviewScreen(QWidget):
+    identify_requested = Signal()
+    merge_requested = Signal()
+
     def __init__(self, controller, data_root, race_id: int | None = None,
                  parent=None):
         super().__init__(parent)
@@ -211,6 +214,16 @@ class ReviewScreen(QWidget):
         self.counter = QLabel("")
         self.counter.setStyleSheet(f"color:{styles.TEXT_DIM}; font-size:20px;")
         header.addWidget(self.counter)
+        self.identify_btn = QPushButton("Identify race…")
+        self.identify_btn.setFocusPolicy(Qt.NoFocus)
+        self.identify_btn.clicked.connect(self.identify_requested)
+        self.identify_btn.hide()
+        header.addWidget(self.identify_btn)
+        self.merge_btn = QPushButton("Merge duplicates…")
+        self.merge_btn.setFocusPolicy(Qt.NoFocus)
+        self.merge_btn.clicked.connect(self.merge_requested)
+        self.merge_btn.hide()
+        header.addWidget(self.merge_btn)
         header.addStretch(1)
         step_hint = QLabel("Shift+←/→ to step frames · ±500 ms")
         step_hint.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:15px;")
@@ -260,6 +273,11 @@ class ReviewScreen(QWidget):
         root.addWidget(right)
 
     # --- public API -------------------------------------------------------
+    def refresh_roster_actions(self, is_unlisted: bool, has_duplicates: bool) -> None:
+        """Show the roster actions this race is eligible for (WP6/WP7)."""
+        self.identify_btn.setVisible(is_unlisted)
+        self.merge_btn.setVisible(has_duplicates)
+
     def load_captures(self) -> None:
         # dict(), not the sqlite3.Row it came from: _commit_selected_frame()
         # writes the new primary_image back into these rows, and a Row is
