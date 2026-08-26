@@ -147,6 +147,25 @@ class TestArmDisarm(unittest.TestCase):
             storage.close()
             win.close()
 
+    def test_missing_roster_defaults_to_000_heat_1(self):
+        p = self.data_root / "does-not-exist.csv"
+        cfg = _make_config(self.data_root)
+        cfg.data["races"] = {"csv_path": str(p)}
+        storage = Storage(self.data_root)
+        ctl = CaptureController(cfg, storage, self.buffer)
+        win = MainWindow(cfg, ctl, self.buffer)
+        try:
+            win._load_races()
+            self.assertTrue(win._load_result.missing)
+            race, is_unlisted = win.ready.current_selection()
+            self.assertFalse(is_unlisted)
+            self.assertEqual(race.race_no, "000")
+            self.assertEqual(race.heat_no, "1")
+        finally:
+            ctl.stop()
+            storage.close()
+            win.close()
+
     def test_build_trigger_fallback_on_invalid_device(self):
         cfg = _make_config(self.data_root, device_path="/dev/input/nonexistent_device_xyz")
         listener, fallback = build_trigger(cfg, lambda *a: None, lambda *a: None, lambda *a: None)

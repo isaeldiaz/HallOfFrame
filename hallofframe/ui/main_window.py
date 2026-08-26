@@ -774,6 +774,8 @@ class MainWindow(QMainWindow):
         if csv_path is None:
             races_cfg = self.config.section("races")
             csv_path = os.path.expanduser(races_cfg["csv_path"])
+            if not os.path.isabs(csv_path):
+                csv_path = os.path.join(self.config.data_root, csv_path)
         self._roster_path = csv_path
         result = load_races(csv_path)
         self._apply_roster_result(result)
@@ -864,7 +866,13 @@ class MainWindow(QMainWindow):
         self._roster_rows = read_rows(self._roster_path) \
             if self._roster_path else None
         recorded = self.controller.storage.race_keys()
-        self.ready.set_races(self._races, recorded=recorded,
+        if result.missing:
+            # No roster found: still armable. Default the picker to a synthetic
+            # race 000 / heat 1 so the operator can start immediately.
+            picker_races = [RaceInfo(race_no="000", heat_no="1")]
+        else:
+            picker_races = self._races
+        self.ready.set_races(picker_races, recorded=recorded,
                              skipped=self._skipped_keys())
         self._render_roster_chip(result)
         self._render_roster_banner(result, recorded)
