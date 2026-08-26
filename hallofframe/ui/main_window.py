@@ -771,8 +771,7 @@ class MainWindow(QMainWindow):
         elif self._race_over:
             self._race_over = False
             self._recompute_state()
-        else:
-            self._quit()
+        # No fallback: Esc never quits the application. Only Ctrl+Q does.
 
     def _finish_line_changed(self, x: float) -> None:
         pass  # value is displayed in ReadyScreen; persistence not required
