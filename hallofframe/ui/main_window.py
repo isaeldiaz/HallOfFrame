@@ -369,12 +369,10 @@ class MainWindow(QMainWindow):
             kb.add("Tab", "Next bow field")
             kb.add("Del", "Soft-delete")
             kb.add("E", "Copy as Excel", callback=self._export)
-            kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("Esc", "Back to Ready", callback=self._close_review)
         elif state == AppState.RACE_OVER:
             kb.add("R", "Review crossings", True, callback=self._open_review)
             kb.add("E", "Copy as Excel", callback=self._export)
-            kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("N", "Next race", callback=self._next_race)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
         elif state == AppState.RECALIBRATE:
