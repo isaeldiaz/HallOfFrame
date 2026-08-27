@@ -76,7 +76,10 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 
 ## Data & config (the single source of truth)
 
-- **`~/regatta-data/`** (`data_root`) — **do not change the default**.
+- **`<data_root>`** — a single directory set by `[paths] data_root` in
+  `config.toml`; it defaults to `~/regatta-data` but the **name is arbitrary**
+  (e.g. `$HOME/regatta-data`).
+  `config.toml` lives in that directory. Treat it as the single source of truth.
   - `config.toml` — hand-edited. Trigger keys: `crossing_keycodes` (SPACE=57),
     `start_keycodes` (ENTER=28), `end_keycodes` (F12=88); `grab_device`;
   `[timing] image_mode` = `"auto"` (default) | `"off"` (timing-only — no camera,

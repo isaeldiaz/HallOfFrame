@@ -11,7 +11,7 @@ and operated. Gaps against the spec's setup runbook (§9.1) are listed at the en
 
 | Property | Value |
 |---|---|
-| Hostname | `borodin` |
+| Hostname | `HOSTNAME` |
 | Vendor / Model | Lenovo ThinkPad T460s (SKU `20F9`) |
 | Chassis | Laptop |
 | Firmware | BIOS N1CET73W, version 1.41 (dated 2018-12-07) |
@@ -92,6 +92,9 @@ full-screen rendering are straightforward at this resolution.
 The phone will attach through the xHCI controller; `usbmuxd` provides the transport.
 Throughput of the usbmuxd tunnel (not the physical port) is the bottleneck per §10.2 and
 must be measured with the real device before committing to 1080p30.
+
+**Tested with:** an **iPhone 17** running **iOS 26.6**, streaming via
+**IP Camera Lite** (Build 11.3.0(398)) over the USB tunnel.
 
 ### 2.6 Batteries
 

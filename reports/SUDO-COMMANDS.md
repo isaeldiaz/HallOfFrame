@@ -1,6 +1,6 @@
 # sudo commands needed to unblock the build (T0)
 
-Run these on the target machine (`borodin`) from a terminal. They come from
+Run these on the target machine (`HOSTNAME`) from a terminal. They come from
 `INSTALL.md` §2, §3, §6. Everything here needs an interactive password
 (no passwordless sudo).
 

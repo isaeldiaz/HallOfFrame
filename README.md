@@ -77,7 +77,8 @@ straight copy runs unchanged. Highlights:
 - `[timing] viewing_mode` — `"water"` or `"screen"` (selects the latency formula).
 - `[races] csv_path` — the roster file shown in the Ready-screen dropdown.
 
-Data lives in `~/regatta-data/`:
+Data lives in the data root — `<data_root>`, which defaults to `~/regatta-data`
+but is any directory set by `[paths] data_root` (e.g. `$HOME/regatta-data`):
 
 - `{event_name}.db` — SQLite (`race`, `capture`, `capture_frame`)
 - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`
@@ -87,6 +88,70 @@ Data lives in `~/regatta-data/`:
   `heat_no`, `name`). On the Ready screen the dropdown gray out races already
   recorded in `{event_name}.db` (still selectable to overwrite) and defaults to
   the next not-yet-recorded one.
+
+## Starting a new event
+
+An **event** is one competition (e.g. `EVENT_2026`). Every piece of generated
+data — the SQLite database, the log file and the default roster CSV — carries
+the event name, so starting a new event is mainly a matter of changing that name
+and supplying that event's roster. Everything else is derived automatically.
+
+> This assumes the one-time laptop install in [INSTALL.md](INSTALL.md) is already
+> done. That only happens once per machine; the steps below are for every new
+> event.
+
+### Where the data lives (`data_root`)
+
+All runtime data lives under a single directory, **`data_root`**, set by
+`[paths] data_root` in `config.toml`. The default is `~/regatta-data`, but the
+**directory name is arbitrary** — it is whatever you set `data_root` to. For
+example, `$HOME/regatta-data`.
+`config.toml` itself must live in that directory (when launched without an
+explicit path, the app looks for `~/regatta-data/config.toml` unless that path
+is overridden).
+
+The examples below use `<data_root>` to mean "your configured data root" —
+substitute your own directory.
+
+### Files needed and where
+
+Only **two files** must be created or edited by you — both live in `<data_root>`:
+
+| File | Where | What it is |
+|---|---|---|
+| `config.toml` | `<data_root>/config.toml` | The application config. **Required** — the app exits with code 2 if it is missing. Copy `hallofframe.example.toml` on first use. |
+| `{event_name}_races.csv` | `<data_root>/` (per `[races] csv_path`) | The race roster shown in the Ready-screen dropdown. One race per row: `race_no,heat_no,name`. Copy `races.example.csv` to see the format. |
+
+Every other file is **created automatically** under `<data_root>` once the app
+runs: `{event_name}.db`, `logs/{event_name}-app.jsonl`,
+`races/<Race-YYYYmmdd-HHMM>/` (capture images + archive) and `calibration.json`.
+
+### Step by step
+
+1. **Set the data root (once).** In `<data_root>/config.toml`, confirm
+   `[paths] data_root` points at your chosen directory (e.g.
+   `data_root = "$HOME/regatta-data"`). Relative paths and
+   `{event_name}` substitutions are resolved against it.
+2. **Set the event name.** In the same file, edit `[paths] event_name`
+   (e.g. `event_name = "EVENT_2026"`). This name drives the DB
+   (`EVENT_2026.db`), the log (`logs/EVENT_2026-app.jsonl`) and the default
+   roster CSV (`EVENT_2026_races.csv`). `[races] csv_path` may contain
+   `{event_name}` and is substituted automatically.
+3. **Provide the roster.** Create `<data_root>/<event_name>_races.csv` with
+   columns `race_no,heat_no,name`, one row per race. If the file is missing or
+   single-column, the app degrades gracefully — the dropdown falls back to a
+   timestamp name — but for a real event you want the roster in place.
+4. **Leave generated files alone.** A new event name produces a fresh DB, so
+   completed races of a previous event are not mixed in. (If you want to keep
+   the roster but clear the day's recorded state, keep the same DB and overwrite
+   races through the dropdown instead.)
+5. **Launch and run.** See [Quick start](#quick-start) and the race lifecycle
+   below. Then run the race-day preparation in `INSTALL.md` §7 before the first
+   heat.
+
+The values in `hallofframe.example.toml` are the application's built-in defaults,
+so on first setup a straight copy of the templates runs as-is; change only the
+stream URL/credentials, trigger device, keycodes, viewing mode and event name.
 
 ## Brand
 

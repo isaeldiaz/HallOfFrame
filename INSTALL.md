@@ -1,6 +1,6 @@
 # INSTALL — HallOfFrame Finish-Line Timer
 
-**Target machine:** `borodin` — Lenovo ThinkPad T460s, Ubuntu development branch
+**Target machine:** `HOSTNAME` — Lenovo ThinkPad T460s, Ubuntu development branch
 (XFCE, X11), Python 3.14.6, kernel 7.0.
 **Companion documents:** `hallofframe-finish-timer-spec.md` (v1.1) and
 `system-environment.md` (audit, 2026-08-21).
@@ -370,6 +370,16 @@ change only what you need (stream URL/credentials, trigger device, keycodes,
 viewing mode). `races.example.csv` is the roster format the dropdown loads — one
 race per row, columns `race_no,heat_no,name`. The app exits with code 2 if
 `config.toml` is missing, so this step must be done before first launch.
+
+The data root is **configurable** — `[paths] data_root` in `config.toml`
+defaults to `~/regatta-data` but may be any directory (e.g. `$HOME/regatta-data`).
+`config.toml` must live in that directory.
+The examples use `~/regatta-data` as the default.
+
+For every **new event** after the first — change `[paths] event_name` in
+`<data_root>/config.toml` and provide that event's roster at
+`<data_root>/<event_name>_races.csv` (all other files are derived
+automatically). See the "Starting a new event" section in `README.md`.
 
 
 ```bash

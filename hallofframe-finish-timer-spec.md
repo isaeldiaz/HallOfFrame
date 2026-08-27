@@ -111,13 +111,14 @@ holds. See §6.5.
 
 ### 2.3 Operating environment
 
-- **Computer:** Lenovo ThinkPad T460s (`borodin`). Intel Core i7-6600U — **two
+- **Computer:** Lenovo ThinkPad T460s (`HOSTNAME`). Intel Core i7-6600U — **two
   physical cores**, 4 threads — 7.5 GiB RAM, 192 GB SSD, Intel HD 520, single
   internal 1920×1080 eDP panel with no external output attached.
 - **OS:** Ubuntu development branch, XFCE 4.20, **X11** (`XDG_SESSION_TYPE=x11`),
   kernel 7.0. X11 confirmed, so the §11.3 Wayland caveat does not apply.
 - **Python:** system Python is **3.14**, not 3.12. See §6 and `INSTALL.md`.
-- **Camera:** iPhone, connected to the laptop by **USB cable**. No Wi-Fi.
+- **Camera:** iPhone 17 (iOS 26.6), connected to the laptop by **USB cable**,
+  running **IP Camera Lite** (Build 11.3.0(398)). No Wi-Fi.
 - **Subject distance:** approximately 50 m from camera to finish line.
 - **Setting:** outdoors, daylight, potentially bright sun or overcast.
 
