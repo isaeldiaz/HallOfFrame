@@ -45,6 +45,10 @@ hallofframe/
   storage.py         SQLite persistence (WAL, foreign_keys ON), schema + migrations.
   archive.py         Continuous per-race footage writer with disk-space handling.
   export.py          CSV + whole-database HTML export; format_elapsed(); flag_word().
+  web.py             SEPARATE-PROCESS HTTP results server (own read-only SQLite
+                     connection; never touches the app's locked Storage). Live
+                     race pages with per-crossing frames + per-race "Copy as
+                     Excel" (.xls). Run: python -m hallofframe.web --config PATH.
   config.py          config.toml load + defaults (never writes the file).
   log.py             Structured JSONL logging.
   calibration.py     Latency calibration helpers.
@@ -95,6 +99,11 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   - `{event_name}.db` (`[paths] event_name`) — SQLite (`race`, `capture`,
     `capture_frame`). The event name is set in `config.toml` and every piece of
     generated data carries it.
+  - `[web]` — optional live results HTTP server (host, port, enabled). Runs as
+    a **separate process** (`python -m hallofframe.web --config PATH`); it opens
+    its **own** SQLite read connection (WAL-safe against the app's writer) and
+    serves only pre-rendered HTML + files already on disk, so viewer load never
+    perturbs the evdev timing thread. Never point it at the app's `Storage`.
   - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
   - `logs/{event_name}-app.jsonl` — structured log; useful for reproducing
     issues.

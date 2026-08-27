@@ -72,6 +72,11 @@ DEFAULTS: dict[str, Any] = {
         "finish_line_x": 0.5,
         "preview_fps": 10,
     },
+    "web": {
+        "enabled": True,
+        "host": "127.0.0.1",
+        "port": 8080,
+    },
 }
 
 

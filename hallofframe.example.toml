@@ -82,3 +82,12 @@ ballast_gb = 3               # fallocate reserve so the OS cannot be starved
 [ui]
 finish_line_x = 0.5          # normalised 0..1 position of the overlay
 preview_fps = 10
+
+[web]
+# Optional separate-process HTTP results server (README "Live results"). It opens
+# its OWN read-only SQLite connection and serves only pre-rendered HTML + files
+# already on disk, so viewer load never perturbs the timing thread. Runs with:
+#   <venv>/bin/python -m hallofframe.web --config <data_root>/config.toml
+enabled = true               # false = the server refuses to start
+host = "127.0.0.1"           # localhost only; "0.0.0.0" exposes it on the LAN
+port = 8080

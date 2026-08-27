@@ -23,6 +23,8 @@ keys on the laptop to record boat crossing times.
 - Latency calibration (water mode vs. screen mode).
 - CSV export, a whole-database HTML results page (`D`, photos included), and
   per-race continuous archive.
+- A separate-process live results **web server** with per-crossing frames and
+  per-race "Copy as Excel" (see [Live results](#live-results-web-server)).
 - `F1` About / diagnostics screen: version, environment, paths, key reference,
   and a copyable support bundle for bug reports.
 - Structured JSONL logging and full-screen launch under `systemd-inhibit`.
@@ -153,6 +155,53 @@ The values in `hallofframe.example.toml` are the application's built-in defaults
 so on first setup a straight copy of the templates runs as-is; change only the
 stream URL/credentials, trigger device, keycodes, viewing mode and event name.
 
+## Live results (web server)
+
+After races are recorded you can serve results over HTTP so officials or
+spectators can browse them from another device (a laptop, tablet or phone on the
+same network). It runs as a **separate process** with its own read-only SQLite
+connection, so even heavy viewing load never perturbs the timing thread.
+
+Start it (in addition to the app — they run side by side, each reading the same
+database):
+
+```bash
+./hallofframe-web.sh                       # start with the default config
+./hallofframe-web.sh /path/to/config.toml  # start with a specific config
+# or directly:
+./venv/bin/python -m hallofframe.web --config <data_root>/config.toml
+```
+
+> Per-event installs follow the same pattern as the app: a small launcher lives
+> in the event's data dir and passes that event's `config.toml` (which carries
+> `[paths] data_root`, the single source of truth for where the database is).
+> See `hallofframe-kjorbo.sh` / `hallofframe-web-kjorbo.sh` in
+> `~/kjørbo-regatta-2026` for the reference layout.
+
+Routes:
+
+| URL | What it shows |
+|---|---|
+| `/` | Race index (newest first), linking to each race and its Excel file |
+| `/race/<id>` | One race — a card per crossing with its captured frame, fastest to slowest, plus a **Copy as Excel** button |
+| `/excel/<id>.xls` | That race as an Excel file (HTML table — Open in Excel to keep the column layout; the same layout the review window copies to clipboard) |
+| `/img/<relpath>` | A captured frame (used by the pages above) |
+
+Configure it in `<data_root>/config.toml` under `[web]`:
+
+```toml
+[web]
+enabled = true
+host = "127.0.0.1"   # localhost only; set to "0.0.0.0" to expose on the LAN
+port = 8080
+```
+
+Point a browser at `http://<host>:<port>/`. The server reads the same SQLite
+database the app writes (WAL allows concurrent readers), so races appear as they
+are recorded — just refresh. The event name (`[paths] event_name`) is shown in
+the page header, and images are served from the `races/` folder inside the data
+root. Set `enabled = false` to make the server refuse to start.
+
 ## Brand
 
 The mark is a camera frame with viewfinder corners and the red finish line
@@ -195,6 +244,8 @@ hallofframe/
   storage.py       SQLite persistence (WAL, foreign_keys ON).
   archive.py       Per-race footage writer with disk-space handling.
   export.py        CSV export; whole-database HTML results page (`D`).
+  web.py           Separate-process HTTP results server (live race pages,
+                   frames, "Copy as Excel").
   config.py        config.toml load + defaults.
   log.py           Structured JSONL logging.
   calibration.py   Latency calibration helpers.

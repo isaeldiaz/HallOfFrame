@@ -222,9 +222,15 @@ def _esc(value) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
 
-def _src(rel_path: str) -> str:
-    """URL-quote a stored relative image path (race folders contain spaces)."""
-    return html.escape(urllib.parse.quote(rel_path.replace("\\", "/")), quote=True)
+def _src(rel_path: str, img_base: str = "") -> str:
+    """URL-quote a stored relative image path (race folders contain spaces).
+
+    *img_base* prefixes the URL (e.g. ``/img/`` for the web server) so the same
+    cards can be served from the web without the stored relative path leaking
+    the on-disk layout. Empty for the offline export (paths stay relative).
+    """
+    return img_base + html.escape(
+        urllib.parse.quote(rel_path.replace("\\", "/")), quote=True)
 
 
 def _row_value(row, key, default=None):
@@ -238,7 +244,7 @@ def _row_value(row, key, default=None):
     return default
 
 
-def _thumb_html(capture) -> str:
+def _thumb_html(capture, img_base: str = "") -> str:
     rel = capture["primary_image"] or ""
     word = flag_word(capture["image_flag"],
                      _row_value(capture, "debounce_suspect", 0))
@@ -258,7 +264,7 @@ def _thumb_html(capture) -> str:
                 f'letter-spacing:.1em;color:{_C["amber"]}">NO IMAGE</span>'
                 f'<span style="font-size:12px;color:{_C["faint"]}">timing only</span>'
                 "</div>")
-    src = _src(rel)
+    src = _src(rel, img_base)
     return (
         f'<a href="{src}" target="_blank" rel="noopener" style="{box}">'
         f'<img src="{src}" loading="lazy" alt="{_esc(rel)}"'
@@ -277,7 +283,7 @@ def _meta_cell(label: str, value: str) -> str:
             f'color:{_C["text2"]}">{_esc(value)}</span></span>')
 
 
-def _card_html(capture) -> str:
+def _card_html(capture, img_base: str = "") -> str:
     word = flag_word(capture["image_flag"],
                      _row_value(capture, "debounce_suspect", 0))
     bow = capture["bow_number"] or ""
@@ -308,7 +314,7 @@ def _card_html(capture) -> str:
         f' style="display:flex;gap:26px;align-items:stretch;'
         f'background:{_C["panel"]};border:1px solid {_C["panel_border"]};'
         'border-radius:4px;padding:16px">'
-        f"{_thumb_html(capture)}"
+        f"{_thumb_html(capture, img_base)}"
         '<div style="flex:1;display:flex;flex-direction:column;'
         'justify-content:space-between;gap:16px;padding:4px 0">'
         '<div style="display:flex;align-items:flex-start;'
@@ -329,7 +335,7 @@ def _card_html(capture) -> str:
     )
 
 
-def _race_html(race, captures) -> str:
+def _race_html(race, captures, img_base: str = "", excel_id: int | None = None) -> str:
     t0_wall = race["t0_wall"]
     gun = local_hms(t0_wall) if t0_wall is not None else "—"
     mode = _row_value(race, "viewing_mode", "") or "—"
@@ -349,7 +355,7 @@ def _race_html(race, captures) -> str:
                 "restart — elapsed times for this race are approximate.</div>")
     search = " ".join(str(v) for v in (race["race_no"] or "", race["heat_no"] or "",
                                        race["name"] or "", label) if v)
-    body = ("".join(_card_html(c) for c in captures) if captures else
+    body = ("".join(_card_html(c, img_base) for c in captures) if captures else
             f'<div style="padding:22px 0 10px;font-size:15px;'
             f'color:{_C["faint"]}">No crossings recorded.</div>')
     metas = "".join(
@@ -359,6 +365,14 @@ def _race_html(race, captures) -> str:
         f'<span style="font-family:{_MONO};font-size:17px;color:{c}">{_esc(v)}</span>'
         for v, c in ((gun, _C["text"]), (mode, _C["text2"]), (delta, _C["text2"]))
     )
+    excel = ""
+    if excel_id is not None:
+        excel = (f'<button type="button" data-excel="{int(excel_id)}"'
+                 ' style="display:inline-block;margin-top:10px;font-family:'
+                 f'{_MONO};font-size:13px;font-weight:600;color:{_C["blue"]};'
+                 'border:1px solid #2c3942;border-radius:3px;'
+                 'padding:8px 12px;cursor:pointer;background:transparent">'
+                 'Copy as Excel</button>')
     return (
         f'<section data-race="{_esc(search)}">'
         '<div style="display:flex;align-items:flex-end;'
@@ -372,25 +386,28 @@ def _race_html(race, captures) -> str:
         f'color:{_C["faint"]}">race_id {race["id"]}</span></div>'
         f'<div style="font-size:27px;font-weight:500;color:{_C["text"]};'
         f'letter-spacing:-.01em">{_esc(race["name"] or "")}</div></div>'
-        '<div style="display:grid;grid-template-columns:auto auto auto;'
-        f'gap:6px 28px;text-align:right">{metas}</div>{warn}</div>'
+        '<div style="display:flex;flex-direction:column;align-items:flex-end;'
+        'gap:2px"><div style="display:grid;grid-template-columns:auto auto auto;'
+        f'gap:6px 28px;text-align:right">{metas}</div>{excel}</div>{warn}</div>'
         f'<div style="display:flex;flex-direction:column;gap:14px;'
         f'padding:24px 0">{body}</div></section>'
     )
 
 
-def export_all_html(storage: Storage, out_path: str | Path) -> Path:
-    """Write the entire database as one HTML page — a card per crossing with the
+def build_all_html(storage: Storage, img_base: str = "") -> str:
+    """Render the whole database as one HTML page — a card per crossing with the
     captured frame shown, grouped by race (oldest first) and fastest-to-slowest
     within a race.
 
-    Images are referenced by the relative path stored in ``primary_image``, so
-    *out_path* must sit in the data root, beside the ``races/`` folder. Every
-    race is listed, including races with no crossings. Soft-deleted crossings
-    are excluded. No external CSS or JS: the page opens offline, and with
-    JavaScript disabled everything except the filter box still works.
+    Images are referenced by the stored ``primary_image`` path. With
+    ``img_base=""`` the paths stay relative (used by the offline exporter, so the
+    file must sit next to the ``races/`` folder inside the data root). With an
+    ``img_base`` such as ``/img/`` the same page is served by the web server,
+    which resolves those paths to files on disk. Every race is listed, including
+    races with no crossings. Soft-deleted crossings are excluded. No external CSS
+    or JS: the page opens offline, and with JavaScript disabled everything except
+    the filter box still works.
     """
-    out_path = Path(out_path)
     blocks = list(_all_race_blocks(storage))
     n_races = len(blocks)
     n_caps = sum(len(caps) for _, caps in blocks)
@@ -442,7 +459,7 @@ def export_all_html(storage: Storage, out_path: str | Path) -> Path:
         f'<div style="display:flex;gap:8px">{chips}</div></div></header>',
         '<main style="padding:6px 48px 20px">',
     ]
-    parts += [_race_html(race, caps) for race, caps in blocks]
+    parts += [_race_html(race, caps, img_base) for race, caps in blocks]
     parts += [
         "</main>",
         f'<footer style="padding:22px 48px 30px;'
@@ -457,7 +474,14 @@ def export_all_html(storage: Storage, out_path: str | Path) -> Path:
         f"<script>{_FILTER_JS}</script>",
         "</body>\n</html>\n",
     ]
-    out_path.write_text("".join(parts), encoding="utf-8")
+    return "".join(parts)
+
+
+def export_all_html(storage: Storage, out_path: str | Path) -> Path:
+    """Write the entire database as one HTML page (see :func:`build_all_html`).
+    *out_path* must sit in the data root, beside the ``races/`` folder."""
+    out_path = Path(out_path)
+    out_path.write_text(build_all_html(storage), encoding="utf-8")
     return out_path
 
 

@@ -467,6 +467,24 @@ systemd-inhibit \
 Do both. A session suspend mid-heat takes `usbmuxd` down with it and the race is
 gone.
 
+**Optionally, to make results viewable on another device**, also start the
+separate-process results web server (it runs alongside the app and reads the
+same database; see README "Live results"):
+
+```bash
+~/regatta/hallofframe-web.sh            # default config
+~/regatta/hallofframe-web.sh <config>   # a specific config.toml
+```
+
+Per-event installs keep a launcher in the event's data dir that passes that
+event's `config.toml` (e.g. `~/kjørbo-regatta-2026/hallofframe-web-kjorbo.sh`),
+matching the `hallofframe-kjorbo.sh` convention.
+
+It listens on `[web] host:port` in `config.toml` (localhost only by default) and
+serves race pages with per-crossing frames and a per-race "Copy as Excel". Being
+a separate process with its own read-only SQLite connection, it never perturbs
+the evdev timing thread.
+
 ---
 
 ## 8. Verification checklist
