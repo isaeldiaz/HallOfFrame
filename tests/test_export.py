@@ -116,12 +116,10 @@ class TestExport(unittest.TestCase):
         self.assertEqual(lines[2], "Category\tMen under 18, single, final")
         self.assertRegex(lines[3], r"^Gun start\t\d{2}:\d{2}:\d{2}$")
         self.assertEqual(lines[4],
-                         "Elapsed Time\tBow number\tcaptured_frame_link\tnotes")
+                         "Elapsed Time\tBow number\tnotes")
         # data rows sorted fastest -> slowest by elapsed
         self.assertEqual(lines[5].split("\t")[1], "04")
         self.assertEqual(lines[6].split("\t")[1], "09")
-        # captured_frame_link is the primary image path relative to data root
-        self.assertEqual(lines[5].split("\t")[2], "races/001/c.jpg")
         # html form also produced
         self.assertIn("<table>", markup)
 

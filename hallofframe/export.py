@@ -469,10 +469,8 @@ def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
       Heat no, heat_no
       Category, name
       Gun start, HH:MM:SS (local wall-clock time of the gun)
-      Elapsed Time, Bow number, captured_frame_link, notes
+      Elapsed Time, Bow number, notes
       <one row per crossing, fastest to slowest>
-
-    ``captured_frame_link`` is the primary image path relative to the data root.
     """
     race = storage.get_race(race_id)
     race_no = (race["race_no"] or "") if race else ""
@@ -480,7 +478,7 @@ def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
     name = (race["name"] or "") if race else ""
     t0_wall = (race["t0_wall"] if race and race["t0_wall"] is not None else None)
 
-    header = ["Elapsed Time", "Bow number", "captured_frame_link", "notes"]
+    header = ["Elapsed Time", "Bow number", "notes"]
     rows: list[list[str]] = [
         ["Race ID", race_no],
         ["Heat no", heat_no],
@@ -494,7 +492,6 @@ def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
         rows.append([
             format_elapsed(c["elapsed_s"]),
             c["bow_number"] or "",
-            c["primary_image"] or "",
             c["notes"] or "",
         ])
 
