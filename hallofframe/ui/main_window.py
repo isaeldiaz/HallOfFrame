@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from ..controller import CaptureController, calibration_status
-from ..export import clipboard_data, export_all_csv
+from ..export import clipboard_data, export_all_html
 from ..framebuffer import FrameBuffer
 from ..races import (RaceInfo, RosterLoad, _cell, format_display, load_races,
                      race_key, read_rows, skip_race, write_example)
@@ -189,7 +189,7 @@ class MainWindow(QMainWindow):
         sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
         sc("F1", self._toggle_about)
         letters = [sc("C", self._calibrate), sc("E", self._on_e),
-                   sc("D", self._export_csv), sc("R", self._open_review),
+                   sc("D", self._export_html), sc("R", self._open_review),
                    sc("N", self._next_race), sc("/", self._focus_filter),
                    sc("End", self._end_unlisted)]
         race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
@@ -366,12 +366,12 @@ class MainWindow(QMainWindow):
             kb.add("Tab", "Next bow field")
             kb.add("Del", "Soft-delete")
             kb.add("E", "Copy as Excel", callback=self._export)
-            kb.add("D", "Save DB CSV", callback=self._export_csv)
+            kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("Esc", "Back to Ready", callback=self._close_review)
         elif state == AppState.RACE_OVER:
             kb.add("R", "Review crossings", True, callback=self._open_review)
             kb.add("E", "Copy as Excel", callback=self._export)
-            kb.add("D", "Save DB CSV", callback=self._export_csv)
+            kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("N", "Next race", callback=self._next_race)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
         elif state == AppState.RECALIBRATE:
@@ -382,7 +382,7 @@ class MainWindow(QMainWindow):
             kb.add("C", "Calibrate", callback=self._calibrate)
             kb.add("R", "Review last race", callback=self._open_review)
             kb.add("E", "Copy as Excel", callback=self._export)
-            kb.add("D", "Save DB CSV", callback=self._export_csv)
+            kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
             if state == AppState.STREAM_DOWN:
                 kb.set_note("Stream down — race starts timing-only (no photos)")
@@ -737,10 +737,10 @@ class MainWindow(QMainWindow):
         cb.setMimeData(_ExcelMimeData(tsv, markup))
         self._show_toast("Copied to clipboard — paste into Excel.")
 
-    def _export_csv(self) -> None:
+    def _export_html(self) -> None:
         stamp = time.strftime("%Y%m%d-%H%M")
-        out = self.config.data_root / f"export_{stamp}.csv"
-        export_all_csv(self.controller.storage, out)
+        out = self.config.data_root / f"export_{stamp}.html"
+        export_all_html(self.controller.storage, out)
         self._show_toast(f"Saved full database to {out}")
 
     def _quit(self) -> None:

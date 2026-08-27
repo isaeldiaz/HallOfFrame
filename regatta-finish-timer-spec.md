@@ -96,7 +96,7 @@ holds. See §6.5.
 | F3 | Every captured image is visible in the application alongside its associated elapsed time. |
 | F4 | The operator can annotate each capture with a bow/lane number after the fact. |
 | F5 | The operator can delete or correct an erroneous capture without disturbing the others. |
-| F6 | Results (times + image references) are exportable to CSV. |
+| F6 | Results (times + image references) are exportable to CSV and as a whole-database HTML results page (photos included) via the `D` key. |
 | F7 | The full race is archived continuously so that a missed or mistimed press can be recovered after the fact. |
 
 ### 2.2 Non-functional requirements
@@ -552,7 +552,7 @@ hallofframe/
         preview_widget.py
         capture_list.py
         calibration_dialog.py
-    export.py            # CSV export
+    export.py            # CSV export + whole-database HTML page
 ```
 
 ### 6.1 `transport.py` — iproxy lifecycle
@@ -1155,6 +1155,13 @@ CSV columns:
 `elapsed_formatted` as `M:SS.mmm` (e.g. `6:12.483`). Three decimal places
 throughout — the tolerance is 100 ms, but truncating to 0.1 s would make ties
 appear where none exist.
+
+`D` writes the whole database as one HTML results page (`export_<stamp>.html`),
+a card per crossing with the captured frame shown, grouped by race and
+fastest-to-slowest within a race. Images are linked by the relative path stored
+in `primary_image`, so the file must be written into the data root (beside the
+`races/` folder) for the image links to resolve. Every race is listed, races
+with no crossings included; soft-deleted crossings are excluded.
 
 ### 6.9 `log.py` — structured logging
 

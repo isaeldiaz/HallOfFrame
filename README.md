@@ -21,7 +21,8 @@ keys on the laptop to record boat crossing times.
 - Deferred image selection so after-window frames exist before a photo is
   chosen.
 - Latency calibration (water mode vs. screen mode).
-- CSV export and per-race continuous archive.
+- CSV export, a whole-database HTML results page (`D`, photos included), and
+  per-race continuous archive.
 - `F1` About / diagnostics screen: version, environment, paths, key reference,
   and a copyable support bundle for bug reports.
 - Structured JSONL logging and full-screen launch under `systemd-inhibit`.
@@ -126,7 +127,7 @@ hallofframe/
   framebuffer.py   Timestamped ring buffer.
   storage.py       SQLite persistence (WAL, foreign_keys ON).
   archive.py       Per-race footage writer with disk-space handling.
-  export.py        CSV export.
+  export.py        CSV export; whole-database HTML results page (`D`).
   config.py        config.toml load + defaults.
   log.py           Structured JSONL logging.
   calibration.py   Latency calibration helpers.

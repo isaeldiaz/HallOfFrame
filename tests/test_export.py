@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from hallofframe.config import Config
-from hallofframe.export import (clipboard_data, export_all_csv, export_csv,
-                                format_elapsed, utc_iso)
+from hallofframe.export import (clipboard_data, export_all_csv, export_all_html,
+                                export_csv, format_elapsed, utc_iso)
 from hallofframe.storage import Storage
 
 
@@ -102,8 +102,6 @@ class TestExport(unittest.TestCase):
         self.assertEqual(reader[3][6], "")
 
 
-if __name__ == "__main__":
-
     def test_clipboard_label_value_layout_sorted(self):
         # Insert out of order: 3rd press fastest, 1st press slowest.
         self.storage.insert_capture(self.race_id, 1, 3000.0, 3000.0, 10.0, 0.0,
@@ -126,6 +124,56 @@ if __name__ == "__main__":
         self.assertEqual(lines[5].split("\t")[2], "races/001/c.jpg")
         # html form also produced
         self.assertIn("<table>", markup)
+
+    def _write_html(self):
+        self.storage.insert_capture(self.race_id, 1, 3000.0, 3000.0, 10.0, 0.0,
+                                    bow_number="09")
+        cap = self.storage.insert_capture(self.race_id, 2, 2000.0, 2000.0, 3.0,
+                                          0.0, bow_number="04")
+        self.storage.update_capture(cap, primary_image="races/101 H1/c.jpg")
+        out = self.data_root / "export_all.html"
+        export_all_html(self.storage, out)
+        return out.read_text(encoding="utf-8")
+
+    def test_html_links_stored_relative_path(self):
+        markup = self._write_html()
+        # src is the stored path, URL-quoted, never absolute
+        self.assertIn('src="races/101%20H1/c.jpg"', markup)
+        self.assertNotIn(str(self.data_root), markup)
+        # fastest first: bow 04's card precedes bow 09's
+        self.assertLess(markup.index("0:03.000"), markup.index("0:10.000"))
+
+    def test_html_lists_race_without_crossings(self):
+        r2 = self.storage.create_race("Heat", 5000.0, 5000.0, "direct", 0.0,
+                                      0.0, "water", 30, race_no="102",
+                                      heat_no="1")
+        markup = self._write_html()
+        self.assertIn(f"race_id {r2}", markup)
+        self.assertIn("No crossings recorded.", markup)
+
+    def test_html_excludes_soft_deleted(self):
+        gone = self.storage.insert_capture(self.race_id, 3, 4000.0, 4000.0,
+                                           99.0, 0.0, bow_number="77")
+        self.storage.update_capture(gone, deleted=1)
+        markup = self._write_html()
+        self.assertNotIn("1:39.000", markup)
+        self.assertNotIn(">77<", markup)
+
+    def test_html_escapes_and_flags(self):
+        self.storage.insert_capture(self.race_id, 4, 6000.0, 6000.0,
+                                    20.0, 0.0)
+        self.storage.insert_capture(self.race_id, 5, 6000.0, 6000.0,
+                                    21.0, 0.0, image_flag="approximate")
+        self.storage.insert_capture(self.race_id, 6, 6000.0, 6000.0,
+                                    22.0, 0.0, image_flag="missing")
+        r2 = self.storage.create_race("Men <18> & over", 5000.0, 5000.0,
+                                      "direct", 0.0, 0.0, "water", 30,
+                                      race_no="103", heat_no="1")
+        markup = self._write_html()
+        self.assertIn("Men &lt;18&gt; &amp; over", markup)
+        self.assertNotIn("<18>", markup)
+        self.assertIn("APPROX", markup)
+        self.assertIn("NO IMAGE", markup)   # the no-image capture placeholder
 
 
 if __name__ == "__main__":

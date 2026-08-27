@@ -15,19 +15,14 @@ from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from ..export import format_elapsed
+from ..export import flag_word as flag_text, format_elapsed
 from . import styles
 
 
 def flag_word(image_flag: str | None, suspect: bool) -> tuple[str, str]:
     """(word, colour) for a capture's flag column."""
-    if image_flag == "missing":
-        return "NO IMAGE", styles.AMBER_TEXT
-    if image_flag == "approximate":
-        return "APPROX", styles.AMBER_TEXT
-    if suspect:
-        return "DOUBLE?", styles.AMBER_TEXT
-    return "", styles.TEXT_DIM
+    word = flag_text(image_flag, suspect)
+    return word, (styles.AMBER_TEXT if word else styles.TEXT_DIM)
 
 
 def _load_pixmap(path: str | None, w: int, h: int) -> QPixmap | None:

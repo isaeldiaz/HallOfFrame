@@ -247,6 +247,13 @@ nothing about N4.
 are excluded; the file opens in a spreadsheet with no quoting damage to a
 bow number like `07`.
 
+The `D` HTML export passes when the generated page (written into the data root)
+shows one card per crossing with the captured frame, grouped by race and ordered
+fastest-to-slowest; image `src` attributes are the stored relative paths,
+URL-quoted, never absolute; every race appears (including ones with no
+crossings); soft-deleted crossings are absent; and flagged crossings (`APPROX`,
+`NO IMAGE`) and HTML-escaped race names render correctly.
+
 ---
 
 ## 4. Tests requiring the iPhone

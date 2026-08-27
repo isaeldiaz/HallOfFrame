@@ -44,7 +44,7 @@ hallofframe/
   framebuffer.py     Timestamped ring buffer; window(target, before, after).
   storage.py         SQLite persistence (WAL, foreign_keys ON), schema + migrations.
   archive.py         Continuous per-race footage writer with disk-space handling.
-  export.py          CSV export; format_elapsed().
+  export.py          CSV + whole-database HTML export; format_elapsed(); flag_word().
   config.py          config.toml load + defaults (never writes the file).
   log.py             Structured JSONL logging.
   calibration.py     Latency calibration helpers.
