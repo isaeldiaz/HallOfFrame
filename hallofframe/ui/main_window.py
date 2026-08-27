@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         # capture_added and image_ready are routed through the bridge in main.py;
         # these defaults keep the window usable outside Qt (tests).
         self.controller.signal_capture_added = self.on_capture
+        self.controller.signal_capture_deleted = self.on_capture_deleted
         self.controller.signal_image_ready = self.on_image_ready
         self.controller.signal_race_ended = self.on_race_ended
         self.controller.signal_warning = self._show_toast
@@ -525,6 +526,9 @@ class MainWindow(QMainWindow):
 
     def on_image_ready(self, sequence: int, path: str) -> None:
         self.recording.update_image(sequence, str(self.config.data_root / path))
+
+    def on_capture_deleted(self, sequence: int) -> None:
+        self.recording.remove_capture(sequence)
 
     # ---------------------------------------------------------------- review
     def _open_review(self, race_id: int | None = None) -> None:

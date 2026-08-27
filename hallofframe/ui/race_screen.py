@@ -219,6 +219,10 @@ class RaceScreen(QWidget):
         if self.last_capture.heading.text().startswith(f"#{sequence:03d}"):
             self.last_capture.set_photo(path)
 
+    def remove_capture(self, sequence: int) -> None:
+        self.log.remove(sequence)
+        self.set_count(len(self.log._rows))
+
     def clear_captures(self) -> None:
         self.log.clear()
         self.set_count(0)

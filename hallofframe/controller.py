@@ -69,8 +69,9 @@ class CaptureController:
         self._timers_lock = threading.Lock()
 
         # Qt-signal-like hooks for the UI (a real Qt app swaps these).
-        self.signal_capture_added = None  # callable(capture)
-        self.signal_image_ready = None    # callable(sequence, primary_path)
+        self.signal_capture_added = None   # callable(capture)
+        self.signal_capture_deleted = None  # callable(sequence)
+        self.signal_image_ready = None     # callable(sequence, primary_path)
         self.signal_race_started = None   # callable(race_id)
         self.signal_race_ended = None     # callable(race_id)
         self.signal_warning = None        # callable(str)
@@ -417,7 +418,13 @@ class CaptureController:
         rows = self.storage.captures_for_race(self.race_id, include_deleted=True)
         if not rows:
             return
-        self.storage.update_capture(rows[-1]["id"], deleted=1)
+        cap = rows[-1]
+        self.storage.update_capture(cap["id"], deleted=1)
+        if self.signal_capture_deleted:
+            try:
+                self.signal_capture_deleted(cap["sequence"])
+            except Exception:
+                pass
 
     def stop(self) -> None:
         with self._timers_lock:

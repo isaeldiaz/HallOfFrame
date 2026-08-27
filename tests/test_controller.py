@@ -116,6 +116,27 @@ class TestController(Base):
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual([r["sequence"] for r in rows], [1, 3, 4])
 
+    def test_undo_last_marks_newest_deleted_and_signals(self):
+        seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        for i in range(3):
+            self.controller.record_crossing(1000.0 + 5.0 + i)
+        time.sleep(0.1)
+        deleted = []
+        self.controller.signal_capture_deleted = deleted.append
+        self.controller.undo_last()
+        rows = self.storage.captures_for_race(race_id, include_deleted=True)
+        self.assertEqual([r["sequence"] for r in rows], [1, 2, 3])
+        self.assertEqual([r["deleted"] for r in rows], [0, 0, 1])
+        self.assertEqual(deleted, [3])
+        # visible (non-deleted) captures exclude the undone row
+        visible = self.storage.captures_for_race(race_id)
+        self.assertEqual([r["sequence"] for r in visible], [1, 2])
+
+    def test_undo_last_noop_without_race(self):
+        self.controller.undo_last()  # must not raise
+        self.controller.signal_capture_deleted = lambda s: self.fail("unexpected signal")
+
     def test_debounced_press_recorded(self):
         seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")

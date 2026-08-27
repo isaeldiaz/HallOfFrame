@@ -202,6 +202,11 @@ class CrossingLog(QWidget):
         if row is not None:
             row.thumb.set_thumb(_load_pixmap(path, row.thumb.width(), row.thumb.height()))
 
+    def remove(self, sequence: int) -> None:
+        """Drop a row from the log (used when a crossing is soft-deleted)."""
+        if self._rows.pop(sequence, None) is not None:
+            self._rebuild()
+
     def clear(self) -> None:
         self._rows.clear()
         self._rebuild()
