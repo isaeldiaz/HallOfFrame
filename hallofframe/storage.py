@@ -79,10 +79,11 @@ def current_boot_id() -> str:
 
 
 class Storage:
-    def __init__(self, data_root: Path):
+    def __init__(self, data_root: Path, event_name: str = "event"):
         self.data_root = Path(data_root)
+        self.event_name = event_name or "event"
         self.data_root.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.data_root / "regatta.db"
+        self.db_path = self.data_root / f"{self.event_name}.db"
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row

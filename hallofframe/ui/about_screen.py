@@ -103,9 +103,9 @@ def path_rows(config) -> list[tuple[str, str]]:
     root = Path(config.data_root)
     return [
         ("Data directory", str(root)),
-        ("Database", str(root / "regatta.db")),
+        ("Database", str(root / f"{config.event_name}.db")),
         ("Config", str(root / "config.toml")),
-        ("Log", str(root / "logs" / "regatta-app.jsonl")),
+        ("Log", str(root / "logs" / f"{config.event_name}-app.jsonl")),
         ("Calibration", str(root / "calibration.json")),
     ]
 
@@ -210,7 +210,7 @@ class AboutOverlay(QWidget):
         col = QVBoxLayout()
         col.setSpacing(2)
         col.addWidget(_caption("Application", 14))
-        title = QLabel("HallOfFrame — Regatta Finish-Line Timer")
+        title = QLabel("HallOfFrame — Finish-Line Timer")
         title.setStyleSheet(
             f"color:{styles.TEXT_PRIMARY}; font-size:26px; font-weight:600;")
         col.addWidget(title)
@@ -368,7 +368,7 @@ class AboutOverlay(QWidget):
         lay.addWidget(KeyCap("F1", "Close about", hot=True, callback=self.close_about))
         lay.addWidget(KeyCap("Esc", "Close about", callback=self.close_about))
         lay.addStretch(1)
-        note = _prose("Licensed for use by the regatta timing crew. "
+        note = _prose("Licensed for use by the finish-line timing crew. "
                       "No warranty.", 15, styles.TEXT_FAINT)
         note.setWordWrap(False)
         lay.addWidget(note)

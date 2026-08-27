@@ -154,10 +154,10 @@ Code changes:
 `python -m hallofframe` on the live X session, phone streaming over USB:
 
 - App launches its own `iproxy` (spec §6.1 wiring added to `main.py`) and the
-  window appears (1280x720, "Regatta Finish-Line Timer").
+  window appears (1280x720, "HallOfFrame — Finish-Line Timer").
 - Live preview renders real frames (verified via Qt introspection: `_pm` set,
   buffer span ~1 s of frames).
-- Structured JSONL logging confirmed in `~/regatta-data/logs/regatta-app.jsonl`.
+- Structured JSONL logging confirmed in `~/regatta-data/logs/event-app.jsonl`.
 - Trigger falls back to Qt (`qt_fallback`) — expected, since no trigger device is
   configured yet (`[trigger] device_path = ""`).
 

@@ -1,6 +1,6 @@
-# TESTING — Regatta Finish-Line Timer
+# TESTING — HallOfFrame Finish-Line Timer
 
-**Companion documents:** `regatta-finish-timer-spec.md` (v1.2), `INSTALL.md`,
+**Companion documents:** `hallofframe-finish-timer-spec.md` (v1.2), `INSTALL.md`,
 `system-environment.md`.
 
 Runtime paths below use **`$DATA_ROOT`**, default `~/regatta-data` — the single
@@ -217,8 +217,9 @@ Every row of the spec §6.5 edge-case table must be exercised explicitly:
 ```bash
 # Start the headless controller, record 5 captures, then:
 kill -9 <pid>
-# Restart and inspect ($DATA_ROOT defaults to ~/regatta-data):
-sqlite3 "$DATA_ROOT/regatta.db" \
+# Restart and inspect ($DATA_ROOT defaults to ~/regatta-data; the DB is named
+# after the configured event, e.g. event.db for the default event):
+sqlite3 "$DATA_ROOT/event.db" \
   "PRAGMA integrity_check; SELECT count(*), max(sequence) FROM capture WHERE deleted=0;"
 ```
 
@@ -229,7 +230,7 @@ the venv's stdlib module is always available:
 ```bash
 ~/regatta/venv/bin/python -c "
 import sqlite3, os
-db = sqlite3.connect(os.path.expanduser(os.environ.get('DATA_ROOT','~/regatta-data') + '/regatta.db'))
+db = sqlite3.connect(os.path.expanduser(os.environ.get('DATA_ROOT','~/regatta-data') + '/event.db'))
 print(db.execute('PRAGMA integrity_check').fetchone())
 print(db.execute('SELECT count(*), max(sequence) FROM capture WHERE deleted=0').fetchone())
 "
@@ -272,7 +273,7 @@ write the 1080p30-versus-720p60 decision into the report or into
 sample RSS every 10 s.
 
 ```bash
-~/regatta/venv/bin/python -m regatta_timer.tools.ingest_soak --minutes 10 \
+~/regatta/venv/bin/python -m hallofframe.tools.ingest_soak --minutes 10 \
   | tee reports/logs/T2-$(date -u +%Y%m%dT%H%M).log
 ```
 
@@ -544,7 +545,7 @@ cp -r ~/regatta/reports/logs        "$D/testlogs" 2>/dev/null
 journalctl -b --since "30 min ago" > "$D/journal.txt" 2>/dev/null
 
 # Prefer the venv's stdlib sqlite3 over the CLI: it is always present.
-~/regatta/venv/bin/python - "$DATA_ROOT/regatta.db" > "$D/db-tail.txt" 2>&1 <<'PY'
+~/regatta/venv/bin/python - "$DATA_ROOT/event.db" > "$D/db-tail.txt" 2>&1 <<'PY'
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
 print(db.execute("PRAGMA integrity_check").fetchone())

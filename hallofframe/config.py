@@ -19,7 +19,7 @@ class ConfigError(Exception):
 
 
 DEFAULTS: dict[str, Any] = {
-    "paths": {"data_root": "~/regatta-data"},
+    "paths": {"data_root": "~/regatta-data", "event_name": "event"},
     "transport": {
         "local_port": 8081,
         "device_port": 8081,
@@ -58,7 +58,7 @@ DEFAULTS: dict[str, Any] = {
         "grab_device": True,
     },
     "races": {
-        "csv_path": "~/regatta-data/races.csv",
+        "csv_path": "{event_name}_races.csv",
     },
     "archive": {
         "enabled": True,
@@ -85,10 +85,19 @@ class Config:
         raw = self.data.get("paths", {}).get("data_root", "~/regatta-data")
         return Path(os.path.expanduser(raw)).resolve()
 
+    @property
+    def event_name(self) -> str:
+        """Competition/event name carried by generated data (DB, logs, CSV)."""
+        raw = self.data.get("paths", {}).get("event_name", "event")
+        return str(raw).strip() or "event"
+
     def section(self, name: str) -> dict[str, Any]:
         user = self.data.get(name, {})
         merged = dict(DEFAULTS[name])
         merged.update(user)
+        for key, value in merged.items():
+            if isinstance(value, str) and "{event_name}" in value:
+                merged[key] = value.replace("{event_name}", self.event_name)
         return merged
 
 

@@ -1,8 +1,8 @@
-# INSTALL — Regatta Finish-Line Timer
+# INSTALL — HallOfFrame Finish-Line Timer
 
 **Target machine:** `borodin` — Lenovo ThinkPad T460s, Ubuntu development branch
 (XFCE, X11), Python 3.14.6, kernel 7.0.
-**Companion documents:** `regatta-finish-timer-spec.md` (v1.1) and
+**Companion documents:** `hallofframe-finish-timer-spec.md` (v1.1) and
 `system-environment.md` (audit, 2026-08-21).
 **Authority:** this file supersedes the summary command block in spec §9.1.
 
@@ -360,12 +360,12 @@ the repo and edit them:
 
 ```bash
 mkdir -p ~/regatta-data
-cp config.example.toml ~/regatta-data/config.toml   # every section, defaults filled in
+cp hallofframe.example.toml ~/regatta-data/config.toml   # every section, defaults filled in
 cp races.example.csv ~/regatta-data/races.csv        # roster → Ready-screen dropdown
 $EDITOR ~/regatta-data/config.toml
 ```
 
-`config.example.toml` carries the built-in defaults, so a straight copy runs as-is;
+`hallofframe.example.toml` carries the built-in defaults, so a straight copy runs as-is;
 change only what you need (stream URL/credentials, trigger device, keycodes,
 viewing mode). `races.example.csv` is the roster format the dropdown loads — one
 race per row, columns `race_no,heat_no,name`. The app exits with code 2 if
@@ -450,7 +450,7 @@ own power daemon. Run the application under it:
 ```bash
 systemd-inhibit \
   --what=handle-lid-switch:sleep:idle \
-  --who="regatta-timer" --why="finish-line timing in progress" \
+  --who="hallofframe-timer" --why="finish-line timing in progress" \
   ~/regatta/venv/bin/python -m hallofframe
 ```
 

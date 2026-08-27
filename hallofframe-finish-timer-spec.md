@@ -1,4 +1,4 @@
-# Regatta Finish-Line Timing System — Build Specification
+# HallOfFrame Finish-Line Timing System — Build Specification
 
 **Document version:** 1.2
 **Status:** Design complete, not yet implemented
@@ -1115,11 +1115,11 @@ source of truth for every runtime path in this document, in `INSTALL.md` and in
 
 ```
 <data_root>/                          # default ~/regatta-data/
-    regatta.db
+    <event_name>.db
     config.toml
     calibration.json
     logs/
-        regatta-<race_id>.jsonl
+        <event_name>-<race_id>.jsonl
     races/
         2026-08-21_heat3/
             captures/
@@ -1170,7 +1170,7 @@ with dialogs during a race: every anomaly that is *not* shown to the operator
 must still be recoverable afterwards, and the failure reports defined in
 `TESTING.md` §2 have nothing to cite without it.
 
-- Write JSON Lines to `<data_root>/logs/regatta-<race_id>.jsonl`, one object per
+- Write JSON Lines to `<data_root>/logs/<event_name>-<race_id>.jsonl`, one object per
   event, each carrying `t_mono`, `t_wall`, `level`, `component`, `event` and
   event-specific fields.
 - Log at minimum: application start with the full environment fingerprint
@@ -1304,6 +1304,8 @@ The application must never block the trigger path. Specifically:
 ```toml
 [paths]
 data_root = "~/regatta-data"   # everything in §6.7 is relative to this
+event_name = "event"           # competition/event name carried by generated data
+                              # (DB, logs, default roster CSV; see §6.7)
 
 [transport]
 local_port = 8081

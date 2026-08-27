@@ -1,4 +1,4 @@
-# Regatta Finish-Line Timer — example configuration.
+# HallOfFrame — Finish-Line Timer example configuration.
 #
 # Copy this file to your data root (default `~/regatta-data/config.toml`) and
 # edit it. The application NEVER writes config.toml: everything machine-produced
@@ -6,7 +6,7 @@
 # derived at race start. See spec §8 and INSTALL.md §6.
 #
 #   mkdir -p ~/regatta-data
-#   cp config.example.toml ~/regatta-data/config.toml
+#   cp hallofframe.example.toml ~/regatta-data/config.toml
 #   $EDITOR ~/regatta-data/config.toml
 #
 # The values below are the application's built-in defaults, so a straight copy
@@ -14,6 +14,11 @@
 
 [paths]
 data_root = "~/regatta-data"   # everything (§6.7) is relative to this
+# Competition/event name. All generated data (the SQLite database, per-event
+# log files and the default roster CSV) carry this name instead of a generic
+# one, e.g. event_name = "Kjørbo_2026" -> <data_root>/Kjørbo_2026.db,
+# <data_root>/logs/Kjørbo_2026-app.jsonl, <data_root>/Kjørbo_2026_races.csv.
+event_name = "event"
 
 [transport]
 local_port = 8081
@@ -59,7 +64,9 @@ end_keycodes = [88]          # KEY_F12 — finish the race (§6.4)
 grab_device = true
 
 [races]
-csv_path = "Kjørbo_regatta_2026.csv"
+# Relative paths are resolved under data_root; "{event_name}" is substituted
+# from [paths]. Default: <data_root>/<event_name>_races.csv
+csv_path = "Kjørbo_2026_races.csv"
 
 [archive]
 enabled = true

@@ -1,8 +1,8 @@
-# Target System Profile — Regatta Finish-Line Timer
+# Target System Profile — HallOfFrame Finish-Line Timer
 
 **Audit date:** 2026-08-21
 **Purpose:** Documents the actual hardware and software state of the laptop on which the
-regatta finish-timer application (see `regatta-finish-timer-spec.md`) will be developed
+HallOfFrame finish-timer application (see `hallofframe-finish-timer-spec.md`) will be developed
 and operated. Gaps against the spec's setup runbook (§9.1) are listed at the end.
 
 ---
@@ -190,13 +190,13 @@ System-wide `requests` and `Pillow` exist, but the venv (created without
 
 ```
 <repo-path>/
-    regatta-finish-timer-spec.md   # build specification (v1.0)
+    hallofframe-finish-timer-spec.md   # build specification (v1.0)
     system-environment.md          # this file
     new, session_log.md            # scratch/log files
 ```
 
 No source code, no virtualenv, no config yet. Note the spec's data layout (§6.7) also
-uses `~/regatta/` for runtime data (`regatta.db`, `races/`, `config.toml`) — decide
+uses `~/regatta/` for runtime data (`<event_name>.db`, `races/`, `config.toml`) — decide
 whether code and data share this directory or data moves elsewhere before scaffolding.
 
 ## 7. Readiness checklist (gap closure order)

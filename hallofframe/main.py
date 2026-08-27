@@ -41,7 +41,7 @@ def build_core(config):
     from .storage import Storage
     from .transport import UsbTransport
 
-    storage = Storage(config.data_root)
+    storage = Storage(config.data_root, event_name=config.event_name)
 
     transport_cfg = config.section("transport")
     transport = UsbTransport(
@@ -128,7 +128,8 @@ def main(argv=None) -> int:
     from PySide6.QtWidgets import QApplication
 
     from .log import start_logging
-    logger = start_logging(config.data_root / "logs", race_id=None)
+    logger = start_logging(config.data_root / "logs", race_id=None,
+                           event_name=config.event_name)
     logger.info("app", "start", version=__import__("hallofframe").__version__)
 
     core = build_core(config)

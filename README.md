@@ -3,7 +3,7 @@
   HallOfFrame
 </h1>
 
-**Regatta Finish-Line Timer** — a single-operator finish-line timer for rowing
+**HallOfFrame Finish-Line Timer** — a single-operator finish-line timer for rowing
 regattas. A phone camera streams MJPEG over a USB tunnel; the operator presses
 keys on the laptop to record boat crossing times.
 
@@ -39,9 +39,9 @@ See [INSTALL.md](INSTALL.md) for the authoritative environment setup.
 
 ```bash
 # create the venv and install deps (see INSTALL.md §2–§3)
-./regatta.sh                 # launch full-screen under systemd-inhibit
+./hallofframe.sh                 # launch full-screen under systemd-inhibit
 # or
-REGATTA_NO_INHIBIT=1 ./regatta.sh   # launch without the inhibitor
+HALL_OF_FRAME_NO_INHIBIT=1 ./hallofframe.sh   # launch without the inhibitor
 ```
 
 Race lifecycle (the keyboard is grabbed during a race):
@@ -61,30 +61,32 @@ The app never writes its config — copy the templates and hand-edit:
 
 ```bash
 mkdir -p ~/regatta-data
-cp config.example.toml ~/regatta-data/config.toml   # full example, every section
+cp hallofframe.example.toml ~/regatta-data/config.toml   # full example, every section
 cp races.example.csv ~/regatta-data/races.csv        # the race roster for the dropdown
 $EDITOR ~/regatta-data/config.toml
 ```
 
-The values in `config.example.toml` are the application's built-in defaults, so a
+The values in `hallofframe.example.toml` are the application's built-in defaults, so a
 straight copy runs unchanged. Highlights:
 
 - `crossing_keycodes` / `start_keycodes` / `end_keycodes` — evdev keycodes
   (`SPACE`=57, `ENTER`=28, `F12`=88) that record crossings / start / end a race.
 - `grab_device` — the evdev device to grab for timing.
+- `[paths] event_name` — the competition/event name; generated data (DB, logs,
+  roster CSV) carries it.
 - `[timing] viewing_mode` — `"water"` or `"screen"` (selects the latency formula).
 - `[races] csv_path` — the roster file shown in the Ready-screen dropdown.
 
 Data lives in `~/regatta-data/`:
 
-- `regatta.db` — SQLite (`race`, `capture`, `capture_frame`)
+- `{event_name}.db` — SQLite (`race`, `capture`, `capture_frame`)
 - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`
-- `logs/regatta-app.jsonl` — structured log
+- `logs/{event_name}-app.jsonl` — structured log
 - `calibration.json` — latency result from Calibrate
-- `races.csv` — the race roster (one race per row: `race_no`, `heat_no`,
-  `name`). On the Ready screen the dropdown gray out races already recorded in
-  `regatta.db` (still selectable to overwrite) and defaults to the next
-  not-yet-recorded one.
+- `{event_name}_races.csv` — the race roster (one race per row: `race_no`,
+  `heat_no`, `name`). On the Ready screen the dropdown gray out races already
+  recorded in `{event_name}.db` (still selectable to overwrite) and defaults to
+  the next not-yet-recorded one.
 
 ## Brand
 
@@ -105,11 +107,11 @@ Plex Mono SemiBold, set as `HallOf` + `Frame` with the second word in the finish
 
 | File | Purpose |
 |---|---|
-| [regatta-finish-timer-spec.md](regatta-finish-timer-spec.md) | The build spec (timing model, components, UI, config). |
+| [hallofframe-finish-timer-spec.md](hallofframe-finish-timer-spec.md) | The build spec (timing model, components, UI, config). |
 | [INSTALL.md](INSTALL.md) | Environment setup, `systemd-inhibit`, launch. |
 | [TESTING.md](TESTING.md) | Per-stage test procedures. |
 | [system-environment.md](system-environment.md) | Hardware/OS audit. |
-| [config.example.toml](config.example.toml) | Template — copy to `~/regatta-data/config.toml`. |
+| [hallofframe.example.toml](hallofframe.example.toml) | Template — copy to `~/regatta-data/config.toml`. |
 | [races.example.csv](races.example.csv) | Template — race roster for the dropdown. |
 | [AGENTS.md](AGENTS.md) | Onboarding notes for AI assistants. |
 | `reports/` | Test/verification reports. |

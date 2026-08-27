@@ -85,9 +85,10 @@ class HallOfFrameLogger:
         self.emit(component, event, logging.ERROR, **fields)
 
 
-def start_logging(log_dir: Path, race_id: int | None) -> HallOfFrameLogger:
+def start_logging(log_dir: Path, race_id: int | None, event_name: str = "event") -> HallOfFrameLogger:
     log_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"hallofframe-{race_id}" if race_id is not None else "hallofframe-app"
+    event_name = (event_name or "event").strip() or "event"
+    stem = f"{event_name}-{race_id}" if race_id is not None else f"{event_name}-app"
     logger = HallOfFrameLogger(log_dir / f"{stem}.jsonl")
     logger.start()
     return logger

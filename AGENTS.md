@@ -1,4 +1,4 @@
-# AGENTS.md — Regatta Finish-Line Timer
+# AGENTS.md — HallOfFrame Finish-Line Timer
 
 Onboarding doc for AI coding assistants (analogous to `CLAUDE.md`). Read this
 first, then read the spec before touching timing/trigger code.
@@ -15,7 +15,7 @@ laptop to record boat crossing times. The system must:
 - Persist races to SQLite and archive continuous footage for recovery.
 - Never block the trigger path: nothing timing-critical touches disk.
 
-The authoritative requirements are in **`regatta-finish-timer-spec.md`**
+The authoritative requirements are in **`hallofframe-finish-timer-spec.md`**
 (v1.2). Several "obvious" design alternatives (OpenCV `VideoCapture`, RTSP,
 `time.time()`) break the timing accuracy — **do not swap them without reading
 the spec's reasoning first** (see the "How to use this document" note and §3).
@@ -24,7 +24,7 @@ the spec's reasoning first** (see the "How to use this document" note and §3).
 
 | File | Purpose |
 |---|---|
-| `regatta-finish-timer-spec.md` | The build spec. §5 timing model, §6 components, §7 UI, §8 config, §12 order. Read §3, §5, §6 before touching trigger/timing code. |
+| `hallofframe-finish-timer-spec.md` | The build spec. §5 timing model, §6 components, §7 UI, §8 config, §12 order. Read §3, §5, §6 before touching trigger/timing code. |
 | `INSTALL.md` | Authoritative environment setup (deps, systemd-inhibit, launch). |
 | `TESTING.md` | Per-stage test procedures + file-based failure-report protocol. |
 | `system-environment.md` | Hardware/OS audit the design was revised against. |
@@ -86,18 +86,22 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   degraded state is persisted as `race.image_off`. `image_mode = "off"` is only
   needed to force timing-only when the stream is *up*. There is no mid-race GUI
   toggle.
-  - `regatta.db` — SQLite (`race`, `capture`, `capture_frame`).
+  - `{event_name}.db` (`[paths] event_name`) — SQLite (`race`, `capture`,
+    `capture_frame`). The event name is set in `config.toml` and every piece of
+    generated data carries it.
   - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
-  - `logs/regatta-app.jsonl` — structured log; useful for reproducing issues.
+  - `logs/{event_name}-app.jsonl` — structured log; useful for reproducing
+    issues.
   - `calibration.json` — latency result produced by Calibrate.
-  - `races.csv` (`[races] csv_path`, default `~/regatta-data/races.csv`) — the
+  - `{event_name}_races.csv` (`[races] csv_path`, default
+    `~/regatta-data/{event_name}_races.csv`) — the
     race roster, one race per row with three columns: `race_no`, `heat_no`,
     `name`. The Ready screen shows a single combined string (`race_no-Hheat -
     name`) in the dropdown but stores/exports the three fields separately. It
     passes the selected race's fields to `start_race`. A one-column (legacy)
     CSV or a missing file degrades gracefully (the UI falls back to a timestamp
     name; `write_example` writes a starter file).
-- **Race selector (Ready screen).** Names already stored in `regatta.db`
+- **Race selector (Ready screen).** Names already stored in `{event_name}.db`
   (`Storage.race_names()`, distinct names across all `race` rows) are **grayed
   out** in the dropdown but stay selectable, so a completed race can be
   overwritten. The default selection skips recorded names to the **next

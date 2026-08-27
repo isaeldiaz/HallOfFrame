@@ -6,24 +6,24 @@
 # desktop session, not over SSH.
 #
 # Usage:
-#   ./regatta.sh            launch under systemd-inhibit (preferred)
-#   REGATTA_NO_INHIBIT=1 ./regatta.sh   launch without the inhibitor
+#   ./hallofframe.sh            launch under systemd-inhibit (preferred)
+#   HALL_OF_FRAME_NO_INHIBIT=1 ./hallofframe.sh   launch without the inhibitor
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-venv_py="${REGATTA_VENV:-$here/venv/bin/python}"
+venv_py="${HALL_OF_FRAME_VENV:-$here/venv/bin/python}"
 if [ ! -x "$venv_py" ]; then
     echo "error: no virtualenv python at $venv_py (create it per INSTALL.md)" >&2
     exit 1
 fi
 
-if [ "${REGATTA_NO_INHIBIT:-0}" = "1" ]; then
+if [ "${HALL_OF_FRAME_NO_INHIBIT:-0}" = "1" ]; then
     exec "$venv_py" -m hallofframe
 fi
 
 exec systemd-inhibit \
     --what=handle-lid-switch:sleep:idle \
-    --who="regatta-timer" --why="finish-line timing in progress" \
+    --who="hallofframe-timer" --why="finish-line timing in progress" \
     "$venv_py" -m hallofframe
