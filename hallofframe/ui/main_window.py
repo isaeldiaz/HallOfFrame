@@ -132,6 +132,8 @@ class MainWindow(QMainWindow):
         self._armed = False
         self._race_over = False
         self._reviewing = False
+        self._review_race_id: int | None = None
+        self._race_over_race_id: int | None = None
         self._review_screen: ReviewScreen | None = None
         self._cal_ok = True
         self._cal_detail = ""
@@ -189,7 +191,8 @@ class MainWindow(QMainWindow):
         sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
         sc("F1", self._toggle_about)
         letters = [sc("C", self._calibrate), sc("E", self._on_e),
-                   sc("D", self._export_html), sc("R", self._open_review),
+                   sc("L", self._load_selected_race),
+                   sc("D", self._export_html), sc("R", self._on_r),
                    sc("N", self._next_race), sc("/", self._focus_filter),
                    sc("End", self._end_unlisted)]
         race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
@@ -380,8 +383,7 @@ class MainWindow(QMainWindow):
         else:  # READY / STREAM_DOWN
             kb.add("Ctrl+S", "Arm", True, callback=self._arm_start)
             kb.add("C", "Calibrate", callback=self._calibrate)
-            kb.add("R", "Review last race", callback=self._open_review)
-            kb.add("E", "Copy as Excel", callback=self._export)
+            kb.add("L", "Load race", callback=self._load_selected_race)
             kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
             if state == AppState.STREAM_DOWN:
@@ -498,6 +500,7 @@ class MainWindow(QMainWindow):
     def on_race_ended(self, race_id: int) -> None:
         self._armed = False
         self._race_over = True
+        self._race_over_race_id = race_id
         self._reviewing = False
         caps = self.controller.storage.captures_for_race(race_id)
         self.race_over.set_summary(list(caps))
@@ -521,10 +524,12 @@ class MainWindow(QMainWindow):
         self.recording.update_image(sequence, str(self.config.data_root / path))
 
     # ---------------------------------------------------------------- review
-    def _open_review(self) -> None:
-        race_id = self.controller.race_id
+    def _open_review(self, race_id: int | None = None) -> None:
+        if race_id is None:
+            race_id = self._current_race_id()
         if race_id is None:
             return
+        self._review_race_id = race_id
         if self._review_screen is None:
             self._review_screen = ReviewScreen(self.controller, self.config.data_root,
                                                race_id=race_id)
@@ -560,9 +565,10 @@ class MainWindow(QMainWindow):
                    if race_key(r["race_no"], r["heat_no"], r["name"]) == key)
 
     def _open_identify(self) -> None:
-        if self.controller.race_id is None:
+        race_id = self._review_race_id or self.controller.race_id
+        if race_id is None:
             return
-        row = self.controller.storage.get_race(self.controller.race_id)
+        row = self.controller.storage.get_race(race_id)
         if not row or (row["race_no"] or ""):
             self._show_toast("This race has already been identified.")
             return
@@ -606,6 +612,15 @@ class MainWindow(QMainWindow):
         self._reviewing = False
         self._recompute_state()
 
+    def _current_race_id(self) -> int | None:
+        """The race the operator is currently looking at: the reviewed race, the
+        race shown on the RACE_OVER window, or else the last race run."""
+        if self._reviewing:
+            return self._review_race_id
+        if self._race_over:
+            return self._race_over_race_id
+        return self.controller.race_id
+
     # ---------------------------------------------------------------- actions
     def _on_race_selected(self, row) -> None:
         if self._last_state == AppState.RACE_OVER:
@@ -624,6 +639,39 @@ class MainWindow(QMainWindow):
             self._recompute_state()
         else:
             self._show_toast("Next race only in Ready / Race-over.")
+
+    def _on_r(self) -> None:
+        """R: from RACE_OVER open REVIEW (no-op elsewhere — race summary was
+        folded into Load race)."""
+        if self._last_state == AppState.RACE_OVER:
+            self._open_review()
+
+    def _load_selected_race(self) -> None:
+        """L: reload the race selected in the next-race dropdown into the
+        RACE_OVER window, so its summary and crossings can be reviewed (R) or
+        copied (E) without re-arming. Only recorded races can be loaded."""
+        if self._last_state not in (AppState.READY, AppState.STREAM_DOWN,
+                                    AppState.RECALIBRATE):
+            self._show_toast("Load race only in Ready.")
+            return
+        race, is_unlisted = self.ready.current_selection()
+        if race is None or is_unlisted:
+            self._show_toast("Select a recorded race to load.")
+            return
+        target = None
+        for row in self.controller.storage.all_races():
+            if race_key(row["race_no"], row["heat_no"], row["name"]) == race.key:
+                target = row
+        if target is None:
+            self._show_toast("This race isn't recorded yet — arm and run it first.")
+            return
+        self._armed = False
+        self._reviewing = False
+        self._race_over = True
+        self._race_over_race_id = target["id"]
+        caps = self.controller.storage.captures_for_race(target["id"])
+        self.race_over.set_summary(list(caps))
+        self._recompute_state()
 
     def _on_e(self) -> None:
         """E: rename the selected race in Ready/review; export in Race-over."""
@@ -729,10 +777,11 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def _export(self) -> None:
-        if self.controller.race_id is None:
+        race_id = self._current_race_id()
+        if race_id is None:
             self._show_toast("No race to export yet.")
             return
-        tsv, markup = clipboard_data(self.controller.storage, self.controller.race_id)
+        tsv, markup = clipboard_data(self.controller.storage, race_id)
         cb = QApplication.clipboard()
         cb.setMimeData(_ExcelMimeData(tsv, markup))
         self._show_toast("Copied to clipboard — paste into Excel.")
