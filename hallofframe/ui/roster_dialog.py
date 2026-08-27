@@ -55,6 +55,11 @@ def _muted_button(text, callback):
 class _BaseDialog(QDialog):
     result_applied = Signal(object)  # RosterLoad
 
+    # The action Enter/Return triggers while typing. Buttons are Qt.NoFocus by
+    # design (test_focus §4) so none can be the dialog's default button — without
+    # this the operator's Enter in a name field silently does nothing.
+    _primary = None
+
     def __init__(self, csv_path, expected=None, title="", logger=None,
                  parent=None):
         super().__init__(parent)
@@ -64,6 +69,13 @@ class _BaseDialog(QDialog):
         self.setWindowTitle(title)
         self.setModal(True)
         self.setStyleSheet(f"QDialog{{background:{styles.BG};}}")
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self._primary is not None:
+            self._primary()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _log(self, action: str, **fields) -> None:
         # BEHAVIOUR §10: one line per roster mutation — the audit trail.
@@ -120,6 +132,7 @@ class AddRaceDialog(_BaseDialog):
         self.collision.hide()
         root.addWidget(self.collision)
 
+        self._primary = self._add
         row = QHBoxLayout()
         row.addWidget(_primary_button("Add race", self._add))
         row.addWidget(_muted_button("Cancel", self.reject))
@@ -229,6 +242,7 @@ class RenameDialog(_BaseDialog):
                          parent)
         self.race = race
         self.storage = storage
+        self._primary = self._save
         self.setMinimumWidth(600)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 28, 28, 28)
@@ -324,6 +338,7 @@ class IdentifyDialog(_BaseDialog):
         super().__init__(csv_path, expected, "Identify race", logger, parent)
         self.race_id = race_id
         self.storage = storage
+        self._primary = self._identify
         self.setMinimumWidth(620)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 28, 28, 28)
@@ -409,6 +424,7 @@ class MergeDialog(_BaseDialog):
         self.remove = remove
         self.storage = storage
         self.recorded_count = recorded_count
+        self._primary = self._merge
         self.setMinimumWidth(600)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 28, 28, 28)

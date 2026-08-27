@@ -68,6 +68,34 @@ class TestRosterDialogs(unittest.TestCase):
                            set(), None, expected=self.expected)
         self.assertFalse(dlg.amber.isVisible())
 
+    def test_add_race_enter_in_name_field_commits(self):
+        # Buttons are Qt.NoFocus, so the dialog has no default button: Enter
+        # while typing must trigger the primary action explicitly.
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from hallofframe.races import RaceInfo, load_races
+        from hallofframe.ui.roster_dialog import AddRaceDialog
+        dlg = AddRaceDialog(str(self.csv), "101", "1", "New Boat",
+                            expected=self.expected)
+        dlg.name.setFocus()
+        QTest.keyClick(dlg.name, Qt.Key_Return)
+        found = any(r.key == RaceInfo("101", "1", "New Boat").key
+                    for r in load_races(str(self.csv)).races)
+        self.assertTrue(found)
+
+    def test_rename_enter_in_name_field_commits(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from hallofframe.races import RaceInfo, load_races
+        from hallofframe.ui.roster_dialog import RenameDialog
+        dlg = RenameDialog(str(self.csv), RaceInfo("101", "1", "Old"),
+                           set(), None, expected=self.expected)
+        dlg.name.setText("New")
+        dlg.name.setFocus()
+        QTest.keyClick(dlg.name, Qt.Key_Return)
+        self.assertTrue(any(r.name == "New"
+                            for r in load_races(str(self.csv)).races))
+
 
 if __name__ == "__main__":
     unittest.main()
