@@ -51,6 +51,9 @@ hallofframe/
   ui/                PySide6 widgets: main_window, capture_list, preview_widget,
                      calibration_dialog.
   tools/ingest_soak.py  Soak-test utility for the ingest path.
+  tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
+                     near-complete DB, plays the final race, verifies integrity/
+                     exports/latency/memory. Shared with tests/test_late_regatta.py.
 tests/               pytest suites (controller, export, framebuffer, mjpeg).
 ```
 
