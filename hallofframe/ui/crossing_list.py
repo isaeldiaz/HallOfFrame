@@ -107,9 +107,18 @@ class _RowBase(QWidget):
 
 
 class _BowEdit(QLineEdit):
-    """Bow-number field; Enter or Tab commits and requests advance."""
+    """Bow-number field; Enter or Tab commits and requests advance.
 
-    advance = Signal(int)  # sequence
+    Shift+←/→ step the crossing's frame and ↑/↓ move the selection, so the
+    operator is never locked out of navigation once a field has focus. These
+    have to be taken in ``event()``: a focused QLineEdit consumes every key it
+    sees before the parent's ``keyPressEvent`` ever runs, which is exactly why
+    navigation died after Tab/Enter landed in a field.
+    """
+
+    advance = Signal(int)     # sequence (Enter/Tab)
+    step_frame = Signal(int)  # +1/-1 (Shift+←/→)
+    select_step = Signal(int)  # +1/-1 (↑/↓)
 
     def __init__(self, sequence, *a, **k):
         super().__init__(*a, **k)
@@ -121,10 +130,24 @@ class _BowEdit(QLineEdit):
         # navigation before keyPressEvent() is ever called, so a Tab branch there
         # never runs (it moved focus to the list's scroll area instead of
         # advancing). Leaving the field emits editingFinished, which persists it.
-        if (event.type() == QEvent.KeyPress
-                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)):
-            self.advance.emit(self._seq)
-            return True
+        if event.type() == QEvent.KeyPress:
+            key = event.key()
+            mods = event.modifiers()
+            if key in (Qt.Key_Tab, Qt.Key_Backtab):
+                self.advance.emit(self._seq)
+                return True
+            if key == Qt.Key_Left and mods & Qt.ShiftModifier:
+                self.step_frame.emit(-1)
+                return True
+            if key == Qt.Key_Right and mods & Qt.ShiftModifier:
+                self.step_frame.emit(1)
+                return True
+            if key == Qt.Key_Up:
+                self.select_step.emit(1)
+                return True
+            if key == Qt.Key_Down:
+                self.select_step.emit(-1)
+                return True
         return super().event(event)
 
 
@@ -238,6 +261,8 @@ class ReviewList(CrossingLog):
     delete_requested = Signal(int)         # sequence
     selection_changed = Signal(int)        # sequence
     advance_requested = Signal(int)        # sequence (Enter/Tab in bow field)
+    step_frame = Signal(int)               # +1/-1 (Shift+←/→ in bow field)
+    select_step = Signal(int)              # +1/-1 (↑/↓ in bow field)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -262,6 +287,8 @@ class ReviewList(CrossingLog):
         row = _ReviewRow(data, 92, 58, self)
         row.bow_edited.connect(self._on_bow_edited)
         row.bow_edit.advance.connect(self.advance_requested)
+        row.bow_edit.step_frame.connect(self.step_frame)
+        row.bow_edit.select_step.connect(self.select_step)
         self._edits[data["sequence"]] = row.bow_edit
         self._rows[data["sequence"]] = row
         self._rebuild()

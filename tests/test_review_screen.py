@@ -241,6 +241,62 @@ class TestReviewScreen(unittest.TestCase):
         self.assertTrue(all(not s.isEnabled() for s in self.win._typable_shortcuts),
                         "a focused text field must get its own characters")
 
+    # --- 5. navigation must survive a focused bow field -------------------
+    def test_shift_arrow_and_up_down_work_from_a_bow_field(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        self.key(Qt.Key_Tab)                       # land in crossing 1's bow
+        self.assertIsInstance(self.app.focusWidget(), QLineEdit)
+        first = screen._selected_seq
+        capture_id = screen._current_capture["id"]
+
+        chosen = screen.scrubber.selected_frame()
+        self.key(Qt.Key_Right, Qt.ShiftModifier)   # step the frame in text mode
+        stepped = screen.scrubber.selected_frame()
+        self.assertNotEqual(stepped["id"], chosen["id"],
+                            "Shift+Right in a bow field did not step the frame")
+        self.key(Qt.Key_Tab)                       # commit it and advance
+        self.assertIsInstance(self.app.focusWidget(), QLineEdit)
+        frames = {f["id"]: f for f in self.storage.frames_for_capture(capture_id)}
+        self.assertEqual(frames[stepped["id"]]["is_primary"], 1,
+                         "Tab after text-mode stepping did not promote the frame")
+        after_tab = screen._selected_seq
+        self.assertNotEqual(after_tab, first, "Tab in a bow field did not advance")
+
+        self.key(Qt.Key_Down)                      # move selection to previous
+        self.assertNotEqual(screen._selected_seq, after_tab,
+                            "Down in a bow field did not change the crossing")
+        self.assertIsInstance(self.app.focusWidget(), QLineEdit,
+                              "navigation from a bow field must stay in a bow field")
+
+    def test_save_shows_confirmation(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        self.key(Qt.Key_Tab)
+        self.assertEqual(screen.saved_lbl.text(), "saved",
+                         "committing a frame must show a visible confirmation")
+        screen._saved_timer.stop()  # don't leave a pending timer in the test
+
+    def test_committed_frame_sticks_when_the_crossing_is_revisited(self):
+        """The UI must show the operator-chosen primary, not re-derive the
+        frame nearest the recorded time, after navigating away and back."""
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        stepped = screen.scrubber.selected_frame()
+        self.key(Qt.Key_Return)        # commit + advance to crossing 2
+        self.key(Qt.Key_Down)          # back to crossing 1
+        shown = screen.scrubber.selected_frame()
+        self.assertEqual(shown["id"], stepped["id"],
+                         "revisiting a crossing must show the committed frame")
+        self.assertEqual(screen.offset_lbl.text(),
+                         f"{stepped['offset_ms']:+.0f} ms",
+                         "photo pane must reflect the committed frame")
+
     # --- 4. the rows the save writes into -------------------------------
     def test_captures_are_writable_rows(self):
         screen = self.review()

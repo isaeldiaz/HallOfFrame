@@ -6,7 +6,10 @@ list with an inline bow field per row on the right. ``↑/↓`` select a crossin
 ``Shift+←/→`` step frames, ``Tab`` saves the selected frame as the crossing's
 primary photo and focuses its bow field so the bow can be typed in the same
 view, then ``Enter``/``Tab`` in the field commits the bow and moves to the next
-crossing. ``Del`` soft-deletes, ``Esc`` returns to READY.
+crossing. ``Del`` soft-deletes, ``Esc`` returns to READY. Navigation keys keep
+working from a focused bow field: ``Shift+←/→`` step that crossing's frames and
+``↑/↓`` jump to the adjacent crossing's bow, so the operator is never locked
+out of frame review once a field has focus.
 
 Two Qt constraints shape the key handling. ``Tab`` is spent by
 ``QWidget::event()`` on focus navigation *before* ``keyPressEvent()`` runs, so it
@@ -219,6 +222,12 @@ class ReviewScreen(QWidget):
         self.counter = QLabel("")
         self.counter.setStyleSheet(f"color:{styles.TEXT_DIM}; font-size:20px;")
         header.addWidget(self.counter)
+        self.saved_lbl = QLabel("")
+        self.saved_lbl.setStyleSheet(f"color:{styles.GREEN_TEXT}; font-size:15px;")
+        header.addWidget(self.saved_lbl)
+        self._saved_timer = QTimer(self)
+        self._saved_timer.setSingleShot(True)
+        self._saved_timer.timeout.connect(lambda: self.saved_lbl.setText(""))
         self.identify_btn = QPushButton("Identify race…")
         self.identify_btn.setFocusPolicy(Qt.NoFocus)
         self.identify_btn.clicked.connect(self.identify_requested)
@@ -293,6 +302,8 @@ class ReviewScreen(QWidget):
         self.list.delete_requested.connect(self._delete)
         self.list.selection_changed.connect(self._select)
         self.list.advance_requested.connect(self._advance)
+        self.list.step_frame.connect(self._step_frame)
+        self.list.select_step.connect(self._select_step)
         rlay = QVBoxLayout(right)
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
@@ -352,7 +363,7 @@ class ReviewScreen(QWidget):
         frames = self.controller.storage.frames_for_capture(cap["id"])
         self._frame_paths[cap["id"]] = [
             {"path": str(self.data_root / f["path"]), "offset_ms": f["offset_ms"],
-             "id": f["id"]} for f in frames]
+             "id": f["id"], "primary": bool(f["is_primary"])} for f in frames]
         self._current_capture = cap
 
     def _show_primary(self) -> None:
@@ -368,10 +379,14 @@ class ReviewScreen(QWidget):
             self.scrubber.set_frames([], 0)
             self.offset_lbl.setText("")
             return
-        # primary = frame nearest the recorded time (offset closest to 0)
-        primary = min(frames, key=lambda f: abs(f["offset_ms"]))
-        self.scrubber.set_frames(frames, primary["offset_ms"])
-        self._show_frame(primary["path"], primary["offset_ms"])
+        # The committed primary (operator-chosen frame), so a frame the
+        # operator promoted sticks when the crossing is revisited. Fall back to
+        # the frame nearest the recorded time only when none is marked primary.
+        chosen = next((f for f in frames if f["primary"]), None)
+        if chosen is None:
+            chosen = min(frames, key=lambda f: abs(f["offset_ms"]))
+        self.scrubber.set_frames(frames, chosen["offset_ms"])
+        self._show_frame(chosen["path"], chosen["offset_ms"])
 
     def _show_frame(self, path: str, offset_ms: float) -> None:
         off = float(offset_ms)
@@ -493,6 +508,23 @@ class ReviewScreen(QWidget):
         """Save the selected frame, then move focus to the next crossing's bow."""
         self._save_and_advance()
 
+    def _step_frame(self, delta: int) -> None:
+        """Step the scrubber from a bow field (Shift+←/→), keeping focus there."""
+        self.scrubber.step(delta)
+        f = self.scrubber.selected_frame()
+        if f:
+            self._show_frame(f["path"], f["offset_ms"])
+
+    def _select_step(self, delta: int) -> None:
+        """Move the selection from a bow field (↑/↓), landing in the new bow."""
+        if not self._captures:
+            return
+        idx = next((i for i, c in enumerate(self._captures)
+                    if c["sequence"] == self._selected_seq), 0)
+        seq = self._captures[(idx + delta) % len(self._captures)]["sequence"]
+        self._select(seq)
+        self.list.focus_bow(seq)
+
     def _save_and_focus_bow(self) -> None:
         """Promote the selected frame, then focus the current crossing's bow."""
         self._commit_selected_frame()
@@ -521,4 +553,6 @@ class ReviewScreen(QWidget):
             if c["id"] == cap["id"]:
                 c["primary_image"] = path
         self.list.update_thumb(cap["sequence"], str(self.data_root / path))
+        self.saved_lbl.setText("saved")
+        self._saved_timer.start(1800)
         return True
