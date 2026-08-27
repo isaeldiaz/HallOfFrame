@@ -16,6 +16,9 @@ silences them while REVIEW is on screen and while a text field has focus.
 """
 from __future__ import annotations
 
+import datetime
+import time
+
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 
 from . import styles
 from .crossing_list import ReviewList
+from ..export import local_hms
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
 # flag, bow field), but resizeEvent() keeps it under a share of the screen: a
@@ -199,6 +203,7 @@ class ReviewScreen(QWidget):
         self._selected_seq: int | None = None
         self._frame_paths: dict[int, list] = {}  # capture_id -> [frame dicts]
         self.panel: QWidget | None = None
+        self._t0_wall: float | None = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -229,6 +234,30 @@ class ReviewScreen(QWidget):
         step_hint.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:15px;")
         header.addWidget(step_hint)
         lv.addLayout(header)
+
+        start_row = QHBoxLayout()
+        start_row.setSpacing(10)
+        start_cap = QLabel("START")
+        start_cap.setStyleSheet(
+            f"color:{styles.TEXT_FAINT}; font-size:14px;"
+            " letter-spacing:.12em; text-transform:uppercase;")
+        start_row.addWidget(start_cap)
+        self.start_edit = QLineEdit()
+        self.start_edit.setProperty("mono", True)
+        self.start_edit.setFixedWidth(140)
+        self.start_edit.setMaxLength(8)
+        self.start_edit.setPlaceholderText("HH:MM:SS")
+        self.start_edit.setStyleSheet(
+            f"font-family:'{styles.FONT_MONO}'; font-size:20px;"
+            f" color:{styles.TEXT_PRIMARY}; background:{styles.PANEL};"
+            f" border:1px solid {styles.DIVIDER}; padding:4px 8px;")
+        self.start_edit.editingFinished.connect(self._save_start_time)
+        start_row.addWidget(self.start_edit)
+        start_hint = QLabel("wall-clock start · shifts crossing times")
+        start_hint.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:14px;")
+        start_row.addWidget(start_hint)
+        start_row.addStretch(1)
+        lv.addLayout(start_row)
 
         self.photo = _Photo()
         lv.addWidget(self.photo, 1)
@@ -285,6 +314,10 @@ class ReviewScreen(QWidget):
         self._captures = [dict(c) for c in
                           self.controller.storage.captures_for_race(self.race_id)
                           if not c["deleted"]]
+        row = self.controller.storage.get_race(self.race_id)
+        self._t0_wall = row["t0_wall"] if row else None
+        self.start_edit.setText(
+            local_hms(self._t0_wall) if self._t0_wall is not None else "")
         self.list.clear()
         for c in self._captures:
             self.list.add({
@@ -350,6 +383,31 @@ class ReviewScreen(QWidget):
         self.photo.set_frame(QPixmap.fromImage(img))
 
     # --- persistence ------------------------------------------------------
+    def _save_start_time(self) -> None:
+        """Commit the edited wall-clock start time, shifting crossing times."""
+        text = self.start_edit.text().strip()
+        parts = text.split(":")
+        if len(parts) != 3:
+            self.start_edit.setText(local_hms(self._t0_wall)
+                                    if self._t0_wall is not None else "")
+            return
+        try:
+            hh, mm, ss = (int(p) for p in parts)
+            if not (0 <= hh < 24 and 0 <= mm < 60 and 0 <= ss < 60):
+                raise ValueError
+        except ValueError:
+            self.start_edit.setText(local_hms(self._t0_wall)
+                                    if self._t0_wall is not None else "")
+            return
+        base = datetime.datetime.fromtimestamp(self._t0_wall or time.time()).date()
+        new = datetime.datetime.combine(
+            base, datetime.time(hh, mm, ss)).timestamp()
+        if self._t0_wall is not None and self.controller.set_start_time(
+                self.race_id, new):
+            self._t0_wall = new
+        self.start_edit.setText(local_hms(self._t0_wall)
+                                if self._t0_wall is not None else "")
+
     def _bow_edited(self, sequence: int, value: str) -> None:
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
         if cap:

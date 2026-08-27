@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from ..controller import CaptureController, calibration_status
-from ..export import clipboard_data, export_all_html
+from ..export import clipboard_data, export_all_html, local_hms
 from ..framebuffer import FrameBuffer
 from ..races import (RaceInfo, RosterLoad, _cell, format_display, load_races,
                      race_key, read_rows, skip_race, write_example)
@@ -503,11 +503,16 @@ class MainWindow(QMainWindow):
         self._race_over_race_id = race_id
         self._reviewing = False
         caps = self.controller.storage.captures_for_race(race_id)
-        self.race_over.set_summary(list(caps))
+        self.race_over.set_summary(list(caps), self._start_text(race_id))
         self._advance_race_default = True
         self.ready.reset_provisional()
         self._refresh_race_selector()
         self._recompute_state()
+
+    def _start_text(self, race_id: int) -> str:
+        row = self.controller.storage.get_race(race_id)
+        t0_wall = row["t0_wall"] if row else None
+        return local_hms(t0_wall) if t0_wall is not None else "—"
 
     def on_capture(self, cap) -> None:
         primary = getattr(cap, "primary_image", None)
@@ -610,6 +615,10 @@ class MainWindow(QMainWindow):
 
     def _close_review(self) -> None:
         self._reviewing = False
+        if self._race_over and self._race_over_race_id is not None:
+            race_id = self._race_over_race_id
+            caps = self.controller.storage.captures_for_race(race_id)
+            self.race_over.set_summary(list(caps), self._start_text(race_id))
         self._recompute_state()
 
     def _current_race_id(self) -> int | None:
@@ -670,7 +679,7 @@ class MainWindow(QMainWindow):
         self._race_over = True
         self._race_over_race_id = target["id"]
         caps = self.controller.storage.captures_for_race(target["id"])
-        self.race_over.set_summary(list(caps))
+        self.race_over.set_summary(list(caps), self._start_text(target["id"]))
         self._recompute_state()
 
     def _on_e(self) -> None:

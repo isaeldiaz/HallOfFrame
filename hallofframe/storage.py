@@ -211,6 +211,25 @@ class Storage:
                 (_utcnow(), t_end_mono, race_id))
             self._conn.commit()
 
+    def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
+        """Set the race's wall-clock start time and shift every crossing's
+        wall-clock time by the same delta. Relative (elapsed) times and the
+        attached images are untouched. Returns False if the race is missing or
+        has no recorded start time."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT t0_wall FROM race WHERE id=?", (race_id,)).fetchone()
+            if row is None or row["t0_wall"] is None:
+                return False
+            delta = new_t0_wall - row["t0_wall"]
+            self._conn.execute(
+                "UPDATE race SET t0_wall=? WHERE id=?", (new_t0_wall, race_id))
+            self._conn.execute(
+                "UPDATE capture SET t_press_wall = t_press_wall + ? WHERE race_id=?",
+                (delta, race_id))
+            self._conn.commit()
+            return True
+
     def mark_race_reconstructed(self, race_id: int, t0_reconstructed_mono: float) -> None:
         with self._lock:
             self._conn.execute(

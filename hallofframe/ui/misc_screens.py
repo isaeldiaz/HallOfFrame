@@ -59,7 +59,7 @@ class RaceOverScreen(QWidget):
         row.setSpacing(56)
         row.addStretch(1)
         self._stats: dict[str, QLabel] = {}
-        for label in ("Crossings", "First", "Last", "Flagged"):
+        for label in ("Start", "Crossings", "First", "Last", "Flagged"):
             col = QVBoxLayout()
             col.setSpacing(8)
             cap = QLabel(label)
@@ -80,7 +80,8 @@ class RaceOverScreen(QWidget):
         lay.addSpacing(30)
         lay.addStretch(1)
 
-    def set_summary(self, captures: list[dict]) -> None:
+    def set_summary(self, captures: list[dict], start_text: str = "—") -> None:
+        self._stats["Start"].setText(start_text)
         self._stats["Crossings"].setText(str(len(captures)))
         if captures:
             self._stats["First"].setText(format_elapsed(captures[0]["elapsed_s"]))

@@ -387,6 +387,11 @@ class CaptureController:
     def set_bow_number(self, capture_id: int, value: str | None) -> None:
         self.storage.update_capture(capture_id, bow_number=value)
 
+    def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
+        """Set the race's wall-clock start time (gun), shifting every crossing's
+        wall-clock time by the same delta. Elapsed times are unchanged."""
+        return self.storage.set_start_time(race_id, new_t0_wall)
+
     def set_primary(self, capture_id: int, frame_id: int) -> str | None:
         """Promote *frame_id* to the capture's primary photo (operator review).
 
