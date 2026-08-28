@@ -25,10 +25,12 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
 from .. import __version__
+from ..buildinfo import build_stamp
 from . import styles
 from .widgets import KeyCap
 
 CONTACT = "isael.diaz@gmail.com"
+REPOSITORY = "https://github.com/isaeldiaz/HallOfFrame"
 COPYRIGHT = "© 2026 Isael Diaz. All rights reserved."
 THIRD_PARTY = ("PySide6 (LGPL-3.0) · IBM Plex Sans & Mono (SIL OFL 1.1) · "
                "python-evdev (revised BSD) · Pillow (MIT-CMU)")
@@ -56,19 +58,6 @@ def _pkg_version(name: str) -> str:
         return version(name)
     except Exception:
         return "not installed"
-
-
-def build_stamp() -> str:
-    """Commit + date written by the packaging step, or an honest dash.
-
-    ``hallofframe/_build.py`` is generated at install time (INSTALL.md) with
-    ``COMMIT`` and ``DATE``; a source checkout has no such file.
-    """
-    try:
-        from .._build import COMMIT, DATE  # type: ignore
-        return f"{COMMIT[:7]} · {DATE}"
-    except Exception:
-        return "source checkout"
 
 
 def environment_rows(config) -> list[tuple[str, str]]:
@@ -268,6 +257,19 @@ class AboutOverlay(QWidget):
             block.addWidget(_caption(label))
             block.addWidget(widget)
             lay.addLayout(block)
+
+        repo = QVBoxLayout()
+        repo.setSpacing(8)
+        repo.addWidget(_caption("Source code"))
+        link = QLabel(
+            f'<a href="{REPOSITORY}" style="color:{styles.BLUE_TEXT};'
+            'text-decoration:none">github.com/isaeldiaz/HallOfFrame</a>')
+        link.setTextFormat(Qt.TextFormat.RichText)
+        link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        link.setOpenExternalLinks(True)
+        link.setStyleSheet(f"font-family:'{styles.FONT_MONO}'; font-size:22px;")
+        repo.addWidget(link)
+        lay.addLayout(repo)
 
         lay.addStretch(1)
         return col

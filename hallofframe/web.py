@@ -34,15 +34,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
+from . import __version__
+from .buildinfo import build_stamp
 from .config import load_config
 from .export import (_C, _MONO, _SANS, _esc, clipboard_data, local_hms,
                      _race_html)
 from .storage import Storage
 
+# Version + commit/date, read once at import. About the code serving this page.
+_APP_VERSION = __version__
+_BUILD_STAMP = build_stamp()
+
 _IMG_TYPES = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
     ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
 }
+
+_REPOSITORY = "https://github.com/isaeldiaz/HallOfFrame"
 
 # Wires every [data-excel] button to copy that race to the clipboard as the
 # TSV + HTML-table pair (the same payload the review window copies), so pasting
@@ -113,6 +121,17 @@ def resolve_image_file(data_root: Path, rel: str) -> Path | None:
     if not target.is_relative_to(root) or not target.is_file():
         return None
     return target
+
+
+def _about_footer() -> str:
+    """Small About line for page footers: version + the commit/date that built
+    the code serving the page."""
+    return (
+        f'<span style="font-family:{_MONO}">HallOfFrame v{_esc(_APP_VERSION)}'
+        f" · {_esc(_BUILD_STAMP)}</span>"
+        f' · <a href="{_esc(_REPOSITORY)}" style="color:{_C["blue"]};'
+        'text-decoration:none">github.com/isaeldiaz/HallOfFrame</a>'
+    )
 
 
 def build_index(storage: Storage) -> str:
@@ -186,7 +205,8 @@ def build_index(storage: Storage) -> str:
         f'<footer style="padding:18px 40px 26px;border-top:1px solid '
         f'{_C["panel_border"]};background:{_C["panel"]};font-size:12px;'
         f'color:{_C["faint"]}">Copy table copies a race to the clipboard — paste '
-        "it into a spreadsheet to keep the column layout.</footer>"
+        "it into a spreadsheet to keep the column layout."
+        f" · {_about_footer()}</footer>"
         "</div>"
         f"<script>{_COPY_JS}</script>"
         "</body>\n</html>\n"
@@ -221,7 +241,11 @@ def build_race_page(storage: Storage, race_id: int) -> str | None:
         f'letter-spacing:.08em;color:{_C["blue"]}">{_esc(event)}</span>'
         "</header>"
         '<main style="padding:0 48px 20px">'
-        f"{body}</main></div>"
+        f"{body}</main>"
+        f'<footer style="padding:18px 48px 26px;border-top:1px solid '
+        f'{_C["panel_border"]};background:{_C["panel"]};font-size:12px;'
+        f'color:{_C["faint"]}">{_about_footer()}</footer>'
+        "</div>"
         f"<script>{_COPY_JS}</script>"
         "</body>\n</html>\n"
     )
