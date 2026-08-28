@@ -116,10 +116,12 @@ class TestExport(unittest.TestCase):
         self.assertEqual(lines[2], "Category\tMen under 18, single, final")
         self.assertRegex(lines[3], r"^Gun start\t\d{2}:\d{2}:\d{2}$")
         self.assertEqual(lines[4],
-                         "Elapsed Time\tBow number\tnotes")
-        # data rows sorted fastest -> slowest by elapsed
-        self.assertEqual(lines[5].split("\t")[1], "04")
-        self.assertEqual(lines[6].split("\t")[1], "09")
+                         "Position\tElapsed Time\tBow number\tnotes")
+        # data rows sorted fastest -> slowest by elapsed, with position 1..n
+        self.assertEqual(lines[5].split("\t")[0], "1")
+        self.assertEqual(lines[5].split("\t")[2], "04")
+        self.assertEqual(lines[6].split("\t")[0], "2")
+        self.assertEqual(lines[6].split("\t")[2], "09")
         # html form also produced
         self.assertIn("<table>", markup)
 
