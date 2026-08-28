@@ -191,6 +191,22 @@ class TestController(Base):
         # nothing else touched
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
 
+    def test_update_crossing_time_recomputes_press_timestamps(self):
+        seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        time.sleep(0.1)
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        t0_wall = self.storage.get_race(race_id)["t0_wall"]
+
+        self.assertTrue(self.controller.update_crossing_time(cap_id, 12.345))
+        row = self.storage.capture(cap_id)
+        self.assertAlmostEqual(row["elapsed_s"], 12.345, places=3)
+        # derived timestamps stay consistent with the race's origin
+        self.assertAlmostEqual(row["t_press"], t0 + 12.345, places=3)
+        self.assertAlmostEqual(row["t_press_wall"], t0_wall + 12.345, places=3)
+
     def test_unlisted_race_creates_provisional_key(self):
         # WP7: an unlisted race is created with a timestamp name and null
         # race_no/heat_no, identified once afterwards in review.

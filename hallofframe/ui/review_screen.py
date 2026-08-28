@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 
 from . import styles
 from .crossing_list import ReviewList
-from ..export import local_hms
+from ..export import local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
 # flag, bow field), but resizeEvent() keeps it under a share of the screen: a
@@ -299,6 +299,7 @@ class ReviewScreen(QWidget):
         right.setStyleSheet(f"border-left:1px solid {styles.PANEL_BORDER};")
         self.list = ReviewList()
         self.list.bow_edited.connect(self._bow_edited)
+        self.list.time_edited.connect(self._time_edited)
         self.list.delete_requested.connect(self._delete)
         self.list.selection_changed.connect(self._select)
         self.list.advance_requested.connect(self._advance)
@@ -427,6 +428,19 @@ class ReviewScreen(QWidget):
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
         if cap:
             self.controller.set_bow_number(cap["id"], value or None)
+
+    def _time_edited(self, sequence: int, raw: str) -> None:
+        """Parse and persist an edited elapsed time; revert invalid input."""
+        cap = next((c for c in self._captures if c["sequence"] == sequence), None)
+        if cap is None:
+            return
+        elapsed = parse_elapsed(raw)
+        if elapsed is None:
+            self.list.refresh_time(sequence, cap["elapsed_s"])
+            return
+        if self.controller.update_crossing_time(cap["id"], elapsed):
+            cap["elapsed_s"] = elapsed
+            self.list.refresh_time(sequence, elapsed)
 
     def _delete(self, sequence: int) -> None:
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)

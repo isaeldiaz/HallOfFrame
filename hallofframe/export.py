@@ -33,6 +33,36 @@ def format_elapsed(elapsed_s: float) -> str:
     return f"{minutes}:{seconds:02d}.{millis:03d}"
 
 
+def parse_elapsed(text: str) -> float | None:
+    """Parse an elapsed-time string (the inverse of :func:`format_elapsed`).
+
+    Accepts ``[M:]SS[.mmm]`` — e.g. ``6:12.483``, ``12.5``, ``:45``. Returns the
+    elapsed seconds, or None if the text is not a valid elapsed time.
+    """
+    t = text.strip()
+    if not t:
+        return None
+    neg = t.startswith("-")
+    if neg:
+        t = t[1:]
+    had_colon = ":" in t
+    try:
+        if had_colon:
+            minutes, seconds = t.split(":", 1)
+            minutes = int(minutes) if minutes else 0
+        else:
+            minutes, seconds = 0, t
+        seconds = float(seconds)
+    except ValueError:
+        return None
+    if minutes < 0 or seconds < 0:
+        return None
+    if had_colon and seconds >= 60:
+        return None
+    value = minutes * 60.0 + seconds
+    return -value if neg else value
+
+
 def utc_iso(wall_ts: float) -> str:
     dt = datetime.datetime.fromtimestamp(wall_ts, datetime.timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"

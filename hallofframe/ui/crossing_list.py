@@ -151,14 +151,52 @@ class _BowEdit(QLineEdit):
         return super().event(event)
 
 
+class _TimeEdit(_BowEdit):
+    """Editable elapsed-time field (``M:SS.mmm``); commits on editingFinished.
+
+    Reuses ``_BowEdit`` so Tab/Enter advance and Shift+←/→/↑/↓ keep working
+    while the field has focus. The raw text is emitted; the screen owns parsing
+    (via :func:`parse_elapsed`) so invalid input can be reverted there.
+    """
+
+    time_committed = Signal(int, str)  # sequence, raw text
+
+    def __init__(self, sequence, *a, **k):
+        super().__init__(sequence, *a, **k)
+        self.editingFinished.connect(
+            lambda: self.time_committed.emit(self._seq, self.text()))
+
+    def focusInEvent(self, event):  # noqa: N802
+        super().focusInEvent(event)
+        self.selectAll()
+
+
 class _ReviewRow(_RowBase):
-    """A crossing row with an inline bow-number QLineEdit."""
+    """A crossing row with inline bow-number and elapsed-time QLineEdits."""
 
     bow_edited = Signal(int, str)
+    time_edited = Signal(int, str)
 
     def __init__(self, data: dict, thumb_w: int, thumb_h: int, parent=None):
         super().__init__(data, thumb_w, thumb_h, parent)
         self._base_border = "transparent"
+
+        # Replace the read-only time label with an editable field in place.
+        idx = self.lay.indexOf(self.time_lbl)
+        self.time_lbl.deleteLater()
+        self.time_edit = _TimeEdit(data["sequence"], format_elapsed(data["elapsed_s"]))
+        self.time_edit.setFixedWidth(120)
+        self.time_edit.setFixedHeight(46)
+        self.time_edit.setAlignment(Qt.AlignCenter)
+        self.time_edit.time_committed.connect(
+            lambda seq, raw: self.time_edited.emit(seq, raw))
+        self.time_edit.setStyleSheet(
+            f"QLineEdit{{background:#0b0f12; border:1px solid {styles.PANEL_BORDER};"
+            f" border-radius:2px; color:{styles.TEXT_PRIMARY};"
+            f" font-family:'{styles.FONT_MONO}'; font-size:26px; font-weight:500;"
+            " text-align:center; padding:4px;}")
+        self.lay.insertWidget(idx, self.time_edit)
+
         self.bow_edit = _BowEdit(data["sequence"], data.get("bow") or "")
         self.bow_edit.setPlaceholderText("bow")
         self.bow_edit.setFixedWidth(84)
@@ -255,14 +293,15 @@ class CrossingLog(QWidget):
 
 
 class ReviewList(CrossingLog):
-    """Newest-first list with an inline bow field per row and selection."""
+    """Newest-first list with inline bow + time fields and selection."""
 
     bow_edited = Signal(int, str)          # sequence, value
+    time_edited = Signal(int, str)         # sequence, raw elapsed text
     delete_requested = Signal(int)         # sequence
     selection_changed = Signal(int)        # sequence
-    advance_requested = Signal(int)        # sequence (Enter/Tab in bow field)
-    step_frame = Signal(int)               # +1/-1 (Shift+←/→ in bow field)
-    select_step = Signal(int)              # +1/-1 (↑/↓ in bow field)
+    advance_requested = Signal(int)        # sequence (Enter/Tab in a field)
+    step_frame = Signal(int)               # +1/-1 (Shift+←/→ in a field)
+    select_step = Signal(int)              # +1/-1 (↑/↓ in a field)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -275,6 +314,12 @@ class ReviewList(CrossingLog):
             edit.setFocus()
             edit.selectAll()
 
+    def refresh_time(self, sequence: int, elapsed_s: float) -> None:
+        """Reset a row's time field to the stored value (after commit/revert)."""
+        row = self._rows.get(sequence)
+        if isinstance(row, _ReviewRow):
+            row.time_edit.setText(format_elapsed(elapsed_s))
+
     def set_selected(self, sequence: int | None) -> None:
         self._selected = sequence
         for seq, row in self._rows.items():
@@ -286,15 +331,22 @@ class ReviewList(CrossingLog):
     def add(self, data: dict) -> None:
         row = _ReviewRow(data, 92, 58, self)
         row.bow_edited.connect(self._on_bow_edited)
+        row.time_edited.connect(self._on_time_edited)
         row.bow_edit.advance.connect(self.advance_requested)
         row.bow_edit.step_frame.connect(self.step_frame)
         row.bow_edit.select_step.connect(self.select_step)
+        row.time_edit.advance.connect(self.advance_requested)
+        row.time_edit.step_frame.connect(self.step_frame)
+        row.time_edit.select_step.connect(self.select_step)
         self._edits[data["sequence"]] = row.bow_edit
         self._rows[data["sequence"]] = row
         self._rebuild()
 
     def _on_bow_edited(self, seq: int, value: str) -> None:
         self.bow_edited.emit(seq, value)
+
+    def _on_time_edited(self, seq: int, value: str) -> None:
+        self.time_edited.emit(seq, value)
 
     def _input_style(self, selected: bool) -> str:
         border = styles.BLUE if selected else styles.PANEL_BORDER

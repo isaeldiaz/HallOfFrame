@@ -388,6 +388,10 @@ class CaptureController:
     def set_bow_number(self, capture_id: int, value: str | None) -> None:
         self.storage.update_capture(capture_id, bow_number=value)
 
+    def update_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
+        """Rewrite a crossing's elapsed time (and derived press timestamps)."""
+        return self.storage.set_crossing_time(capture_id, elapsed_s)
+
     def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
         """Set the race's wall-clock start time (gun), shifting every crossing's
         wall-clock time by the same delta. Elapsed times are unchanged."""

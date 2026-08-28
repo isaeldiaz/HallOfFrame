@@ -145,14 +145,14 @@ class TestReviewScreen(unittest.TestCase):
                 self.win.minimumSizeHint().width(), SCREEN_W,
                 f"window minimum exceeds the screen in {state.name}")
 
-    def test_crossing_list_and_bow_fields_are_on_screen(self):
+    def test_crossing_list_and_edit_fields_are_on_screen(self):
         screen = self.review()
         self.assertLessEqual(self.right_edge(screen.panel), SCREEN_W)
         edits = screen.list.findChildren(QLineEdit)
-        self.assertEqual(len(edits), 3, "one bow field per crossing")
+        self.assertEqual(len(edits), 6, "a time and a bow field per crossing")
         for edit in edits:
             self.assertLessEqual(self.right_edge(edit), SCREEN_W,
-                                 "bow field is off the right edge of the screen")
+                                 "edit field is off the right edge of the screen")
             self.assertTrue(edit.isVisible())
 
     def test_photo_is_scaled_to_the_pane_it_ends_up_in(self):
@@ -305,6 +305,45 @@ class TestReviewScreen(unittest.TestCase):
         row = next(c for c in screen._captures
                    if c["id"] == screen._current_capture["id"])
         self.assertTrue(row["primary_image"])
+
+    # --- 5. editing a crossing time --------------------------------------
+    def times(self):
+        return {c["sequence"]: c["elapsed_s"]
+                for c in self.storage.captures_for_race(self.race_id)}
+
+    def test_time_field_edits_and_persists(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        te = screen.list._rows[seq].time_edit
+        te.setFocus()
+        te.clear()
+        for ch in "99.500":
+            key = Qt.Key_Period if ch == "." else getattr(Qt, f"Key_{ch}")
+            self.app.sendEvent(te, QKeyEvent(
+                QEvent.KeyPress, key, Qt.NoModifier, ch))
+        self.app.processEvents()
+        self.key(Qt.Key_Return)          # commits via editingFinished + advances
+        self.assertAlmostEqual(self.times()[seq], 99.5, places=3,
+                               msg="edited time was not persisted")
+
+    def test_invalid_time_is_reverted(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        before = self.times()[seq]
+        te = screen.list._rows[seq].time_edit
+        te.setFocus()
+        te.clear()
+        for ch in "ABC":
+            self.app.sendEvent(te, QKeyEvent(
+                QEvent.KeyPress, getattr(Qt, f"Key_{ch}"), Qt.NoModifier, ch.lower()))
+        self.app.processEvents()
+        self.key(Qt.Key_Return)
+        self.assertEqual(self.times()[seq], before,
+                         "an invalid edit must not change the stored time")
 
 
 if __name__ == "__main__":

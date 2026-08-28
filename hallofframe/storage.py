@@ -293,6 +293,31 @@ class Storage:
                 f"UPDATE capture SET {', '.join(sets)} WHERE id=?", vals)
             self._conn.commit()
 
+    def set_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
+        """Rewrite a crossing's elapsed time and the derived press timestamps.
+
+        ``elapsed_s`` is the source of truth: ``t_press`` and ``t_press_wall``
+        are recomputed from the race's ``t0_monotonic``/``t0_wall`` so all three
+        stay mutually consistent. Returns False if the capture or its race's
+        monotonic origin is missing (e.g. a reconstructed race without a t0).
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT c.race_id, r.t0_monotonic, r.t0_wall FROM capture c "
+                "JOIN race r ON r.id = c.race_id WHERE c.id = ?",
+                (capture_id,)).fetchone()
+            if row is None or row["t0_monotonic"] is None:
+                return False
+            t_press = row["t0_monotonic"] + elapsed_s
+            t_press_wall = (row["t0_wall"] + elapsed_s
+                            if row["t0_wall"] is not None else elapsed_s)
+            self._conn.execute(
+                "UPDATE capture SET elapsed_s=?, t_press=?, t_press_wall=? "
+                "WHERE id=?",
+                (elapsed_s, t_press, t_press_wall, capture_id))
+            self._conn.commit()
+            return True
+
     def capture(self, capture_id: int):
         with self._lock:
             return self._conn.execute(

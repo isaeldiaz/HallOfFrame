@@ -6,7 +6,7 @@ from pathlib import Path
 
 from hallofframe.config import Config
 from hallofframe.export import (clipboard_data, export_all_csv, export_all_html,
-                                export_csv, format_elapsed, utc_iso)
+                                export_csv, format_elapsed, parse_elapsed, utc_iso)
 from hallofframe.storage import Storage
 
 
@@ -34,6 +34,16 @@ class TestExport(unittest.TestCase):
         self.assertEqual(format_elapsed(0.0), "0:00.000")
         self.assertEqual(format_elapsed(372.483), "6:12.483")
         self.assertEqual(format_elapsed(60.0), "1:00.000")
+
+    def test_parse_elapsed(self):
+        self.assertAlmostEqual(parse_elapsed("6:12.483"), 372.483, places=3)
+        self.assertAlmostEqual(parse_elapsed("12.5"), 12.5)
+        self.assertAlmostEqual(parse_elapsed("99.500"), 99.5)
+        self.assertAlmostEqual(parse_elapsed(":45"), 45.0)
+        self.assertAlmostEqual(parse_elapsed("1:00"), 60.0)
+        self.assertAlmostEqual(parse_elapsed("-1:00.500"), -60.5)
+        for bad in ("", "abc", "1:99", "6:12:x", "1:2:3"):
+            self.assertIsNone(parse_elapsed(bad), f"{bad!r} must be rejected")
 
     def test_columns_and_order(self):
         self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 1.0, 0.0,
