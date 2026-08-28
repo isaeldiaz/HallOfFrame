@@ -16,14 +16,16 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
 
 from .. import calibration as cal
 from ..framebuffer import FrameBuffer
+from . import styles
 
-_SAMPLES = 20
+_SAMPLES = 40
+_MIN_READABLE = 8
 
 
 class FullScreenCounter(QWidget):
     """Large high-contrast monotonic-milliseconds counter (spec §5.5 step 1)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, tick_ms: int = 16, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(
@@ -45,12 +47,13 @@ class FullScreenCounter(QWidget):
         lay.setContentsMargins(0, 0, 0, 60)
         # Show time.monotonic() in ms (spec §5.5) — the SAME domain as
         # Frame.t_recv, so L = t_recv - T_shown is meaningful. (ms since boot.)
-        # Update at the panel rate (~16 ms / 60 Hz), not 5 ms: digits that change
-        # faster than the camera exposure smear (the fast ms digits blur while
-        # the stable high digits stay crisp). One change per exposure frame.
+        # Update once per camera frame period (tick_ms), NOT faster: digits that
+        # change more than once within a single exposure smear (the fast ms
+        # digits blur while the stable high digits stay crisp). One change per
+        # exposure frame (spec §5.5). tick_ms should be ~1000 / camera_fps.
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(16)
+        self._timer.start(tick_ms)
 
     def present(self) -> None:
         """Full-screen, front, focused. Do NOT call show() again afterwards —
@@ -87,20 +90,31 @@ class CalibrationDialog(QDialog):
         self.config = config
         self.captured: list = []
 
+        # The app-wide stylesheet sets light text on every widget, but QDialog
+        # keeps the platform's light background by default — text would be
+        # light-on-light. Force the dark console background here.
+        self.setStyleSheet(f"QWidget{{ background:{styles.BG}; color:{styles.TEXT_PRIMARY}; }}")
         self.setWindowTitle("Calibrate latency")
         lay = QVBoxLayout(self)
         hint = QLabel(
             "Point the phone at the full-screen counter at ~0.5 m so it fills "
             "the frame, then press Capture. Use the same lens/resolution/fps "
             "the race will use, over a HIGH-ENTROPY background (spec §5.5).\n\n"
-            "After capture, the 20 saved images are shown below. For each image, "
+            "After capture, the saved images are shown below. For each image, "
             "read the NUMBER on the counter visible in that image (an 8-digit "
-            "millisecond value) and type it into the box beside it.")
+            "millisecond value) and type it into the box beside it.\n\n"
+            "A rolling counter always blurs the frame whose exposure catches a "
+            "digit transition — that is normal. Only the low digit(s) blur; the "
+            "rest stay crisp. Type '?' for any digit you cannot read clearly "
+            "(e.g. 8327093?); the code midpoints it (±5 ms) instead of "
+            "discarding the frame. Leave the box empty if you cannot read it at "
+            "all. At least "
+            f"{_MIN_READABLE} readable images are required.")
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
         row = QHBoxLayout()
-        self.capture_btn = QPushButton("Capture 20 frames")
+        self.capture_btn = QPushButton(f"Capture {_SAMPLES} frames")
         self.capture_btn.clicked.connect(self._capture)
         row.addWidget(self.capture_btn)
         lay.addLayout(row)
@@ -127,7 +141,13 @@ class CalibrationDialog(QDialog):
         # Non-blocking so the full-screen counter actually paints and ticks while
         # the phone films it (spec §5.5). Sample the buffer on a QTimer; each tick
         # must not block the event loop.
-        self.counter = FullScreenCounter()
+        fps = _measure_fps(self.buffer._snapshot())
+        if not fps or fps <= 0:
+            fps = float(self.buffer.assumed_fps or 30)
+        # One counter change per camera frame period keeps the low digits crisp
+        # at any fps (30, 60, ...): tick once per ~frame, not at a fixed 60 Hz.
+        tick_ms = max(1, int(round(1000.0 / fps)))
+        self.counter = FullScreenCounter(tick_ms=tick_ms)
         self.counter.present()
         try:
             self._capture_impl()
@@ -140,13 +160,8 @@ class CalibrationDialog(QDialog):
     def _capture_impl(self) -> None:
         self.captured = []
         self._seen = set()
-        # Frames received at/after this instant are the ones showing the counter.
-        # The 10 s ring buffer also holds older frames from before the counter
-        # appeared — those must NOT be sampled (§5.5).
-        self._t0_capture = time.monotonic()
         self.capture_btn.setEnabled(False)
         self.status.setText("Capturing... keep the phone on the counter.")
-        self._deadline = time.monotonic() + 10.0
         self._cap_timer = QTimer(self)
         self._cap_timer.timeout.connect(self._sample)
         # Hide the modal dialog so the full-screen counter is the only thing on
@@ -156,8 +171,16 @@ class CalibrationDialog(QDialog):
         # tick (interval 0) accesses the shared FrameBuffer while the full-screen
         # counter is still being mapped, which prevents the counter window from
         # ever appearing when the reader thread is live. Start only after the
-        # 1.5 s aiming delay so the counter is on screen first.
-        QTimer.singleShot(1500, lambda: self._cap_timer.start(30))
+        # aiming delay so the counter is on screen first — AND set the sample
+        # start instant there too, so frames captured during the window/app→
+        # counter transition (which show a mix of the app and counter) are NOT
+        # sampled (§5.5). Only frames received after the counter is fully up count.
+        QTimer.singleShot(1500, self._begin_capture)
+
+    def _begin_capture(self) -> None:
+        self._t0_capture = time.monotonic()
+        self._deadline = self._t0_capture + 10.0
+        self._cap_timer.start(30)
 
     def _sample(self) -> None:
         span = self.buffer.span()
@@ -209,7 +232,9 @@ class CalibrationDialog(QDialog):
         self.status.setText(
             f"Captured {len(frames)} frames at "
             f"{int(self.buffer.assumed_fps)} fps nominal. For each image, read "
-            "the 8-digit counter number and type it into the box beside it.")
+            "the 8-digit counter number and type it into the box beside it. "
+            f"Enter at least {_MIN_READABLE}; use '?' for a blurred digit, or "
+            "leave blank to skip a frame you cannot read.")
         # Clear any previous entries.
         while self.entries_layout.count():
             item = self.entries_layout.takeAt(0)
@@ -229,7 +254,7 @@ class CalibrationDialog(QDialog):
             right = QVBoxLayout()
             right.addWidget(QLabel(f"Image {i}: counter shown (ms)"))
             fld = QLineEdit()
-            fld.setPlaceholderText("e.g. 83270995")
+            fld.setPlaceholderText("e.g. 83270995  or  8327093?")
             right.addWidget(fld)
             right.addStretch(1)
             lay_row.addLayout(right)
@@ -240,17 +265,28 @@ class CalibrationDialog(QDialog):
 
     def _finish(self) -> None:
         values = []
-        for fld in self.value_fields:
+        frames = []
+        for fld, frame in zip(self.value_fields, self.captured):
             text = fld.text().strip()
             if not text:
-                QMessageBox.warning(self, "Calibration", "All fields required.")
+                continue  # skip unreadable (fully blurred) frames
+            # '?' marks a blurred digit (only the low digits blur); midpoint it.
+            midpoint = cal.readable_value(text)
+            if midpoint is None:
+                QMessageBox.warning(
+                    self, "Calibration",
+                    f"Invalid entry: {text!r}. Use 8 digits; '?' for a blurred "
+                    "digit (e.g. 8327093?).")
                 return
-            try:
-                values.append(float(text))
-            except ValueError:
-                QMessageBox.warning(self, "Calibration", f"Not a number: {text!r}")
-                return
-        result = cal.compute_latency(self.captured, values)
+            values.append(midpoint)
+            frames.append(frame)
+        if len(values) < _MIN_READABLE:
+            QMessageBox.warning(
+                self, "Calibration",
+                f"Need at least {_MIN_READABLE} readable frames, "
+                f"got {len(values)}. Re-capture or enter the readable ones.")
+            return
+        result = cal.compute_latency(frames, values)
         resolution, mean_bytes = _measure_format(self.captured)
         cal.write_calibration(
             self.data_root, result["latency_median_ms"], result["latency_iqr_ms"],
@@ -259,7 +295,8 @@ class CalibrationDialog(QDialog):
             mean_frame_bytes=mean_bytes)
         QMessageBox.information(
             self, "Calibration",
-            f"median L = {result['latency_median_ms']:.1f} ms\n"
+            f"median L = {result['latency_median_ms']:.1f} ms  "
+            f"(n={result['n']})\n"
             f"IQR      = {result['latency_iqr_ms']:.1f} ms\n\n"
             "Latency written to calibration.json.")
         self.accept()
