@@ -235,14 +235,18 @@ def run_final_race(config, storage, buffer, controller, *, crossings=8, fps=30,
 
     # The last press's deferred selection fires ~window_after_ms + margin after
     # the commit — and must still land after end_race() (timers are not
-    # cancelled by ending a race). Wait for it with the feeder still running so
-    # the after-window frames exist.
+    # cancelled by ending a race). Wait for it to FULLY complete: the flag is
+    # only finalized once primary_image is set, because _select_images recomputes
+    # image_flag and only then calls set_primary (controller._select_images).
+    # Waiting on the first window frame is racy — it appears while the selection
+    # is still writing frames, before the flag rewrite. The feeder keeps running
+    # so the after-window frames exist.
     last_seq = crossings
     deadline = time.monotonic() + 3.0 + 0.001 * config.section("capture")["window_after_ms"]
     while time.monotonic() < deadline:
         cap = next((c for c in storage.captures_for_race(race_id, include_deleted=True)
                     if c["sequence"] == last_seq), None)
-        if cap is not None and storage.frames_for_capture(cap["id"]):
+        if cap is not None and cap["primary_image"]:
             break
         time.sleep(0.02)
     feeder.stop()

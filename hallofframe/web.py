@@ -136,8 +136,8 @@ def _about_footer() -> str:
 
 def build_index(storage: Storage) -> str:
     """Compact race list: newest first, one row per race with links to the race
-    page and its Excel copy."""
-    races = storage.list_races()  # id DESC (newest first)
+    page and its Excel copy. Only reviewed races are published (spec §6.8)."""
+    races = storage.list_races(reviewed_only=True)  # id DESC (newest first)
     rows = []
     for r in races:
         race = storage.get_race(r["id"])

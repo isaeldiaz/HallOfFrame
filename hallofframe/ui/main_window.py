@@ -616,6 +616,8 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _close_review(self) -> None:
+        if self._review_race_id is not None:
+            self.controller.storage.mark_race_reviewed(self._review_race_id)
         self._reviewing = False
         if self._race_over and self._race_over_race_id is not None:
             race_id = self._race_over_race_id

@@ -16,6 +16,7 @@ class TestWebPages(unittest.TestCase):
         self.race_id = self.storage.create_race(
             "Men under 18, single, final", 1000.0, 1000.0, "direct", 0.0, 0.0,
             "water", 30, race_no="101", heat_no="1")
+        self.storage.mark_race_reviewed(self.race_id)
 
     def tearDown(self):
         self.storage.close()
@@ -44,8 +45,21 @@ class TestWebPages(unittest.TestCase):
         r2 = self.storage.create_race("Heat 2", 5000.0, 5000.0, "direct", 0.0,
                                       0.0, "water", 30, race_no="102",
                                       heat_no="1")
+        self.storage.mark_race_reviewed(r2)
         page = build_index(self.storage)
         self.assertLess(page.index("RACE 102"), page.index("RACE 101"))
+
+    def test_index_hides_unreviewed_races(self):
+        page = build_index(self.storage)
+        self.assertIn("RACE 101", page)
+        unreviewed = self.storage.create_race(
+            "Unreviewed heat", 6000.0, 6000.0, "direct", 0.0, 0.0, "water", 30,
+            race_no="103", heat_no="1")
+        page = build_index(self.storage)
+        self.assertNotIn("RACE 103", page)
+        self.assertNotIn("Unreviewed heat", page)
+        self.storage.mark_race_reviewed(unreviewed)
+        self.assertIn("RACE 103", build_index(self.storage))
 
     def test_race_page_renders_cards_images_and_excel(self):
         self._add_captures()

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS race (
     ended_at          TEXT,
     t_end_monotonic   REAL,
     image_off         INTEGER NOT NULL DEFAULT 0,  -- timing-only race (§6.5)
+    reviewed          INTEGER NOT NULL DEFAULT 0,  -- operator closed review (§6.8)
     CHECK (start_mode   IN ('direct','radio','external')),
     CHECK (viewing_mode IN ('water','screen'))
 );
@@ -109,6 +110,9 @@ class Storage:
             self._conn.execute("ALTER TABLE race ADD COLUMN race_no TEXT")
         if "heat_no" not in cols:
             self._conn.execute("ALTER TABLE race ADD COLUMN heat_no TEXT")
+        if "reviewed" not in cols:
+            self._conn.execute(
+                "ALTER TABLE race ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0")
 
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
@@ -131,10 +135,14 @@ class Storage:
             return self._conn.execute(
                 "SELECT * FROM race WHERE id=?", (race_id,)).fetchone()
 
-    def list_races(self):
+    def list_races(self, reviewed_only: bool = False):
+        """Every race, newest first. With *reviewed_only*, only races whose
+        operator closed review (``reviewed=1``) — the ones the web index shows."""
+        where = " WHERE reviewed=1" if reviewed_only else ""
         with self._lock:
             return self._conn.execute(
-                "SELECT id, name, created_at FROM race ORDER BY id DESC").fetchall()
+                "SELECT id, name, created_at FROM race" + where
+                + " ORDER BY id DESC").fetchall()
 
     def all_races(self):
         """Every race row, oldest first (for a whole-database export)."""
@@ -210,6 +218,14 @@ class Storage:
             self._conn.execute(
                 "UPDATE race SET ended_at=?, t_end_monotonic=? WHERE id=?",
                 (_utcnow(), t_end_mono, race_id))
+            self._conn.commit()
+
+    def mark_race_reviewed(self, race_id: int) -> None:
+        """Flag a race as reviewed once the operator closes its review screen,
+        so the web index publishes only reviewed races (§6.8)."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE race SET reviewed=1 WHERE id=?", (race_id,))
             self._conn.commit()
 
     def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
