@@ -76,6 +76,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "host": "127.0.0.1",
         "port": 8080,
+        "copy_heading": True,  # include the Race ID/Heat/Category/Gun-start block when copying a race table
     },
 }
 

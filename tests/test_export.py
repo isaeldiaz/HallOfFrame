@@ -135,6 +135,21 @@ class TestExport(unittest.TestCase):
         # html form also produced
         self.assertIn("<table>", markup)
 
+    def test_clipboard_heading_omitted_when_disabled(self):
+        self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 3.0, 0.0,
+                                    bow_number="04")
+        tsv, markup = clipboard_data(self.storage, self.race_id,
+                                     include_heading=False)
+        lines = tsv.strip("\r\n").split("\r\n")
+        # only crossing values, no metadata and no column header
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "1\t0:03.000\t04\t")
+        self.assertNotIn("Race ID", tsv)
+        self.assertNotIn("Gun start", tsv)
+        self.assertNotIn("Position", tsv)
+        self.assertNotIn("Elapsed Time", tsv)
+        self.assertNotIn("Bow number", tsv)
+
     def _write_html(self):
         self.storage.insert_capture(self.race_id, 1, 3000.0, 3000.0, 10.0, 0.0,
                                     bow_number="09")

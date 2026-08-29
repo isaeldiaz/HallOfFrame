@@ -254,10 +254,12 @@ def build_race_page(storage: Storage, race_id: int) -> str | None:
 class WebServer(ThreadingHTTPServer):
     """HTTP server carrying shared state (its own read-only Storage)."""
 
-    def __init__(self, server_address, storage: Storage, data_root: Path):
+    def __init__(self, server_address, storage: Storage, data_root: Path,
+                 copy_heading: bool = True):
         super().__init__(server_address, WebHandler)
         self.storage = storage
         self.data_root = data_root
+        self.copy_heading = copy_heading
 
 
 class WebHandler(BaseHTTPRequestHandler):
@@ -326,7 +328,8 @@ class WebHandler(BaseHTTPRequestHandler):
         if storage.get_race(race_id) is None:
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
-        tsv, markup = clipboard_data(storage, race_id)
+        tsv, markup = clipboard_data(storage, race_id,
+                                     self.server.copy_heading)
         if download:
             self._send(200, markup.encode("utf-8"),
                        "application/vnd.ms-excel; charset=utf-8",
@@ -367,7 +370,9 @@ def main(argv=None) -> int:
 
     host = str(web.get("host", "127.0.0.1"))
     port = int(web.get("port", 8080))
-    server = WebServer((host, port), storage, config.data_root)
+    copy_heading = bool(web.get("copy_heading", True))
+    server = WebServer((host, port), storage, config.data_root,
+                       copy_heading=copy_heading)
     print(f"HallOfFrame results server on http://{host}:{port}/")
     try:
         server.serve_forever()

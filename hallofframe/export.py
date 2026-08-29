@@ -515,16 +515,22 @@ def export_all_html(storage: Storage, out_path: str | Path) -> Path:
     return out_path
 
 
-def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
+def clipboard_data(storage: Storage, race_id: int,
+                   include_heading: bool = True) -> tuple[str, str]:
     """Return (tab_separated, html_table) for pasting into Excel with formatting.
 
-    Layout (one field per cell):
+    Layout (one field per cell), with the heading block first:
       Race ID, race_no
       Heat no, heat_no
       Category, name
       Gun start, HH:MM:SS (local wall-clock time of the gun)
       Position, Elapsed Time, Bow number, notes
       <one row per crossing, fastest to slowest>
+
+    When *include_heading* is False the entire heading is omitted — the four
+    metadata rows (Race ID, Heat no, Category, Gun start) AND the column header
+    (Position, Elapsed Time, Bow number, notes) — leaving only the crossing
+    values (configurable via ``[web] copy_heading``).
     """
     race = storage.get_race(race_id)
     race_no = (race["race_no"] or "") if race else ""
@@ -533,13 +539,15 @@ def clipboard_data(storage: Storage, race_id: int) -> tuple[str, str]:
     t0_wall = (race["t0_wall"] if race and race["t0_wall"] is not None else None)
 
     header = ["Position", "Elapsed Time", "Bow number", "notes"]
-    rows: list[list[str]] = [
-        ["Race ID", race_no],
-        ["Heat no", heat_no],
-        ["Category", name],
-        ["Gun start", local_hms(t0_wall) if t0_wall is not None else ""],
-        header,
-    ]
+    rows: list[list[str]] = []
+    if include_heading:
+        rows = [
+            ["Race ID", race_no],
+            ["Heat no", heat_no],
+            ["Category", name],
+            ["Gun start", local_hms(t0_wall) if t0_wall is not None else ""],
+            header,
+        ]
     captures = storage.captures_for_race(race_id, include_deleted=False)
     captures = sorted(captures, key=lambda c: c["elapsed_s"])
     for pos, c in enumerate(captures, start=1):
