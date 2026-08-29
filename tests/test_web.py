@@ -70,7 +70,7 @@ class TestWebPages(unittest.TestCase):
         self.assertIn('src="/img/races/101%20H1/c.jpg"', page)
         self.assertNotIn(str(self.data_root), page)
         # fastest first: bow 04 before bow 09
-        self.assertLess(page.index("0:03.000"), page.index("0:10.000"))
+        self.assertLess(page.index("0:03.00"), page.index("0:10.00"))
         # Copy as Excel is a clipboard-copy button wired to the JSON payload
         self.assertIn(f'data-excel="{self.race_id}"', page)
         self.assertIn("Copy as Excel", page)

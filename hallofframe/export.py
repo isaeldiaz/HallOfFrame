@@ -2,8 +2,8 @@
 
 ``export_csv`` writes a flat table (one row per crossing): race_no, heat_no,
 name, sequence, bow_number, elapsed_seconds, elapsed_formatted,
-wall_clock_utc, image_file, image_flag, notes. Elapsed renders as M:SS.mmm with
-three decimals. Soft-deleted rows are excluded.
+wall_clock_utc, image_file, image_flag, notes. Elapsed renders as M:SS.cc with
+two decimals. Soft-deleted rows are excluded.
 
 ``export_all_html`` writes the whole database as one self-contained HTML page —
 a card per crossing showing the captured frame itself. Images are linked by the
@@ -26,17 +26,17 @@ from .storage import Storage
 
 
 def format_elapsed(elapsed_s: float) -> str:
-    """M:SS.mmm e.g. 6:12.483."""
-    ms = round(elapsed_s * 1000.0)
-    minutes, rem = divmod(ms, 60_000)
-    seconds, millis = divmod(rem, 1000)
-    return f"{minutes}:{seconds:02d}.{millis:03d}"
+    """M:SS.cc e.g. 6:12.48 (hundredths of a second)."""
+    cs = round(elapsed_s * 100.0)
+    minutes, rem = divmod(cs, 6000)
+    seconds, centis = divmod(rem, 100)
+    return f"{minutes}:{seconds:02d}.{centis:02d}"
 
 
 def parse_elapsed(text: str) -> float | None:
     """Parse an elapsed-time string (the inverse of :func:`format_elapsed`).
 
-    Accepts ``[M:]SS[.mmm]`` — e.g. ``6:12.483``, ``12.5``, ``:45``. Returns the
+    Accepts ``[M:]SS[.cc]`` — e.g. ``6:12.48``, ``12.5``, ``:45``. Returns the
     elapsed seconds, or None if the text is not a valid elapsed time.
     """
     t = text.strip()

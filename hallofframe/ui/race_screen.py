@@ -16,13 +16,13 @@ from .crossing_list import CrossingLog
 
 
 def fmt_clock(secs: float) -> str:
-    ms = int(secs * 1000)
-    hours, rem = divmod(ms, 3600_000)
-    minutes, rem = divmod(rem, 60_000)
-    seconds, millis = divmod(rem, 1000)
+    cs = int(secs * 100)
+    hours, rem = divmod(cs, 360_000)
+    minutes, rem = divmod(rem, 6_000)
+    seconds, centis = divmod(rem, 100)
     if hours:
-        return f"{hours}:{minutes:02d}:{seconds:02d}.{millis}"
-    return f"{minutes:02d}:{seconds:02d}.{millis}"
+        return f"{hours}:{minutes:02d}:{seconds:02d}.{centis:02d}"
+    return f"{minutes:02d}:{seconds:02d}.{centis:02d}"
 
 
 class LastCapturePanel(QWidget):
