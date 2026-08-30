@@ -561,6 +561,8 @@ class MainWindow(QMainWindow):
         if not self._roster_rows:
             return []
         for row in self._roster_rows[1:]:
+            if not row or not any(_cell(c) for c in row):
+                continue
             r = RaceInfo(race_no=_cell(row[0]),
                          heat_no=_cell(row[1]) if len(row) > 1 else "",
                          name=_cell(row[2]) if len(row) > 2 else "")
@@ -942,6 +944,8 @@ class MainWindow(QMainWindow):
         if not self._roster_rows:
             return keys
         for row in self._roster_rows[1:]:
+            if not row or not any(_cell(c) for c in row):
+                continue
             if len(row) >= 5 and row[4] == "skipped":
                 r = RaceInfo(race_no=_cell(row[0]),
                              heat_no=_cell(row[1]) if len(row) > 1 else "",
