@@ -1724,6 +1724,14 @@ system unreliable on the water.
 
 ## 13. Out of scope (possible future work)
 
+This section records work deliberately outside the current scope. Existing
+candidate ideas are listed first, then two priority tiers derived from
+field feedback (see `FUTURE_IMPROVEMENTS.md`). Items reference the spec sections
+they touch so that implementation can be planned against the constraints already
+locked in here.
+
+### 13.1 Long-standing candidate ideas
+
 - Automatic bow-number recognition (OCR on the saved frames).
 - Automatic crossing detection by motion analysis, removing the operator.
 - Multiple simultaneous cameras (multi-lane finishes).
@@ -1733,6 +1741,101 @@ system unreliable on the water.
 - Photo-finish style line-scan imaging (a fundamentally different, more accurate
   technique — a single-pixel column sampled at high rate — worth considering if
   the tolerance ever tightens below ~50 ms).
+
+### 13.2 Must-have (from field feedback)
+
+- **Drive the finish horn from the app.** Sync crossing capture with horn
+  activation. Today the horn is a 12 V unit triggered manually for ~250 ms. The
+  goal is to combine the "honk" with the timer stop so the operator gets both
+  from one action. This is exploratory: no hardware interface is settled yet
+  (USB relay, GPIO, etc.). A delay of up to ~500 ms from the capture to the
+  horn beeping is acceptable, so it must not live on the evdev trigger path —
+  it should be driven asynchronously like the deferred image selection (§6.5).
+
+- **Reverse the capture-list ordering.** §7.3 leaves newest-at-top vs
+  newest-at-bottom configurable; the current default shows crossings slowest
+  (first) to fastest (last) top-to-bottom, which is inverted relative to how
+  results are presented everywhere else in the system. Change the display so the
+  fastest crossing is at the top and the slowest at the bottom, and reconcile
+  the choice with §7.3 so the configurable ordering can't reintroduce the
+  confusion.
+
+- **Insert / remove an arbitrary crossing during review.** Today only the last
+  crossing can be undone (§7.4 `Ctrl+Z`). Generalize this so any specific
+  crossing can be added or removed during review. A new crossing may be cloned
+  from an existing one (moving a copy up/down in the list); the clone inherits
+  its parent's recorded time and primary image, and the copy is then manually
+  adjustable. Because a post-hoc insert changes the sequence but not `t0`,
+  affected crossings keep evdev timestamps; the clone's image can be re-picked
+  from the buffer only if the frames are still resident, otherwise it is marked
+  for manual reassignment.
+
+### 13.3 Nice-to-have (from field feedback)
+
+- **Zoom square / area of interest.** When the app is in the Ready state (no
+  armed race), let the operator draw a square on the live preview to define an
+  area of interest over the whole camera frame. This ROI is a *display* concern
+  only — the stored image file is untouched — and applies everywhere in the main
+  app that shows an image (live preview, capture thumbnails, frame review panel
+  of §7.3). It applies to the **app only**, not the separate web process (§8,
+  `web.py`). Must support a reset back to full frame. Because it is display-only
+  it must not alter what `framebuffer` stores or what is written to disk.
+
+- **Automatic bow-number capture.** Removes the paper-and-pencil step of
+  recording the order in which boat numbers cross. Two candidate mechanisms,
+  not mutually exclusive:
+  - *Audio transcription* — record audio during a short window around each
+    crossing; after the race, transcribe the audio to match spoken numbers to the
+    recorded crossings.
+  - *Keypad crossing capture* — replace the single crossing trigger with a
+    numeric keypad whose individual keys (e.g. 1–6) map to lane numbers. Each
+    crossing is then registered on the lane it crossed and cross-checked against
+    the roster to resolve the boat number. This interacts directly with §6.4's
+    "trigger is global" collision discussion: a dedicated numeric keypad on its
+    own evdev node is already the §6.4 mitigation of choice, so this extends the
+    same hardware instead of adding new requirements.
+
+- **Play crossing images as a sequence.** The web results pages (§8) currently
+  show, for each crossing, its time beside a thumbnail of the saved frame. Add a
+  way to play the saved frames back in crossing order as a movie for a better
+  appreciation of relative positions. Rendering happens server-side or client-
+  side against the already-on-disk per-crossing window frames; it must not
+  perturb the app's evdev timing thread (web is a separate process).
+
+- **Minimize web data usage.** The results server runs on a metered mobile
+  network for many hours, so data transfer should be minimized. Candidate
+  changes, to be considered together with the play-sequence item above:
+  - The main page is text-only; images are sent only when explicitly requested.
+  - Instruct the client to cache responses that have not changed (ETag /
+    Last-Modified + conditional requests) so only changed records are re-sent.
+  This must not add writes on the app's `Storage` — the web process keeps its own
+  read-only SQLite connection (§8).
+
+- **Single image-capture naming from gun start to race end.** Current behaviour
+  stores ±N frames around *each* crossing, which duplicates frames on disk when
+  crossings are close, and makes it impossible to associate an already-stored
+  frame with a crossing added after the race is over. One proposed direction is
+  to start a frame counter at the gun (`t0`), keep on disk the ±N frames around
+  each crossing as today, but name each stored frame by its time-from-gun-start
+  (not by which crossing it belongs to), so a crossing records the frame number
+  at which it was registered. A crossing that falls inside the window of an
+  earlier one then extends that window instead of duplicating frames. This is
+  recorded as **one of several options to explore**, not the endorsed design —
+  the implementer should weigh it against the existing window/framebuffer model
+  (§6.5, §6.3) and §5.4's proximity selection before committing.
+
+- **Fake camera feed from past regatta footage.** We have a large folder of
+  images captured at the crossing of a past regatta. A synthetic camera feed
+  that presents those images as a live stream would let the ingest, timing, and
+  image-selection path be exercised offline without a real camera or hardware.
+  It would feed the existing MJPEG reader (§6.1) with timestamped frames from
+  the folder, so the whole capture pipeline — transport (§6.2), buffering
+  (§6.3), calibration (§5.5), and deferred image selection (§6.5) — can be
+  tested against known-good footage. It also doubles as reproducible demo/test
+  footage for the automated suites. Because it stands in for the physical
+  camera, it must still honour the §5 timing model (kernel-clock timestamps, no
+  disk on the trigger path) so the timing guarantees are exercised rather than
+  bypassed.
 
 ---
 
