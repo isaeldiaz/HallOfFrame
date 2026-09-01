@@ -1726,9 +1726,8 @@ system unreliable on the water.
 
 This section records work deliberately outside the current scope. Existing
 candidate ideas are listed first, then two priority tiers derived from
-field feedback (see `FUTURE_IMPROVEMENTS.md`). Items reference the spec sections
-they touch so that implementation can be planned against the constraints already
-locked in here.
+field feedback. Items reference the spec sections they touch so that
+implementation can be planned against the constraints already locked in here.
 
 ### 13.1 Long-standing candidate ideas
 
@@ -1747,10 +1746,144 @@ locked in here.
 - **Drive the finish horn from the app.** Sync crossing capture with horn
   activation. Today the horn is a 12 V unit triggered manually for ~250 ms. The
   goal is to combine the "honk" with the timer stop so the operator gets both
-  from one action. This is exploratory: no hardware interface is settled yet
-  (USB relay, GPIO, etc.). A delay of up to ~500 ms from the capture to the
-  horn beeping is acceptable, so it must not live on the evdev trigger path —
-  it should be driven asynchronously like the deferred image selection (§6.5).
+  from one action. A delay of up to ~500 ms from the capture to the horn beeping
+  is acceptable, so it must not live on the evdev trigger path — it should be
+  driven asynchronously like the deferred image selection (§6.5).
+
+  The hardware interface is not settled. Three routes are surveyed below; the
+  second is the recommended direction and the third the documented fallback.
+
+  - *Off-the-shelf USB relay, host-timed.* Two families are both usable from
+    Linux with no kernel work. **CDC/serial** boards — Numato's 1-channel
+    USB-powered relay
+    (<https://numato.com/product/1-channel-usb-powered-relay-module>), also
+    KMTronic and Denkovi — enumerate as `/dev/ttyACM*` and take human-readable
+    commands, so `pyserial` from a worker thread is the whole driver; access
+    needs the `dialout` group or a udev rule. **USB-HID** boards (the common
+    dcttech design, `16c0:05df`) are driven by `usbrelay`
+    (<https://github.com/darrylb123/usbrelay>, packaged in Debian) or
+    `pyhid-usb-relay`, and need a `hidraw` udev rule or they are root-only —
+    the same permission problem §6.4 already solves for `/dev/input/event*` via
+    the `input` group, and it belongs in the setup script rather than being
+    discovered on race morning. This route reaches a working prototype fastest
+    and has no firmware to maintain, but it adds a *second* USB device beside
+    the footswitch, and the pulse width is timed by Python: if the host stalls
+    between "on" and "off", the horn stays on.
+
+  - *One custom USB dongle carrying both buttons and the relay (recommended).*
+    A microcontroller acting as a USB device, presenting a **composite**
+    interface to the laptop:
+    - an **HID keyboard** interface, on which the dongle's two physical buttons
+      report `KEY_F14` (arm/start `t0`) and `KEY_F13` (crossing capture) — the
+      §7.4 defaults. It enumerates as an ordinary keyboard on its own
+      `/dev/input/event*` node, so this *is* mitigation 1 of §6.4's "the trigger
+      is global" problem, and §5.3's kernel-timestamp guarantee is unchanged:
+      the app keeps reading evdev and knows nothing about the firmware behind
+      it.
+    - a **CDC serial** interface for host→dongle commands (`HORN 250`), so the
+      pulse is timed **in firmware**. The MCU guarantees the width and enforces
+      a hard maximum on-time, so a crashed, hung, or killed app cannot leave the
+      horn sounding. That watchdog — not convenience — is the strongest argument
+      for firmware over a bare relay board.
+
+    Candidate parts: Raspberry Pi Pico / Pico 2, Adafruit KB2040, or an
+    ATmega32U4 "Pro Micro". CircuitPython is the low-effort firmware — enable
+    `usb_hid` and `usb_cdc` together in `boot.py`
+    (<https://learn.adafruit.com/customizing-usb-devices-in-circuitpython>);
+    the RP2040's endpoint budget accommodates both. TinyUSB in C is the
+    alternative
+    (<https://github.com/tomas-pecserke/rp2040-tinyusb-hid-cdc-example>). For
+    the relay stage, an opto-isolated module avoids building anything:
+    Waveshare's Pico-Relay-B (<https://www.waveshare.com/pico-relay-b.htm>) is
+    a Pico carrier with photocoupler isolation, 10 A/30 V DC contacts and a
+    DIN-rail enclosure.
+
+    Electrical requirements, none of them optional: the horn's 12 V supply is
+    **separate from USB** — USB 5 V powers logic only; the contact rating is
+    chosen against the *measured* current of the actual horn (an automotive horn
+    can draw 10–20 A, far above a generic "10 A" signal relay's comfort); a
+    flyback diode across the relay coil clamps the 100–400 V collapse
+    transient; and the horn wiring stays physically away from the iPhone USB
+    cable, whose TCP transport (§3.1) is the timing-critical path.
+
+    The same dongle is the natural home for §13.3's keypad idea — lane keys are
+    more keycodes on the HID interface it already exposes — so choosing this
+    route once covers both items.
+
+  - *Audio-jack trigger with a coded tone (documented fallback).* The laptop
+    plays a tone; a microcontroller sitting on the audio output detects it and
+    closes the relay for as long as it is present. Two properties make this
+    attractive. It is **inherently fail-safe** — tone present means relay
+    closed, so a crashed, killed or hung app releases the horn by itself, where
+    the CDC route needs a firmware watchdog to reach the same place. And it has
+    **no driver, permission or enumeration surface at all**: no `hidraw` rule,
+    no `dialout`, no `/dev/ttyACM*` that renumbers when devices are plugged in a
+    different order. The laptop's own speakers reproduce whatever the horn
+    hears, so the chain is auditable by ear.
+
+    Four requirements, without which it does not survive the field:
+
+    - **Decode a coded tone; do not rectify a bare envelope.** An envelope
+      detector honks at any audio — a notification, a Bluetooth connect chime,
+      a video in another window. This is the audio analogue of §6.4's "the
+      trigger is global and has no concept of focus", and worse, because the
+      output is audible to the whole finish area. Require a specific frequency
+      burst with both a minimum and a maximum duration (Goertzel on the MCU's
+      ADC, or a two-tone/DTMF pair). This is where the microcontroller earns its
+      place over a diode-and-comparator circuit.
+    - **Do not expect speakers and trigger from the same built-in jack.**
+      Inserting a plug mutes the internal speakers on essentially every laptop,
+      so the debug benefit and the trigger are mutually exclusive on one
+      connector. Either split the stereo pair — one channel to the MCU, the
+      other to an audible monitor — or give the horn a dedicated sink on a
+      class-compliant USB audio adapter (still driverless) and leave the
+      internal speakers to the UI.
+    - **Hold the sink awake for the whole race.** Idle audio sinks are
+      suspended by default, and the first sound after a suspend can arrive
+      hundreds of milliseconds late — the first honk of the day is then the one
+      that misses the ~500 ms budget. Keep a continuous silent or ultrasonic
+      pilot stream open. The audio stack on the target machine is unaudited
+      (`system-environment.md` §3 records the display server and the input
+      nodes, nothing about PipeWire), so measure it before committing to this
+      route.
+    - **Isolate.** DC-block and clamp the MCU input, opto- or
+      transformer-isolate it, and keep the horn's 12 V ground entirely off the
+      audio ground — switch contacts only. Cap the maximum on-time in firmware
+      regardless: tone-present semantics protect against a crash, not against a
+      looping WAV.
+
+    The objection that keeps this route second-choice: **there is no return
+    channel, and the trigger runs through a globally mutable control.** Master
+    volume, per-app volume, the mute key, auto-mute on jack insert, or a
+    default-sink switch when the iPhone or a Bluetooth device appears will each
+    silence the horn, and the app can detect none of it — it cannot read back
+    state, cannot ACK, and cannot refuse to start a race with a dead horn. That
+    is the same failure shape as §6.4's `EVIOCSCLOCKID` bug, where the feature
+    appeared to work and the detector was broken too. A pilot tone plus a status
+    LED on the dongle is a real mitigation but a human-dependent one; a CDC
+    dongle answers `OK`. Note also that the microcontroller still needs 5 V, so
+    a USB cable is usually present anyway — at which point exposing CDC on it
+    costs nothing — unless it is deliberately powered from a charger or power
+    bank, which is exactly when the isolation argument becomes decisive.
+
+    Best of both: build the dongle with **both** inputs — buttons and CDC over
+    USB *plus* an independent coded-tone audio input — and the audio path
+    doubles as an offline test harness for the horn chain. With no dongle at
+    all, playing the tone to the laptop speakers still exercises the app's whole
+    trigger→honk path and the ~500 ms budget, in the same spirit as §13.3's
+    fake camera feed.
+
+  Software shape, whichever route wins: a `HornDriver` worker thread fed by a
+  queue, started and stopped with the race, mirroring §6.5's deferred work. A
+  serial, HID, or audio write is a blocking syscall and must never be issued
+  from the trigger callback. An absent, unplugged, or failing horn device must
+  never fail or delay a capture — it degrades to a UI banner (§7.5: no modal
+  dialogs while a race is active). Implementation adds a `[horn]` block to §8
+  (`enabled`, `mode`, `device`, `pulse_ms`, `max_pulse_ms`), a manual-honk
+  binding to §7.4 for use outside a race, and a rate limit so a double press
+  cannot stack pulses. Verification logs both the capture timestamp and the
+  horn-fired timestamp so the ~500 ms budget is measured, per §12.2's "numbers,
+  not adjectives".
 
 - **Reverse the capture-list ordering.** §7.3 leaves newest-at-top vs
   newest-at-bottom configurable; the current default shows crossings slowest
@@ -1784,9 +1917,8 @@ locked in here.
 - **Automatic bow-number capture.** Removes the paper-and-pencil step of
   recording the order in which boat numbers cross. Two candidate mechanisms,
   not mutually exclusive:
-  - *Audio transcription* — record audio during a short window around each
-    crossing; after the race, transcribe the audio to match spoken numbers to the
-    recorded crossings.
+  - *Audio transcription* — the operator speaks each bow number aloud as the
+    boat crosses. Specified in full as its own item below.
   - *Keypad crossing capture* — replace the single crossing trigger with a
     numeric keypad whose individual keys (e.g. 1–6) map to lane numbers. Each
     crossing is then registered on the lane it crossed and cross-checked against
@@ -1794,6 +1926,43 @@ locked in here.
     "trigger is global" collision discussion: a dedicated numeric keypad on its
     own evdev node is already the §6.4 mitigation of choice, so this extends the
     same hardware instead of adding new requirements.
+
+- **Voice annotation of crossings, with optional local transcription.** The
+  same paper-and-pencil problem as the keypad idea above, approached from the
+  other side: the operator says the bow number aloud as each boat crosses, and
+  the recording is available during review to fill in the bow-number field. Two
+  stages, the second optional and strictly additive to the first.
+
+  - *Stage 1 — record and play back.* Record one continuous audio track per
+    race, started at `t0` and stamped against the same `CLOCK_MONOTONIC`
+    reference as the frames (§5.1), so each crossing's recorded time is also an
+    offset into the track. This is the audio analogue of `archive.py` (§6.6): a
+    dedicated writer thread fed from the capture device, off the evdev trigger
+    path (§5.3) and never blocking it — a full queue drops audio exactly as a
+    full frame queue drops frames. The frame review panel of §7.3 gains a play
+    control that starts a few seconds before the crossing's recorded time and
+    runs a few seconds past it, so the operator hears the spoken number while
+    looking at the frame and types it into the existing bow-number field.
+    Neither the timing path nor the stored images change, and a missing or
+    failed recording degrades to today's manual entry.
+  - *Stage 2 — local transcription.* After the race, transcribe the track with
+    a small speech model running **entirely on the laptop** — no network, since
+    §2.3 assumes a metered mobile link at best and race day cannot depend on it
+    — and pre-fill each crossing's bow-number field from the numbers spoken
+    inside its window. Every value is a *suggestion*: visibly marked as
+    machine-assigned, always editable, and left blank rather than guessed when
+    confidence is too low to disambiguate. Transcription runs after the race,
+    off the trigger thread, and is never a precondition for export (§6.8) — the
+    operator must be able to ignore it entirely and still get results.
+
+  Open points for whoever implements this: the capture device (the laptop mic is
+  the zero-hardware option, a headset mic is far better in wind and crowd
+  noise); whether the storage schema (§6.7) keeps one audio file per race,
+  addressed by each crossing's existing recorded time, rather than per-crossing
+  clips; and whether the web process (§8) serves audio at all, given the
+  data-usage item below. `ffmpeg` is already a §9.1 dependency, so capture and
+  transcode need no new install; a local speech model is a new dependency and
+  must be weighed against §2.2's start-up and reliability constraints.
 
 - **Play crossing images as a sequence.** The web results pages (§8) currently
   show, for each crossing, its time beside a thumbnail of the saved frame. Add a
