@@ -1903,6 +1903,81 @@ implementation can be planned against the constraints already locked in here.
   from the buffer only if the frames are still resident, otherwise it is marked
   for manual reassignment.
 
+- **Fix the optics and the vantage point.** Three field observations, all about
+  what the camera can physically see, and they are coupled — none of them can
+  be settled without the others.
+
+  - *Get a good-quality 2× or 5× clip-on telephoto lens for the phone.* §10.1
+    and §9.2 step 4 both mandate telephoto "if available", and §10.2 makes bow-
+    number legibility at 50 m the reason 720p60 is rejected — but the phone's
+    own lenses are whatever the handset has. An add-on lens is the way to reach
+    the required magnification on a phone without one. **Optical quality is the
+    requirement, not the zoom number:** a cheap clip-on adds softness at the
+    frame edges, chromatic fringing and flare, and the image that matters is a
+    bow ball near the finish-line overlay, often against backlit water. A soft
+    or fringed bow ball is an unusable protest photo, so this fails exactly
+    where a lens is supposed to help. Evaluate candidates by photographing a
+    resolution target at the actual subject distance, at the actual capture
+    format, and keep the images.
+
+    Two consequences that are not optional. **A clip-on lens must be mechanically
+    fixed, not merely clipped on** — it sits in front of the phone camera for
+    six hours on a tripod in wind, and a lens that creeps or rotates changes the
+    optical path mid-session. And **changing the lens invalidates `Δ`**: §8 and
+    §11 already make the app refuse to start unless `calibration.json` matches
+    the live stream's lens, so fitting, removing or repositioning the lens
+    requires re-running §5.5. Because calibration is a per-*session* step (§9.3
+    step 8), the lens decision must be made before the session starts, not
+    between heats.
+
+  - *Mount the camera higher, to clear the first bar obstructing the first lane.*
+    In the field the nearest lane is occluded by a bar in the foreground, so the
+    lane that most needs an unobstructed view is the one that has none. §9.3
+    step 5 fixes the tripod's *position* — on the extended finish line,
+    perpendicular to the course — but says nothing about height. Raising the
+    camera looks past the obstruction while keeping that position. Adding to
+    §9.3: verify that **every lane is unobstructed in the live preview**, before
+    aligning the overlay in step 6, and record the working height so it is
+    reproducible at the next regatta.
+
+    The height itself carries requirements. Looking down at the water changes
+    the geometry the jury reads — the more the camera looks down, the less
+    "bow crosses the line" is a horizontal judgement — so use the minimum height
+    that clears the bar rather than the maximum available. A raised mast or
+    extended tripod column is also markedly less stable in wind, and the §10.1
+    manual-focus lock is set for a fixed geometry: a mount that sways moves the
+    finish line inside the frame and defeats the overlay alignment. Mass and
+    guying matter more than reach.
+
+  - *Get a wider angle onto the remaining lanes.* All lanes must be in frame,
+    which is the direct opposite of the telephoto requirement above: a 2×/5×
+    lens narrows the field of view exactly where more of it is needed. **This
+    conflict is the substance of this item, and it cannot be resolved by
+    choosing a lens alone.** Three ways out, to be measured rather than argued:
+    - *Move the vantage point.* Greater distance plus greater height widens the
+      swath covered at a given focal length, and is the only route that improves
+      both terms at once. It costs pixels-on-bow-ball, which §10.2 is already
+      spending resolution to protect.
+    - *Split the roles across the phone's own lenses* — wide for lane coverage,
+      telephoto for legibility — which is two capture formats and therefore two
+      calibrations, and IP Camera Lite streams one camera at a time (§9.2
+      step 4).
+    - *Two cameras.* This is §13.1's "multiple simultaneous cameras (multi-lane
+      finishes)" item, and it is the honest answer if one lens genuinely cannot
+      cover all lanes at usable magnification. It is a substantially larger
+      change — two transports (§3.1), two calibrations (§5.5), a per-camera
+      framebuffer (§6.3) — and it does not become smaller by being reached
+      through this item.
+
+    Whoever implements this should first **measure what is actually needed**:
+    the real lane-to-lane extent at the finish, the available camera positions
+    at the venue, and the smallest legible bow number in a captured frame at
+    each candidate setup. Until those three numbers exist, "2×", "5×" and
+    "wider" are not yet specifications. Note that the §13.3 zoom-square /
+    area-of-interest item is display-only and does not substitute for optical
+    coverage: it cannot show a lane that is outside the frame, nor recover
+    detail a soft lens never resolved.
+
 ### 13.3 Nice-to-have (from field feedback)
 
 - **Zoom square / area of interest.** When the app is in the Ready state (no
