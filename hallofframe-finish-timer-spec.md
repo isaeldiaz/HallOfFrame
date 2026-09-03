@@ -1743,6 +1743,13 @@ implementation can be planned against the constraints already locked in here.
 
 ### 13.2 Must-have (from field feedback)
 
+- **Last time updated** The webpage showing the races, should crearly indicate the 
+  time the database was last updated. We can consider finer granularity to 
+  also advertize when was the last time every race was last updated. This would
+  serve as indicator to the judges when a last minute change has taken place. 
+  We would choose this finer granularity only if it does not drastically increases
+  the data bandwidth on the network connection
+
 - **Drive the finish horn from the app.** Sync crossing capture with horn
   activation. Today the horn is a 12 V unit triggered manually for ~250 ms. The
   goal is to combine the "honk" with the timer stop so the operator gets both
