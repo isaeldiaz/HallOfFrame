@@ -177,8 +177,20 @@ class MainWindow(QMainWindow):
         start = keycode_names(trig["start_keycodes"])
         end = keycode_names(trig["end_keycodes"])
         device = trig["device_path"] or "Qt fallback"
-        self.armed.set_trigger_label(
-            f"({device}). {end} or Esc to disarm.")
+        if self._single_key_mode():
+            label = (f"First press starts the race; each press after records a "
+                     f"crossing ({device}). {end} or Esc to disarm.")
+        else:
+            label = f"({device}). {end} or Esc to disarm."
+        self.armed.set_trigger_label(label)
+
+    def _single_key_mode(self) -> bool:
+        """True when the same evdev keycode drives both start and crossing
+        (single-key armed first-press = t0 flow, spec §5.3)."""
+        trig = self.config.section("trigger")
+        cross = {int(c) for c in trig["crossing_keycodes"]}
+        start = {int(c) for c in trig["start_keycodes"]}
+        return bool(cross & start)
 
     def _install_shortcuts(self) -> None:
         # ApplicationShortcut context: these never lose to a focused button (§4).
@@ -453,8 +465,13 @@ class MainWindow(QMainWindow):
         self._armed = True
         self._race_over = False
         self._recompute_state()
-        self._show_toast(f"Armed. Press {start_keys} on the trigger device "
-                         f"({device}) to start.", timeout_ms=0)
+        if self._single_key_mode():
+            self._show_toast(f"Armed. First press on {start_keys} starts the race; "
+                             f"each press after records a crossing ({device}).",
+                             timeout_ms=0)
+        else:
+            self._show_toast(f"Armed. Press {start_keys} on the trigger device "
+                             f"({device}) to start.", timeout_ms=0)
 
     def on_evdev_start(self, t_press: float) -> None:
         if not self._armed:
@@ -474,6 +491,12 @@ class MainWindow(QMainWindow):
         self._recompute_state()
 
     def on_evdev_crossing(self, t_press: float, code: int, suspect: bool = False) -> None:
+        # Single-key flow (§5.3): when the trigger key is armed, the first press
+        # IS t0 (start). On the main thread via the bridge, so reading _armed
+        # here is safe. Once a race is running, every press is a crossing.
+        if self._armed:
+            self.on_evdev_start(t_press)
+            return
         self.controller.record_crossing(t_press, debounce_suspect=suspect)
 
     def on_evdev_end(self, t_press: float, code: int = 0) -> None:

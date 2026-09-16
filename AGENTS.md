@@ -138,6 +138,10 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 Race lifecycle (keyboard is grabbed during a race, see `grab_device`):
 `Ctrl+S` arm → ENTER starts (`t0`) → SPACE records crossings → **F12 (or End
 Race button) ends the race**, releasing the keyboard → `Ctrl+Q`/Quit exits.
+If the **same** keycode is listed in both `crossing_keycodes` and
+`start_keycodes`, the trigger is single-key: the first press while armed IS
+`t0`, every press after records a crossing (§5.3). The routed handler is
+`on_evdev_crossing` (its dispatch is in `ui/main_window.py`).
 
 ## Current-state notes
 

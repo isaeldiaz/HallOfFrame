@@ -73,6 +73,9 @@ straight copy runs unchanged. Highlights:
 
 - `crossing_keycodes` / `start_keycodes` / `end_keycodes` — evdev keycodes
   (`SPACE`=57, `ENTER`=28, `F12`=88) that record crossings / start / end a race.
+  Listing the **same** keycode in both `crossing_keycodes` and `start_keycodes`
+  enables the single-key flow: the first press while armed starts the race
+  (`t0`), every press after records a crossing (§5.3).
 - `grab_device` — the evdev device to grab for timing.
 - `[paths] event_name` — the competition/event name; generated data (DB, logs,
   roster CSV) carries it.

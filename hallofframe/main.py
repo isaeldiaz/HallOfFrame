@@ -85,7 +85,13 @@ def build_trigger(config, on_crossing, on_start, on_end=None, logger=None):
     if not device:
         return None, True
     handlers = {int(c): on_crossing for c in trig["crossing_keycodes"]}
-    handlers.update({int(c): on_start for c in trig["start_keycodes"]})
+    # A keycode listed in BOTH crossing and start sets drives the single-key
+    # flow (armed first-press = t0, §5.3). Route it to the crossing handler,
+    # whose slot dispatches to start_race when armed. setdefault keeps the
+    # crossing mapping instead of letting start overwrite it; a key listed only
+    # in start_keycodes still maps to on_start as before.
+    for c in trig["start_keycodes"]:
+        handlers.setdefault(int(c), on_start)
     if on_end is not None:
         handlers.update({int(c): on_end for c in trig["end_keycodes"]})
         # Map KEY_ESC (1) and common laptop F12 non-Fn multimedia codes
