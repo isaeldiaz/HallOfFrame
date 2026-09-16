@@ -375,7 +375,7 @@ class MainWindow(QMainWindow):
             end = keycode_names(trig["end_keycodes"])
             kb.add(end, "Disarm", callback=lambda: self.on_evdev_end(time.monotonic(), 88))
             kb.add("Esc", "Cancel", callback=self._esc)
-            kb.set_note(f"Keyboard grabbed while armed — {end} or Esc disarms "
+            kb.set_note(f"Trigger device grabbed while armed — {end} or Esc disarms "
                         "and releases it, then quit normally.")
         elif state == AppState.REVIEW:
             kb.add("↑/↓", "Select crossing", True)
@@ -403,7 +403,7 @@ class MainWindow(QMainWindow):
     def _grab_note(self) -> str:
         trig = self.config.section("trigger")
         dev = trig["device_path"] or "Qt fallback"
-        grabbed = "keyboard grabbed" if trig["grab_device"] else "grab disabled"
+        grabbed = "trigger device grabbed" if trig["grab_device"] else "grab disabled"
         return f"{grabbed} · {dev}"
 
     def _pre_race_checks(self) -> list[dict]:

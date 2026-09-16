@@ -79,14 +79,35 @@ def build_core(config, logger=None):
     }
 
 
+def _end_handlers(on_end, end_keycodes):
+    """Keycode→handler map for the end action. Includes KEY_ESC and ThinkPad's
+    non-Fn F12 multimedia codes so Esc or unshifted laptop F12 keys can
+    disarm/end while the timing device is grabbed."""
+    if on_end is None:
+        return {}
+    h = {int(c): on_end for c in end_keycodes}
+    for c in (1, 364, 156, 171, 148, 464, 225):  # Esc + ThinkPad F12-multimedia
+        h.setdefault(c, on_end)
+    return h
+
+
 def build_trigger(config, on_crossing, on_start, on_end=None, logger=None):
-    """Construct a TriggerListener from config; fall back to Qt if unavailable.
-    Returns (listener_or_None, used_fallback: bool)."""
+    """Construct trigger listener(s) from config; fall back to Qt if unavailable.
+
+    Returns ``(primary, fallback, extras)`` where:
+      * ``primary`` is the timing TriggerListener (or None on fallback) reading
+        ``device_path`` for start+crossing — the only listener that gets grabbed.
+      * ``fallback`` is True when no evdev timing listener could be built.
+      * ``extras`` is a list of additional TriggerListeners (never grabbed); one
+        is built on ``end_device_path`` to handle ONLY the end keycodes, leaving
+        the keyboard ungrabbed so Qt still receives typing (e.g. boat numbers).
+    """
     from .trigger import TriggerError, TriggerListener
     trig = config.section("trigger")
     device = trig["device_path"]
-    if not device:
-        return None, True
+    end_device = trig.get("end_device_path") or ""
+    debounce_ms = float(config.section("timing")["debounce_ms"])
+
     handlers = {int(c): on_crossing for c in trig["crossing_keycodes"]}
     # A keycode listed in BOTH crossing and start sets drives the single-key
     # flow (armed first-press = t0, §5.3). Route it to the crossing handler,
@@ -95,34 +116,46 @@ def build_trigger(config, on_crossing, on_start, on_end=None, logger=None):
     # in start_keycodes still maps to on_start as before.
     for c in trig["start_keycodes"]:
         handlers.setdefault(int(c), on_start)
-    if on_end is not None:
-        handlers.update({int(c): on_end for c in trig["end_keycodes"]})
-        # Map KEY_ESC (1) and common laptop F12 non-Fn multimedia codes
-        # (ThinkPad KEY_FAVORITES, BOOKMARKS, CONFIG, PROG1, STAR, BRIGHTNESSUP)
-        # so Esc or unshifted laptop F12 keys can disarm/end while grabbed.
-        handlers.setdefault(1, on_end)      # KEY_ESC
-        handlers.setdefault(364, on_end)    # KEY_FAVORITES (ThinkPad F12 default)
-        handlers.setdefault(156, on_end)    # KEY_BOOKMARKS
-        handlers.setdefault(171, on_end)    # KEY_CONFIG
-        handlers.setdefault(148, on_end)    # KEY_PROG1
-        handlers.setdefault(464, on_end)    # KEY_STAR
-        handlers.setdefault(225, on_end)    # KEY_BRIGHTNESSUP
-    try:
-        # Grab is NOT taken at construction: it is driven entirely by the
-        # on_state_changed hook in main() (§9/Opt A). Grabbing here would race
-        # the hook's first sync and could leave the keyboard grabbed outside a
-        # race (e.g. STREAM_DOWN), where Qt shortcuts like Ctrl+Q are then
-        # unreachable and the operator cannot quit.
-        listener = TriggerListener(
-            device, handlers,
-            debounce_ms=float(config.section("timing")["debounce_ms"]),
-            grab=False)
+
+    extras = []
+    # If a separate end device is configured, route end keycodes there only, and
+    # keep the timing device free of end keys (SayoDevice button = start/cross).
+    if end_device:
+        if on_end is not None:
+            try:
+                extras.append(TriggerListener(
+                    end_device, _end_handlers(on_end, trig["end_keycodes"]),
+                    debounce_ms=debounce_ms, grab=False))
+            except TriggerError as exc:
+                if logger:
+                    logger.warning("trigger", "end_evdev_fallback",
+                                   reason=str(exc))
+    elif on_end is not None:
+        # Single-device mode: the timing device also handles the end keycodes.
+        handlers.update(_end_handlers(on_end, trig["end_keycodes"]))
+
+    primary = None
+    fallback = False
+    if device:
+        try:
+            # Grab is NOT taken at construction: it is driven entirely by the
+            # on_state_changed hook in main() (§9/Opt A). Grabbing here would
+            # race the hook's first sync and could leave the keyboard grabbed
+            # outside a race (e.g. STREAM_DOWN), where Qt shortcuts like Ctrl+Q
+            # are then unreachable and the operator cannot quit.
+            primary = TriggerListener(
+                device, handlers,
+                debounce_ms=debounce_ms, grab=False)
+        except TriggerError as exc:
+            if logger:
+                logger.warning("trigger", "evdev_fallback", reason=str(exc))
+            primary = None
+
+    for listener in ([primary] + extras if primary is not None else extras):
         listener.start()
-        return listener, False
-    except TriggerError as exc:
-        if logger:
-            logger.warning("trigger", "evdev_fallback", reason=str(exc))
-        return None, True
+    if primary is None:
+        fallback = True
+    return primary, fallback, extras
 
 
 def main(argv=None) -> int:
@@ -186,12 +219,17 @@ def main(argv=None) -> int:
     def _end(t_press, code, suspect=False):
         bridge.end.emit(t_press, int(code))
 
-    listener, fallback = build_trigger(config, _crossing, _start, _end, logger)
+    listeners, fallback, extra_listeners = build_trigger(
+        config, _crossing, _start, _end, logger)
     if fallback:
         # Qt key-event fallback (§6.4): degraded precision, say so.
         logger.warning("trigger", "qt_fallback")
 
-    if listener is not None and config.section("trigger")["grab_device"]:
+    # Only the timing (primary) device is grabbed from ARM through RACE_OVER
+    # (§9/Opt A). A separate end_device (keyboard) is deliberately left ungrabbed
+    # so Qt keeps receiving keys — e.g. future boat-number entry — while the
+    # SayoDevice button is grabbed for crossings.
+    if listeners is not None and config.section("trigger")["grab_device"]:
         # Option A: the trigger keyboard is grabbed from ARM through RACE_OVER,
         # tied directly to state instead of a 250 ms polling timer (§9). Bow
         # entry moved to REVIEW, so nothing needs the keyboard between arm and
@@ -199,7 +237,7 @@ def main(argv=None) -> int:
         from .ui.state import AppState
         def _sync_grab(state):
             try:
-                listener.set_grab(state in (AppState.ARMED, AppState.RECORDING))
+                listeners.set_grab(state in (AppState.ARMED, AppState.RECORDING))
             except Exception:
                 pass
         win.on_state_changed = _sync_grab
@@ -249,8 +287,9 @@ def main(argv=None) -> int:
     def _cleanup():
         _monitor_stop.set()
         core["controller"].stop()
-        if listener:
-            listener.stop()
+        for listener in [listeners] + extra_listeners:
+            if listener is not None:
+                listener.stop()
         core["reader"].stop()
         transport.stop()
         logger.stop()

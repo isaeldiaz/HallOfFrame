@@ -79,6 +79,11 @@ straight copy runs unchanged. Highlights:
   enables the single-key flow: the first press while armed starts the race
   (`t0`), every press after records a crossing (§5.3).
 - `grab_device` — the evdev device to grab for timing.
+- `end_device_path` — optional second evdev device (e.g. the keyboard) that
+  handles **only** the end keycodes and is **never** grabbed, so Qt keeps
+  receiving typing (e.g. future boat-number entry) while the timing device is
+  grabbed during a race. Empty = single-device behavior (end handled on the
+  timing device too).
 - `[paths] event_name` — the competition/event name; generated data (DB, logs,
   roster CSV) carries it.
 - `[timing] viewing_mode` — `"water"` or `"screen"` (selects the latency formula).

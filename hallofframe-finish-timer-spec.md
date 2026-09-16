@@ -834,6 +834,15 @@ Required mitigations, in order of preference:
    this) so keystrokes cannot reach Qt at all — and then bow-number entry must
    move behind an explicit mode switch that ungrabs.
 
+> **Recommended split-device setup (implements 1 + 4 cleanly).** Configure a
+> dedicated timing device (`device_path`, e.g. a footswitch or the SayoDevice
+> button) for `start`/`crossing`, and a **separate** `end_device_path` (e.g. the
+> laptop keyboard) that handles *only* the `end_keycodes`. The end device is
+> **never grabbed**, so Qt keeps receiving keys (e.g. bow/boat-number entry)
+> while the timing device is grabbed for the race. This keeps kernel-timestamped
+> crossings on their own un-typeable device and leaves the keyboard free for
+> end/typing — no mode-switch un-grab dance needed (§8, §6.4).
+
 ### 6.5 `controller.py` — capture orchestration
 
 ```python
@@ -1340,6 +1349,10 @@ window_after_ms = 500
 
 [trigger]
 device_path = ""             # e.g. /dev/input/event5; empty = Qt fallback
+end_device_path = ""         # optional SECOND device handling ONLY the end
+                             # keycodes, NEVER grabbed (Qt keeps typing, e.g.
+                             # boat numbers) while device_path is grabbed.
+                             # Empty = end handled on device_path too.
 crossing_keycodes = [183]    # KEY_F13 — never KEY_SPACE (§6.4)
 start_keycodes = [184]       # KEY_F14
 grab_device = false          # true = exclusive grab; required if using the

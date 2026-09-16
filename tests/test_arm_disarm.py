@@ -168,9 +168,10 @@ class TestArmDisarm(unittest.TestCase):
 
     def test_build_trigger_fallback_on_invalid_device(self):
         cfg = _make_config(self.data_root, device_path="/dev/input/nonexistent_device_xyz")
-        listener, fallback = build_trigger(cfg, lambda *a: None, lambda *a: None, lambda *a: None)
+        listener, fallback, extras = build_trigger(cfg, lambda *a: None, lambda *a: None, lambda *a: None)
         self.assertIsNone(listener)
         self.assertTrue(fallback)
+        self.assertEqual(extras, [])
 
 
 if __name__ == "__main__":

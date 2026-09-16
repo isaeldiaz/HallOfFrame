@@ -99,6 +99,9 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   `config.toml` lives in that directory. Treat it as the single source of truth.
   - `config.toml` — hand-edited. Trigger keys: `crossing_keycodes` (SPACE=57),
     `start_keycodes` (ENTER=28), `end_keycodes` (F12=88); `grab_device`;
+    `end_device_path` — optional second evdev device that handles ONLY the end
+    keycodes and is NEVER grabbed (Qt keeps receiving typing, e.g. future boat
+    numbers) while the timing `device_path` is grabbed during a race;
   `[timing] image_mode` = `"auto"` (default) | `"off"` (timing-only — no camera,
   no calibration, no image selection; races start with the stream down). A dead
   stream auto-degrades to timing-only in ANY mode (`start_race` skips calibration

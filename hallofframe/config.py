@@ -52,6 +52,11 @@ DEFAULTS: dict[str, Any] = {
     },
     "trigger": {
         "device_path": "/dev/input/event3",  # internal keyboard
+        # Optional second evdev device that handles ONLY the end keycodes and is
+        # NEVER grabbed, so Qt keeps receiving keys (e.g. future boat-number
+        # entry) while the timing device is grabbed during a race. Empty string =
+        # single-device behaviour (end handled on device_path too).
+        "end_device_path": "",
         "crossing_keycodes": [57],  # KEY_SPACE — operator choice (see §6.4)
         "start_keycodes": [28],  # KEY_ENTER
         "end_keycodes": [88],  # KEY_F12 — finish the race (see §6.4)
