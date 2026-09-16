@@ -51,6 +51,9 @@ hallofframe/
                      Excel" (.xls). Run: python -m hallofframe.web --config PATH.
   config.py          config.toml load + defaults (never writes the file).
   log.py             Structured JSONL logging.
+  horn.py            Optional relay-driven 12 V finish horn (worker thread fed
+                     by a queue; never on the trigger path). Commanded via
+                     honk(); self-test() logs reachability at startup.
   calibration.py     Latency calibration helpers.
   ui/                PySide6 widgets: main_window, capture_list, preview_widget,
                      calibration_dialog.
@@ -58,6 +61,8 @@ hallofframe/
   tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
                      near-complete DB, plays the final race, verifies integrity/
                      exports/latency/memory. Shared with tests/test_late_regatta.py.
+  tools/test_horn.py  Direct test of the USB-relay horn (reachability +
+                     optional --beep; run as python -m hallofframe.tools.test_horn).
 tests/               pytest suites (controller, export, framebuffer, mjpeg).
 ```
 
@@ -71,6 +76,11 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   after-window frames exist in the buffer (spec §6.5).
 - **No disk on the trigger path.** Commits happen on the persistence writer
   thread via a `queue.Queue`.
+- **No blocking serial on the trigger path.** The horn (`horn.py`) owns its own
+  worker thread; `honk()` only enqueues and returns. The LC-1 relay board gives
+  no electronic reply to any command, so the only confirmation is the audible
+  click — `self_test()` verifies reachability/switching and reports
+  `status=no-feedback`.
 - **Worker→UI is thread-safe via a Qt signal bridge** (`_TriggerBridge` in
   `main.py`). Never call Qt widgets directly from a worker thread — it can
   deadlock the GUI.
@@ -96,6 +106,11 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   degraded state is persisted as `race.image_off`. `image_mode = "off"` is only
   needed to force timing-only when the stream is *up*. There is no mid-race GUI
   toggle.
+  - `[horn]` — optional 12 V finish horn via an LCUS-1 USB relay (CH340 serial,
+    `/dev/ttyUSB0`). `enabled` (default false), `device`, `baud` (9600),
+    `relay` (channel 1), `duration_ms` (default 300). Fires a short beep on every
+    committed crossing (spec §6.5 audio); close crossings merge into one blast.
+    Disabled by default, so existing configs are unaffected.
   - `{event_name}.db` (`[paths] event_name`) — SQLite (`race`, `capture`,
     `capture_frame`). The event name is set in `config.toml` and every piece of
     generated data carries it.
@@ -146,7 +161,8 @@ If the **same** keycode is listed in both `crossing_keycodes` and
 ## Current-state notes
 
 - App already supports: arm, start, multiple crossings, deferred image
-  selection, calibration, export, archive, and (recently added) **End Race +
-  Quit**. If a request mentions an end/quit problem, that is implemented —
-  check the current `end_race()`/UI wiring before assuming it's missing.
+  selection, calibration, export, archive, End Race + Quit, and a
+  relay-driven finish horn. If a request mentions an end/quit problem, that is
+  implemented — check the current `end_race()`/UI wiring before assuming it's
+  missing.
 - Version in `hallofframe/__init__.py` (`__version__`).

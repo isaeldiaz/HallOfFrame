@@ -84,6 +84,15 @@ degrade_at_gb = 10           # switch to every_nth_frame = 5
 stop_at_gb = 3               # stop archiving; captures continue
 ballast_gb = 3               # fallocate reserve so the OS cannot be starved
 
+[horn]
+# Optional 12 V finish horn via an LCUS-1 USB relay (CH340 serial). Beeps once
+# per recorded crossing, off the trigger path. Disabled by default.
+enabled = false
+device = ""                  # e.g. /dev/ttyUSB0 (needs dialout group + pyserial)
+baud = 9600
+relay = 1                    # relay channel on the board
+duration_ms = 300            # active duration; close crossings merge into one blast
+
 [ui]
 finish_line_x = 0.5          # normalised 0..1 position of the overlay
 preview_fps = 10

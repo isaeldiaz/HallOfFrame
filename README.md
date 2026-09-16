@@ -25,6 +25,8 @@ keys on the laptop to record boat crossing times.
   per-race continuous archive.
 - A separate-process live results **web server** with per-crossing frames and
   per-race "Copy as Excel" (see [Live results](#live-results-web-server)).
+- An optional relay-driven 12 V **finish horn** that beeps on each recorded
+  crossing (off the trigger path; see [Configuration](#configuration)).
 - `F1` About / diagnostics screen: version, environment, paths, key reference,
   and a copyable support bundle for bug reports.
 - Structured JSONL logging and full-screen launch under `systemd-inhibit`.
@@ -81,6 +83,12 @@ straight copy runs unchanged. Highlights:
   roster CSV) carries it.
 - `[timing] viewing_mode` — `"water"` or `"screen"` (selects the latency formula).
 - `[races] csv_path` — the roster file shown in the Ready-screen dropdown.
+- `[horn]` — optional 12 V finish horn via an LCUS-1 USB relay (CH340 serial,
+  `/dev/ttyUSB0`). `enabled`, `device`, `baud`, `relay`, `duration_ms`. Beeps
+  on each recorded crossing off the trigger path; close crossings merge into one
+  blast. Requires the operator to be in the `dialout` group and `pyserial` in the
+  venv. Test it with
+  `./venv/bin/python -m hallofframe.tools.test_horn <data_root>/config.toml --beep`.
 
 Data lives in the data root — `<data_root>`, which defaults to `~/regatta-data`
 but is any directory set by `[paths] data_root` (e.g. `$HOME/regatta-data`):

@@ -166,6 +166,36 @@ photo is recoverable, a missing time is not.>
 **On failure:** the checklist names the failing item; `INSTALL.md` §10 lists the
 fix for each. Report only if §10's fix does not resolve it.
 
+### T13 — Finish horn (USB relay)
+
+**Proves:** `horn.py` (§13.2), the `[horn]` config block (§8), and the
+requirement that a blocking serial write never lands on the evdev trigger path.
+
+Hardware required: the LCUS-1 relay wired to the 12 V horn, on `/dev/ttyUSB0`
+(CH340; the operator must be in the `dialout` group and `pyserial` installed in
+the venv). Automated probe first, then the audible check:
+
+```bash
+~/regatta/venv/bin/python -m hallofframe.tools.test_horn $DATA_ROOT/config.toml --beep
+```
+
+**Pass:**
+
+- Prints `self-test: OK` and `detail: status=no-feedback` — the port opened and
+  the on/off commands were accepted. (`status=no-feedback` is expected: the LC-1
+  board never replies to any command, so the only confirmation is the audible
+  click.)
+- The relay audibly clicks twice (self-test toggle) and the horn sounds once for
+  `duration_ms` (the `--beep`). If there is no click/beep but `self-test: OK`,
+  check the relay-to-horn wiring and the 12 V supply — the app cannot detect
+  this electronically.
+
+**Off-trigger-path check:** while the app is running, record a crossing during a
+race; the horn fires and there is **no** timing/jitter impact on subsequent
+crossings (a hung serial port must not stall `record_crossing`).
+
+---
+
 ### T3 — FrameBuffer
 
 **Proves:** spec §6.3. Pure unit test, no hardware.
@@ -581,6 +611,7 @@ This table is the **single source of truth** for what each test needs.
 | T7 UI               | yes | yes | **F3–F5**    | no  | **yes** |
 | T8 Archive soak     | yes | no  | F7           | no  | **yes** |
 | T9 Export           | no  | no  | F6           | no  | yes |
+| T13 Finish horn     | no  | no  | §13.2        | no  | no  |
 | T10 Acceptance      | yes | yes | **N2**       | yes | yes |
 | T11 Offline         | yes | yes | N3           | no  | yes |
 | T12 Cold start      | yes | yes | N5           | no  | yes |
