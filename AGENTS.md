@@ -153,8 +153,16 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   Quit**. If a request mentions an end/quit problem, that is implemented —
   check the current `end_race()`/UI wiring before assuming it's missing.
 - Version in `hallofframe/__init__.py` (`__version__`).
-- **Retired: relay-driven finish horn.** `hallofframe/horn.py`, its
+- **Finish horn is hardware-driven — §13.2 must-have closed (2026-10-06).** The
+  deployed crossing button is a **double-pole switch**: pole 1 is the USB HID
+  keyboard the app times, pole 2 switches the horn directly. One press fires
+  both, so no software horn path is needed and the §13.2 must-have "Drive the
+  finish horn from the app" is resolved in hardware. The app never touches the
+  horn; note it also sounds on the `t0` press (single-key flow) and on
+  accidental presses. See spec §13.2.
+- **Retired: relay-driven finish horn (software).** `hallofframe/horn.py`, its
   `tools/test_horn.py` CLI, and the `[horn]` config block were removed (they
   shipped in commit `8f0c9a4`, preserved at tag `horn-relay`, reverted by
-  `d734372`). No tests or other modules depended on it. Reintegration steps and
-  the LCUS-1 protocol are recorded in the spec §13.2 implementation note.
+  `d734372`). No tests or other modules depended on it; it is superseded by the
+  double-pole hardware above. Reintegration steps and the LCUS-1 protocol are
+  recorded in the spec §13.2 implementation note.

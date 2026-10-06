@@ -1763,12 +1763,29 @@ implementation can be planned against the constraints already locked in here.
   We would choose this finer granularity only if it does not drastically increases
   the data bandwidth on the network connection
 
-- **Drive the finish horn from the app.** Sync crossing capture with horn
+- **Drive the finish horn from the app.** *(Closed 2026-10-06 — resolved in
+  hardware; see the note below.)* Sync crossing capture with horn
   activation. Today the horn is a 12 V unit triggered manually for ~250 ms. The
   goal is to combine the "honk" with the timer stop so the operator gets both
   from one action. A delay of up to ~500 ms from the capture to the horn beeping
   is acceptable, so it must not live on the evdev trigger path — it should be
   driven asynchronously like the deferred image selection (§6.5).
+
+  > **Closed 2026-10-06 — resolved in hardware, no app involvement.** The
+  > deployed crossing button is a **double-pole switch**: pole 1 drives the USB
+  > HID keyboard interface the app already times (the evdev trigger, §6.4), and
+  > pole 2 switches the horn's 12 V circuit directly. One press therefore
+  > produces both the timestamp and the honk, with no software in the path and
+  > no latency to budget — and the horn keeps working if the app stalls or
+  > crashes, which the relay routes below could not guarantee without a firmware
+  > watchdog. The "one action, both effects" goal above is met, so the software
+  > horn driver and the three hardware routes surveyed below are not needed and
+  > are retained only as history. One consequence to keep in mind: because start
+  > and crossing share a single button (§5.3 single-key flow), the horn also
+  > sounds on the `t0` press and on any accidental press, not only on crossings.
+  > If the horn should mark crossings only, that is a wiring choice (a separate
+  > crossing-only button, or a gated pole), not something the app can enforce.
+  > There is no `[horn]` software block and nothing for the app to fail.
 
   The hardware interface is not settled. Three routes are surveyed below; the
   second is the recommended direction and the third the documented fallback.
