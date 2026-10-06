@@ -22,11 +22,13 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from ..controller import CaptureController, calibration_status
+from ..calibration import Calibration
+from ..controller import (CalibrationError, CaptureController, RaceStateError,
+                          calibration_status)
 from ..export import clipboard_data, export_all_html, local_hms
 from ..framebuffer import FrameBuffer
 from ..races import (RaceInfo, RosterLoad, _cell, format_display, load_races,
-                     race_key, read_rows, skip_race, write_example)
+                     race_key, read_rows, recorded_keys, skip_race, write_example)
 from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
@@ -166,11 +168,20 @@ class MainWindow(QMainWindow):
     def _connect_controller(self) -> None:
         # capture_added and image_ready are routed through the bridge in main.py;
         # these defaults keep the window usable outside Qt (tests).
-        self.controller.signal_capture_added = self.on_capture
-        self.controller.signal_capture_deleted = self.on_capture_deleted
-        self.controller.signal_image_ready = self.on_image_ready
-        self.controller.signal_race_ended = self.on_race_ended
-        self.controller.signal_warning = self._show_toast
+        self.controller.events = self._on_controller_event
+
+    def _on_controller_event(self, kind: str, payload: dict) -> None:
+        """Single subscription to ``CaptureController.events`` (step 1.3)."""
+        if kind == "capture_added":
+            self.on_capture(payload["capture"])
+        elif kind == "capture_deleted":
+            self.on_capture_deleted(payload["sequence"])
+        elif kind == "image_ready":
+            self.on_image_ready(payload["sequence"], payload["path"])
+        elif kind == "race_ended":
+            self.on_race_ended(payload["race_id"])
+        elif kind == "warning":
+            self._show_toast(payload["message"])
 
     def _set_trigger_label(self) -> None:
         trig = self.config.section("trigger")
@@ -240,8 +251,6 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- state band
     def _health_labels(self) -> list[str]:
-        if self._last_state == AppState.RECORDING:
-            return ["Stream", "Archive", "Disk"]
         return ["Stream", "Δ latency", "Disk"]
 
     def _update_health(self) -> None:
@@ -252,24 +261,13 @@ class MainWindow(QMainWindow):
         self.band.set_health_value("Stream", f"{fps:.1f} fps",
                                    styles.GREEN_TEXT if fps > 0 else styles.RED_TEXT)
         self.band.set_health_value("Disk", f"{int(free)} GB")
-        if self._last_state == AppState.RECORDING:
-            self.band.set_health_value(
-                "Archive", "writing" if self.controller.running else "stopped",
-                styles.GREEN_TEXT if self.controller.running else styles.TEXT_DIM)
-        else:
-            lag = self._cal_latency_ms()
-            self.band.set_health_value(
-                "Δ latency", f"{lag:.0f} ms" if lag else "—")
+        lag = self._cal_latency_ms()
+        self.band.set_health_value(
+            "Δ latency", f"{lag:.0f} ms" if lag else "—")
 
     def _cal_latency_ms(self) -> float | None:
-        import json as _json
-        p = self.config.data_root / "calibration.json"
-        if not p.exists():
-            return None
-        try:
-            return float(_json.loads(p.read_text()).get("latency_median_ms", 0.0))
-        except Exception:
-            return None
+        cal = Calibration.load(self.config.data_root)
+        return cal.latency_median_ms if cal is not None else None
 
     # ------------------------------------------------------------------- status
     def _update_status(self) -> None:
@@ -278,7 +276,7 @@ class MainWindow(QMainWindow):
 
     def _recompute_state(self) -> None:
         # Calibration is only gateable in water mode; screen mode cancels
-        # latency entirely and needs no calibration.json (§5.4, §8).
+        # latency entirely and needs no calibration file (§5.4, §8).
         if self.config.section("timing")["viewing_mode"] == "screen":
             self._cal_ok, self._cal_detail = True, ""
         # Re-check calibration ~every 3 s (decodes a frame for resolution).
@@ -319,7 +317,7 @@ class MainWindow(QMainWindow):
         """Re-read recorded races so completed ones turn gray immediately,
         without disturbing the operator's current selection (overwrite stays
         available)."""
-        self.ready.refresh_recorded(self.controller.storage.race_keys())
+        self.ready.refresh_recorded(recorded_keys(self.controller.storage))
 
     def _apply_state(self, state: AppState) -> None:
         self._last_state = state
@@ -480,10 +478,17 @@ class MainWindow(QMainWindow):
         # WP7: an unlisted race records under a provisional (timestamp) key with
         # null race_no/heat_no, identified once afterwards in review.
         race, is_unlisted = self.ready.current_selection()
-        self.controller.start_race(
-            t_press, name=race.name,
-            race_no=None if is_unlisted else race.race_no,
-            heat_no=None if is_unlisted else race.heat_no)
+        try:
+            self.controller.start_race(
+                t_press, name=race.name,
+                race_no=None if is_unlisted else race.race_no,
+                heat_no=None if is_unlisted else race.heat_no)
+        except (CalibrationError, RaceStateError) as exc:
+            # start_race refuses (calibration mismatch, already running, or a
+            # prior race never ended). Surface it without a modal (§7.5).
+            self._show_toast(str(exc))
+            self._recompute_state()
+            return
         if self.controller.running:
             self._race_over = False
             self._last_capture = None
@@ -629,7 +634,7 @@ class MainWindow(QMainWindow):
             self._show_toast("Two recorded races share this key — merge is "
                              "unavailable.")
             return
-        recorded = self.controller.storage.race_keys()
+        recorded = recorded_keys(self.controller.storage)
         keep = next((r for r in dup if r.key in recorded), dup[0])
         remove = next((r for r in dup if r is not keep), dup[1])
         from ..ui.roster_dialog import MergeDialog
@@ -737,7 +742,7 @@ class MainWindow(QMainWindow):
             self._select_race_by_key(chosen.key)
 
     def _select_race_by_key(self, key) -> None:
-        recorded = self.controller.storage.race_keys()
+        recorded = recorded_keys(self.controller.storage)
         self.ready.set_races(self._races, recorded=recorded,
                              skipped=self._skipped_keys())
         # Rebuild happened inside set_races; select the row by key.
@@ -771,7 +776,7 @@ class MainWindow(QMainWindow):
                 return
         from ..ui.roster_dialog import RenameDialog
         dlg = RenameDialog(self._roster_path, race,
-                           self.controller.storage.race_keys(),
+                           recorded_keys(self.controller.storage),
                            self.controller.storage,
                            expected=self._roster_rows, logger=self._logger,
                            parent=self)
@@ -981,7 +986,7 @@ class MainWindow(QMainWindow):
         self._races = result.races
         self._roster_rows = read_rows(self._roster_path) \
             if self._roster_path else None
-        recorded = self.controller.storage.race_keys()
+        recorded = recorded_keys(self.controller.storage)
         if result.missing:
             # No roster found: still armable. Default the picker to a synthetic
             # race 000 / heat 1 so the operator can start immediately.

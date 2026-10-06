@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
 from ..races import (RosterWriteError, _cell, add_row, load_races, race_key,
-                     rename_race)
+                     rename_race, rename_races, repoint_race)
 from . import styles
 
 
@@ -323,7 +323,7 @@ class RenameDialog(_BaseDialog):
         except RosterWriteError as exc:
             self._warn(str(exc))
             return
-        self.storage.rename_races(self.race.key, new)
+        rename_races(self.storage, self.race.key, new)
         self._log("rename", key=str(self.race.key), before=self.race.name,
                   after=new, also_recorded=True)
         self._emit_result(result)
@@ -479,8 +479,8 @@ class MergeDialog(_BaseDialog):
             rows = [r for r in self.storage.all_races()
                     if race_key(r["race_no"], r["heat_no"], r["name"]) == self.keep.key]
             if rows:
-                self.storage.repoint_race(rows[0]["id"], self.keep.race_no,
-                                          self.keep.heat_no)
+                repoint_race(self.storage, rows[0]["id"], self.keep.race_no,
+                             self.keep.heat_no)
         self._log("merge", key=str(self.keep.key), keep=self.keep.name,
                   remove=self.remove.name)
         self._emit_result(result)

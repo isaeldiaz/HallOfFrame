@@ -199,13 +199,22 @@ def main(argv=None) -> int:
     bridge.capture_deleted.connect(win.on_capture_deleted)
     # The controller emits capture-added / image-ready from its persistence or
     # deferred-timer threads; reroute them through the bridge instead of pointing
-    # them straight at Qt widgets. signal_race_ended is emitted from end_race(),
-    # which always runs on the GUI thread (button or queued evdev end), so it can
-    # call the window directly.
-    core["controller"].signal_capture_added = lambda cap: bridge.capture.emit(cap)
-    core["controller"].signal_capture_deleted = lambda seq: bridge.capture_deleted.emit(seq)
-    core["controller"].signal_image_ready = lambda seq, p: bridge.image_ready.emit(seq, p)
-    core["controller"].signal_race_ended = win.on_race_ended
+    # them straight at Qt widgets. race_ended is emitted from end_race(), which
+    # always runs on the GUI thread (button or queued evdev end), so it can call
+    # the window directly. warning goes to the toast (same as before).
+    def _on_controller_event(kind: str, payload: dict) -> None:
+        if kind == "capture_added":
+            bridge.capture.emit(payload["capture"])
+        elif kind == "capture_deleted":
+            bridge.capture_deleted.emit(payload["sequence"])
+        elif kind == "image_ready":
+            bridge.image_ready.emit(payload["sequence"], payload["path"])
+        elif kind == "race_ended":
+            win.on_race_ended(payload["race_id"])
+        elif kind == "warning":
+            win._show_toast(payload["message"])
+
+    core["controller"].events = _on_controller_event
 
     def _crossing(t_press, code, suspect=False):
         bridge.crossing.emit(t_press, code, suspect)

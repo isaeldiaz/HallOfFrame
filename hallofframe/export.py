@@ -142,11 +142,11 @@ def _all_race_blocks(storage: Storage):
     soft-deleted crossings excluded. Every race is yielded — a race with no
     crossings yields an empty capture list rather than being skipped. Both
     ``export_all_csv`` and ``export_all_html`` consume this, so the two
-    exporters can never diverge on ordering or filtering.
+    exporters can never diverge on ordering or filtering. Delegates to
+    :meth:`Storage.all_bundles` (step 1.4e) so the web index shares the same
+    query path.
     """
-    for race in storage.all_races():
-        captures = storage.captures_for_race(race["id"], include_deleted=False)
-        yield race, sorted(captures, key=lambda c: c["elapsed_s"])
+    yield from storage.all_bundles()
 
 
 def export_all_csv(storage: Storage, out_path: str | Path) -> Path:

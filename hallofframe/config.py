@@ -2,7 +2,7 @@
 
 config.toml is HAND-EDITED and never written by the application (spec v1.2
 §6.7, §8). Everything machine-produced — the latency calibration result — lives
-in calibration.json; the application derives ``delta`` from that plus
+in the calibration file; the application derives ``delta`` from that plus
 ``reaction_offset_ms`` out of config.toml at race start (spec §5.4, §8).
 """
 from __future__ import annotations

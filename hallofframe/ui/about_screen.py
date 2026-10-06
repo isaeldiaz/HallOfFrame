@@ -14,7 +14,6 @@ two columns of content, a key bar at the bottom, all from ``styles`` tokens.
 """
 from __future__ import annotations
 
-import json
 import platform
 from pathlib import Path
 
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
 
 from .. import __version__
 from ..buildinfo import build_stamp
+from ..calibration import Calibration, calibration_path
 from . import styles
 from .widgets import KeyCap
 
@@ -79,13 +79,9 @@ def environment_rows(config) -> list[tuple[str, str]]:
 
 
 def calibrated_latency(config) -> float | None:
-    path = Path(config.data_root) / "calibration.json"
-    if not path.exists():
-        return None
-    try:
-        return float(json.loads(path.read_text()).get("latency_median_ms", 0.0))
-    except Exception:
-        return None
+    """The calibrated latency median (ms), or None when uncalibrated (§5.5)."""
+    cal = Calibration.load(config.data_root)
+    return cal.latency_median_ms if cal is not None else None
 
 
 def path_rows(config) -> list[tuple[str, str]]:
@@ -95,7 +91,7 @@ def path_rows(config) -> list[tuple[str, str]]:
         ("Database", str(root / f"{config.event_name}.db")),
         ("Config", str(root / "config.toml")),
         ("Log", str(root / "logs" / f"{config.event_name}-app.jsonl")),
-        ("Calibration", str(root / "calibration.json")),
+        ("Calibration", str(calibration_path(root))),
     ]
 
 

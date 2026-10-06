@@ -29,10 +29,13 @@ CREATE TABLE IF NOT EXISTS race (
     fps_nominal       REAL,
     notes             TEXT,
     created_at        TEXT NOT NULL,
+    updated_at        TEXT,                        -- last write (§6.7)
     ended_at          TEXT,
     t_end_monotonic   REAL,
     image_off         INTEGER NOT NULL DEFAULT 0,  -- timing-only race (§6.5)
     reviewed          INTEGER NOT NULL DEFAULT 0,  -- operator closed review (§6.8)
+    audio_path        TEXT,                        -- phase 8, unused
+    audio_t0_offset_s REAL,                        -- phase 8, unused
     CHECK (start_mode   IN ('direct','radio','external')),
     CHECK (viewing_mode IN ('water','screen'))
 );
@@ -51,6 +54,9 @@ CREATE TABLE IF NOT EXISTS capture (
     debounce_suspect INTEGER NOT NULL DEFAULT 0,
     deleted         INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
+    updated_at      TEXT,                          -- last write (§6.7)
+    bow_suggested   TEXT,                          -- phase 8, unused
+    bow_source      TEXT,                          -- phase 8, unused
     UNIQUE (race_id, sequence),
     CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
 );
@@ -62,6 +68,11 @@ CREATE TABLE IF NOT EXISTS capture_frame (
     offset_ms       REAL NOT NULL,
     path            TEXT NOT NULL,
     is_primary      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_capture_race ON capture(race_id, sequence);
@@ -113,20 +124,70 @@ class Storage:
         if "reviewed" not in cols:
             self._conn.execute(
                 "ALTER TABLE race ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0")
+        if "updated_at" not in cols:
+            self._conn.execute("ALTER TABLE race ADD COLUMN updated_at TEXT")
+            # Backfill: an existing race's last write is when it was created.
+            self._conn.execute("UPDATE race SET updated_at = created_at")
+        if "audio_path" not in cols:
+            self._conn.execute("ALTER TABLE race ADD COLUMN audio_path TEXT")
+        if "audio_t0_offset_s" not in cols:
+            self._conn.execute(
+                "ALTER TABLE race ADD COLUMN audio_t0_offset_s REAL")
+
+        ccols = {r[1] for r in self._conn.execute("PRAGMA table_info(capture)")}
+        if "updated_at" not in ccols:
+            self._conn.execute("ALTER TABLE capture ADD COLUMN updated_at TEXT")
+            # Backfill from the owning race's created_at.
+            self._conn.execute(
+                "UPDATE capture SET updated_at = "
+                "(SELECT r.created_at FROM race r WHERE r.id = capture.race_id)")
+        if "bow_suggested" not in ccols:
+            self._conn.execute("ALTER TABLE capture ADD COLUMN bow_suggested TEXT")
+        if "bow_source" not in ccols:
+            self._conn.execute("ALTER TABLE capture ADD COLUMN bow_source TEXT")
+
+    # --- write bookkeeping (spec §6.7) ------------------------------------
+    def _touch(self, race_id: int | None) -> None:
+        """Stamp a write: bump ``race.updated_at`` and the database-wide
+        ``meta['db_updated_at']`` to now. The caller holds ``self._lock`` and
+        commits; this never opens its own transaction."""
+        now = _utcnow()
+        if race_id is not None:
+            self._conn.execute(
+                "UPDATE race SET updated_at=? WHERE id=?", (now, race_id))
+        self._conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('db_updated_at', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (now,))
+
+    def last_updated(self, race_id: int | None = None) -> str | None:
+        """ISO timestamp of the last write, or None if nothing was ever written.
+
+        With *race_id*, that race's ``updated_at``; without, the database-wide
+        ``meta['db_updated_at']`` (spec §6.7)."""
+        with self._lock:
+            if race_id is None:
+                row = self._conn.execute(
+                    "SELECT value FROM meta WHERE key='db_updated_at'").fetchone()
+                return row["value"] if row else None
+            row = self._conn.execute(
+                "SELECT updated_at FROM race WHERE id=?", (race_id,)).fetchone()
+            return row["updated_at"] if row else None
 
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
                     delta_used, viewing_mode, fps_nominal=None, boot_id=None,
                     notes=None, image_off=0, race_no=None, heat_no=None) -> int:
         with self._lock:
+            now = _utcnow()
             cur = self._conn.execute(
                 "INSERT INTO race (name, race_no, heat_no, boot_id, t0_monotonic, "
                 "t0_wall, start_mode, radio_delay_ms, delta_used, viewing_mode, "
-                "fps_nominal, notes, created_at, image_off) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "fps_nominal, notes, created_at, updated_at, image_off) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name, race_no, heat_no, boot_id or current_boot_id(),
                  t0_monotonic, t0_wall, start_mode, radio_delay_ms, delta_used,
-                 viewing_mode, fps_nominal, notes, _utcnow(), int(image_off)))
+                 viewing_mode, fps_nominal, notes, now, now, int(image_off)))
+            self._touch(cur.lastrowid)
             self._conn.commit()
             return cur.lastrowid
 
@@ -149,33 +210,51 @@ class Storage:
         with self._lock:
             return self._conn.execute("SELECT * FROM race ORDER BY id").fetchall()
 
-    def race_keys(self) -> set:
-        """Distinct normalised keys already stored, so the UI can gray out races
-        that have already been run (still overwritable). Identity is the
-        ``(race_no, heat_no)`` pair (BEHAVIOUR §1); the name is not part of it.
-        The SQL is unchanged and keys are built in Python via ``race_key()`` so
-        this can never drift from ``RaceInfo.key``."""
-        from .races import race_key
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT DISTINCT race_no, heat_no, name FROM race").fetchall()
-            return {race_key(r["race_no"], r["heat_no"], r["name"]) for r in rows}
+    def race_bundle(self, race_id: int):
+        """One race row plus its non-deleted captures sorted by ``elapsed_s``.
 
-    def rename_races(self, key, new_name: str) -> int:
-        """Update ``race.name`` for every recorded race matching the normalised
-        key (the explicit *Also update recorded race* action). Returns the
-        number of rows changed. Never touches the roster."""
-        from .races import race_key
+        A single snapshot under the lock, so export/web can never observe a torn
+        race (§6.8). Returns ``(race_row, captures)``; ``race_row`` is None for
+        an unknown id."""
         with self._lock:
-            rows = self._conn.execute(
+            race = self._conn.execute(
+                "SELECT * FROM race WHERE id=?", (race_id,)).fetchone()
+            captures = self._conn.execute(
+                "SELECT * FROM capture WHERE race_id=? AND deleted=0 "
+                "ORDER BY elapsed_s", (race_id,)).fetchall()
+        return race, list(captures)
+
+    def all_bundles(self):
+        """Yield ``(race, captures)`` for every race, oldest first (§6.8).
+
+        Every race is yielded — one with no crossings yields an empty capture
+        list rather than being skipped — so the two whole-database exporters and
+        the web index can never diverge on ordering or filtering."""
+        for race in self.all_races():
+            yield self.race_bundle(race["id"])
+
+    def race_identity_rows(self):
+        """Every race's ``(id, race_no, heat_no, name)`` identity fields.
+
+        The normalisation/key comparison lives in ``races.py`` (``race_key``);
+        storage only exposes the raw rows so it never imports the roster module
+        (spec §6.7)."""
+        with self._lock:
+            return self._conn.execute(
                 "SELECT id, race_no, heat_no, name FROM race").fetchall()
-            ids = [r["id"] for r in rows
-                   if race_key(r["race_no"], r["heat_no"], r["name"]) == key]
-            for rid in ids:
+
+    def rename_race_ids(self, race_ids, new_name: str) -> int:
+        """Set ``race.name`` for the given ids in one commit and touch each.
+
+        The caller (``races.rename_races``) selects the ids by normalised key;
+        storage stays free of roster knowledge. Returns the number changed."""
+        with self._lock:
+            for rid in race_ids:
                 self._conn.execute(
                     "UPDATE race SET name=? WHERE id=?", (new_name, rid))
+                self._touch(rid)
             self._conn.commit()
-            return len(ids)
+            return len(race_ids)
 
     def identify_race(self, race_id: int, race_no, heat_no, name) -> bool:
         """WP7: set number/heat/name on an unlisted race — permitted exactly
@@ -189,28 +268,26 @@ class Storage:
             self._conn.execute(
                 "UPDATE race SET race_no=?, heat_no=?, name=? WHERE id=?",
                 (race_no or None, heat_no or None, name, race_id))
+            self._touch(race_id)
             self._conn.commit()
             return True
 
     def repoint_race(self, race_id: int, race_no, heat_no, name=None) -> None:
         """WP6: restyle a recorded race's key to a duplicate row's literal
-        formatting (``0102`` -> ``102``). Refuses a normalised-key change — merge
-        may only restyle, never move a race. Optionally updates ``name``."""
-        from .races import race_key
+        formatting (``0102`` -> ``102``). The normalised-key guard (merge may
+        only restyle, never move a race) lives in ``races.repoint_race`` so this
+        method carries no roster knowledge. Optionally updates ``name``."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM race WHERE id=?", (race_id,)).fetchone()
+                "SELECT name FROM race WHERE id=?", (race_id,)).fetchone()
             if row is None:
                 return
-            old_key = race_key(row["race_no"], row["heat_no"], row["name"])
-            new_key = race_key(race_no, heat_no, row["name"])
-            if old_key != new_key:
-                raise ValueError("repoint may only restyle a key, never move a race")
             if name is None:
                 name = row["name"]
             self._conn.execute(
                 "UPDATE race SET race_no=?, heat_no=?, name=? WHERE id=?",
                 (race_no or None, heat_no or None, name, race_id))
+            self._touch(race_id)
             self._conn.commit()
 
     def mark_race_ended(self, race_id: int, t_end_mono: float) -> None:
@@ -218,6 +295,7 @@ class Storage:
             self._conn.execute(
                 "UPDATE race SET ended_at=?, t_end_monotonic=? WHERE id=?",
                 (_utcnow(), t_end_mono, race_id))
+            self._touch(race_id)
             self._conn.commit()
 
     def mark_race_reviewed(self, race_id: int) -> None:
@@ -226,6 +304,7 @@ class Storage:
         with self._lock:
             self._conn.execute(
                 "UPDATE race SET reviewed=1 WHERE id=?", (race_id,))
+            self._touch(race_id)
             self._conn.commit()
 
     def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
@@ -244,6 +323,7 @@ class Storage:
             self._conn.execute(
                 "UPDATE capture SET t_press_wall = t_press_wall + ? WHERE race_id=?",
                 (delta, race_id))
+            self._touch(race_id)
             self._conn.commit()
             return True
 
@@ -252,6 +332,19 @@ class Storage:
             self._conn.execute(
                 "UPDATE race SET t0_reconstructed=1, t0_monotonic=? WHERE id=?",
                 (t0_reconstructed_mono, race_id))
+            self._touch(race_id)
+            self._conn.commit()
+
+    def set_race_audio(self, race_id: int, path, offset) -> None:
+        """Attach a race's recorded voice note (phase 8; unused today).
+
+        ``path`` is the WAV's path (relative to the data root) and ``offset`` is
+        the seconds from ``t0`` to its first sample."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE race SET audio_path=?, audio_t0_offset_s=? WHERE id=?",
+                (path, offset, race_id))
+            self._touch(race_id)
             self._conn.commit()
 
     # --- capture ----------------------------------------------------------
@@ -267,12 +360,14 @@ class Storage:
                        delta_used, image_flag=None, debounce_suspect=0,
                        bow_number=None, notes=None) -> int:
         with self._lock:
+            now = _utcnow()
             cur = self._conn.execute(
                 "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
                 "elapsed_s, delta_used, image_flag, debounce_suspect, bow_number, "
-                "notes) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "notes, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (race_id, sequence, t_press, t_press_wall, elapsed_s, delta_used,
-                 image_flag, debounce_suspect, bow_number, notes))
+                 image_flag, debounce_suspect, bow_number, notes, now))
+            self._touch(race_id)
             self._conn.commit()
             return cur.lastrowid
 
@@ -287,10 +382,16 @@ class Storage:
             vals.append(v)
         if not sets:
             return
-        vals.append(capture_id)
         with self._lock:
+            row = self._conn.execute(
+                "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
+            race_id = row["race_id"] if row else None
+            vals.append(_utcnow())      # capture.updated_at
+            vals.append(capture_id)
             self._conn.execute(
-                f"UPDATE capture SET {', '.join(sets)} WHERE id=?", vals)
+                f"UPDATE capture SET {', '.join(sets)}, updated_at=? WHERE id=?",
+                vals)
+            self._touch(race_id)
             self._conn.commit()
 
     def set_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
@@ -312,9 +413,10 @@ class Storage:
             t_press_wall = (row["t0_wall"] + elapsed_s
                             if row["t0_wall"] is not None else elapsed_s)
             self._conn.execute(
-                "UPDATE capture SET elapsed_s=?, t_press=?, t_press_wall=? "
-                "WHERE id=?",
-                (elapsed_s, t_press, t_press_wall, capture_id))
+                "UPDATE capture SET elapsed_s=?, t_press=?, t_press_wall=?, "
+                "updated_at=? WHERE id=?",
+                (elapsed_s, t_press, t_press_wall, _utcnow(), capture_id))
+            self._touch(row["race_id"])
             self._conn.commit()
             return True
 
@@ -338,6 +440,9 @@ class Storage:
                 "INSERT INTO capture_frame (capture_id, t_recv, offset_ms, path, "
                 "is_primary) VALUES (?,?,?,?,?)",
                 (capture_id, t_recv, offset_ms, path, is_primary))
+            row = self._conn.execute(
+                "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
+            self._touch(row["race_id"] if row else None)
             self._conn.commit()
             return cur.lastrowid
 
@@ -357,11 +462,14 @@ class Storage:
                 "UPDATE capture_frame SET is_primary=1 WHERE id=? AND capture_id=?",
                 (frame_id, capture_id))
             row = self._conn.execute(
-                "SELECT path FROM capture_frame WHERE id=?", (frame_id,)).fetchone()
+                "SELECT cf.path, c.race_id AS race_id FROM capture_frame cf "
+                "JOIN capture c ON c.id = cf.capture_id WHERE cf.id=?",
+                (frame_id,)).fetchone()
             if row:
                 self._conn.execute(
-                    "UPDATE capture SET primary_image=? WHERE id=?",
-                    (row["path"], capture_id))
+                    "UPDATE capture SET primary_image=?, updated_at=? WHERE id=?",
+                    (row["path"], _utcnow(), capture_id))
+                self._touch(row["race_id"])
             self._conn.commit()
 
     def integrity_ok(self) -> bool:

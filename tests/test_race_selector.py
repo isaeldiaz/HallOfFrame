@@ -1,4 +1,4 @@
-"""Race selector (Ready screen) + Storage.race_keys: recorded races are grayed
+"""Race selector (Ready screen) + races.recorded_keys: recorded races are grayed
 out, still selectable to overwrite, and the default jumps to the next
 not-yet-recorded race."""
 import os
@@ -12,7 +12,7 @@ import pytest
 from PySide6.QtCore import Qt
 
 from hallofframe.framebuffer import FrameBuffer
-from hallofframe.races import RaceInfo
+from hallofframe.races import RaceInfo, recorded_keys, rename_races, repoint_race
 from hallofframe.storage import Storage
 from hallofframe.ui.ready_screen import ReadyScreen
 
@@ -35,19 +35,19 @@ class TestStorageRaceNames(unittest.TestCase):
             viewing_mode="screen", race_no=race_no, heat_no=heat_no)
 
     def test_empty_returns_empty_set(self):
-        self.assertEqual(self.storage.race_keys(), set())
+        self.assertEqual(recorded_keys(self.storage), set())
 
     def test_distinct_names(self):
         self._add_race("Final", 1, race_no="101", heat_no="1")
         self._add_race("Final", 2, race_no="101", heat_no="1")  # overwrite
         self._add_race("Heat", 3, race_no="102", heat_no="1")
         self.assertEqual(
-            self.storage.race_keys(),
+            recorded_keys(self.storage),
             {("num", "101", "1"), ("num", "102", "1")})
 
     def test_legacy_rows_key_on_name(self):
         self._add_race("Heat 1", 1)  # no race_no/heat_no
-        self.assertEqual(self.storage.race_keys(), {("name", "heat 1", "")})
+        self.assertEqual(recorded_keys(self.storage), {("name", "heat 1", "")})
 
     def test_identify_race_once_then_blocked(self):
         rid = self.storage.create_race(
@@ -66,14 +66,14 @@ class TestStorageRaceNames(unittest.TestCase):
             "X", t0_monotonic=1000.0, t0_wall=1000.0, start_mode="direct",
             radio_delay_ms=0.0, delta_used=0.0, viewing_mode="screen",
             race_no="0102", heat_no="1")
-        self.storage.repoint_race(rid, "102", "1")   # restyle, same key
+        repoint_race(self.storage, rid, "102", "1")   # restyle, same key
         self.assertEqual(self.storage.get_race(rid)["race_no"], "102")
         with self.assertRaises(ValueError):
-            self.storage.repoint_race(rid, "999", "1")  # normalised-key change
+            repoint_race(self.storage, rid, "999", "1")  # normalised-key change
 
     def test_rename_races_updates_matching_rows(self):
         self._add_race("Final", 1, race_no="101", heat_no="1")
-        n = self.storage.rename_races(("num", "101", "1"), "Renamed")
+        n = rename_races(self.storage, ("num", "101", "1"), "Renamed")
         self.assertEqual(n, 1)
         row = self.storage.get_race(1)
         self.assertEqual(row["name"], "Renamed")

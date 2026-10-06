@@ -38,11 +38,16 @@ hallofframe/
                      controller, trigger, Qt UI, and the worker→Qt signal bridge.
   controller.py      Capture orchestration: start_race / end_race / record_crossing,
                      deferred image selection, calibration validation (delta).
+                     Emits through ONE `events(kind, payload)` hook (no
+                     `signal_*` attributes); `start_race` returns int or raises
+                     `RaceStateError`/`CalibrationError`.
   trigger.py         evdev key-listener (kernel timestamps, debounce, device grab).
   transport.py       iproxy USB tunnel lifecycle (host→device, TCP-only).
   mjpeg.py           MJPEG parse loop; emits timestamped Frame objects.
   framebuffer.py     Timestamped ring buffer; window(target, before, after).
   storage.py         SQLite persistence (WAL, foreign_keys ON), schema + migrations.
+                     `updated_at` on race/capture, `meta` table, `race_bundle`/
+                     `all_bundles`, `race_identity_rows`.
   archive.py         Continuous per-race footage writer with disk-space handling.
   export.py          CSV + whole-database HTML export; format_elapsed(); flag_word().
   web.py             SEPARATE-PROCESS HTTP results server (own read-only SQLite
@@ -51,8 +56,10 @@ hallofframe/
                      Excel" (.xls). Run: python -m hallofframe.web --config PATH.
   config.py          config.toml load + defaults (never writes the file).
   log.py             Structured JSONL logging.
-  calibration.py     Latency calibration helpers.
-  ui/                PySide6 widgets: main_window, capture_list, preview_widget,
+  calibration.py     Latency calibration helpers plus the single `Calibration`
+                     loader (the only place that reads the calibration file).
+  ui/                PySide6 widgets: main_window, ready_screen, race_screen,
+                     review_screen, crossing_list, preview_widget,
                      calibration_dialog.
   tools/ingest_soak.py  Soak-test utility for the ingest path.
   tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
@@ -79,14 +86,18 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 - **No disk on the trigger path.** Commits happen on the persistence writer
   thread via a `queue.Queue`.
 - **Worker→UI is thread-safe via a Qt signal bridge** (`_TriggerBridge` in
-  `main.py`). Never call Qt widgets directly from a worker thread — it can
-  deadlock the GUI.
+  `main.py`). The controller has a single `events(kind, payload)` hook; `main.py`
+  and `ui/main_window.py` each subscribe one function that switches on `kind`.
+  Never call Qt widgets directly from a worker thread — it can deadlock the GUI.
 - **No modal dialogs during a race** (spec §7.5); errors surface as a banner.
 - **Calibration (`delta`)** is validated at race start against the live stream
-  (§8): water mode requires `calibration.json` matching live resolution/fps;
-  screen mode needs none. A dead stream (empty buffer) auto-degrades the race to
-  timing-only (skip calibration, `Δ = 0`), and `image_mode = "off"` forces that
-  when the stream is up.
+  (§8) by the single `Calibration` loader (`calibration.py`): water mode requires
+  a calibration file matching live resolution/fps; screen mode needs none. A dead
+  stream (empty buffer) auto-degrades the race to timing-only (skip calibration,
+  `Δ = 0`), and `image_mode = "off"` forces that when the stream is up.
+- **`start_race` refuses by raising** `RaceStateError` (already running, or a
+  prior race has no `ended_at`) or `CalibrationError` (mismatch); it never
+  returns a stale `race_id`.
 
 ## Data & config (the single source of truth)
 
