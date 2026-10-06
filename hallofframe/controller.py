@@ -13,25 +13,32 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from . import storage as storage_mod
+from .calibration import CALIBRATION_FILENAME, Calibration, calibration_path
 from .framebuffer import FrameBuffer
 from .mjpeg import Frame
 from .storage import Storage
 
 
+class RaceStateError(Exception):
+    """A race cannot start because the controller is not in a startable state
+    (already running, or a prior race was never ended)."""
+
+
+@dataclass(frozen=True)
 class Capture:
-    def __init__(self, capture_id: int, sequence: int, t_press: float,
-                 elapsed_s: float, delta_used: float, image_flag: str | None,
-                 debounce_suspect: bool = False):
-        self.id = capture_id
-        self.sequence = sequence
-        self.t_press = t_press
-        self.elapsed_s = elapsed_s
-        self.delta_used = delta_used
-        self.image_flag = image_flag
-        self.debounce_suspect = debounce_suspect
+    """One recorded crossing, delivered to the UI via the ``events`` hook."""
+    id: int
+    sequence: int
+    t_press: float
+    elapsed_s: float
+    delta_used: float
+    image_flag: str | None
+    debounce_suspect: bool = False
 
 
 class CaptureController:
@@ -71,13 +78,9 @@ class CaptureController:
         self._timers: set = set()
         self._timers_lock = threading.Lock()
 
-        # Qt-signal-like hooks for the UI (a real Qt app swaps these).
-        self.signal_capture_added = None   # callable(capture)
-        self.signal_capture_deleted = None  # callable(sequence)
-        self.signal_image_ready = None     # callable(sequence, primary_path)
-        self.signal_race_started = None   # callable(race_id)
-        self.signal_race_ended = None     # callable(race_id)
-        self.signal_warning = None        # callable(str)
+        # ONE UI hook: events(kind, payload). See _emit for the kinds. The UI
+        # (or a test) installs a callable that switches on ``kind``.
+        self.events: Callable[[str, dict], None] | None = None
 
         # Deferred selection timing (ms). Margin so after-window frames exist.
         capture = config.section("capture")
@@ -86,34 +89,41 @@ class CaptureController:
         self.window_after_ms = float(capture["window_after_ms"])
         self._margin_s = 0.05
 
-    # --- signals ----------------------------------------------------------
-    def _warn(self, msg: str) -> None:
-        if self.logger:
-            self.logger.warning("controller", "warning", message=msg)
-        if self.signal_warning:
+    # --- events -----------------------------------------------------------
+    def _emit(self, kind: str, **payload) -> None:
+        """Deliver one UI event. Never let a UI failure reach the timing path:
+        the writer/timer threads call this, so exceptions are swallowed."""
+        if self.events:
             try:
-                self.signal_warning(msg)
+                self.events(kind, payload)
             except Exception:
                 pass
 
+    def _warn(self, msg: str) -> None:
+        if self.logger:
+            self.logger.warning("controller", "warning", message=msg)
+        self._emit("warning", message=msg)
+
     def _emit_capture(self, cap: Capture) -> None:
-        if self.signal_capture_added:
-            try:
-                self.signal_capture_added(cap)
-            except Exception:
-                pass
+        self._emit("capture_added", capture=cap)
 
     # --- race lifecycle ---------------------------------------------------
     def start_race(self, t_press: float, name: str = "Race",
                    race_no: str | None = None,
                    heat_no: str | None = None) -> int:
         """t_press is an evdev-sourced timestamp (§5.3). Arming happens
-        elsewhere; this call is the actual start."""
+        elsewhere; this call is the actual start.
+
+        Returns the new ``race_id`` on success; raises :class:`RaceStateError`
+        when a race is already running or the prior race was never ended, and
+        re-raises :class:`CalibrationError` when water-mode calibration does not
+        match the live stream (§8)."""
         if self.running:
-            self._warn("race already running")
-            return self.race_id
-        if self.race_id is not None and self.storage.get_race(self.race_id):
-            self._warn("refusing to start while a prior race is open")
+            raise RaceStateError("race already running")
+        if self.race_id is not None:
+            prior = self.storage.get_race(self.race_id)
+            if prior is not None and prior["ended_at"] is None:
+                raise RaceStateError(f"end race {self.race_id} first")
 
         self.t0 = t_press
         self.t0_wall = time.time()
@@ -141,8 +151,7 @@ class CaptureController:
             try:
                 self.delta = self._compute_delta()
             except CalibrationError as exc:
-                self._warn(f"race NOT started: {exc}")
-                return self.race_id
+                raise CalibrationError(f"race NOT started: {exc}") from exc
         self.running = True
         self.ended_at_mono = None
         self.ended_capture_count = 0
@@ -161,11 +170,7 @@ class CaptureController:
         # can never collide and overwrite each other's captures.
         self.race_dir = self._race_dir(race_id, name)
 
-        if self.signal_race_started:
-            try:
-                self.signal_race_started(race_id)
-            except Exception:
-                pass
+        self._emit("race_started", race_id=race_id)
         return race_id
 
     def resume_race(self, race_id: int) -> None:
@@ -198,29 +203,26 @@ class CaptureController:
 
         Stops continuous archiving, persists ``ended_at``/``t_end_monotonic``,
         clears ``running`` (which the UI's grab-sync timer uses to release the
-        trigger keyboard), and emits ``signal_race_ended``. Does NOT tear down
+        trigger keyboard), and emits ``race_ended``. Does NOT tear down
         the persistence writer thread — a new race can start next."""
         if not self.running or self.race_id is None:
             self._warn("end ignored: no race running")
             return None
+        race_id = self.race_id
         t_end = time.monotonic() if t_end is None else t_end
         self.running = False
         self.ended_at_mono = t_end
-        rows = self.storage.captures_for_race(self.race_id)
+        rows = self.storage.captures_for_race(race_id)
         self.ended_capture_count = len(rows)
 
-        self.storage.mark_race_ended(self.race_id, t_end)
+        self.storage.mark_race_ended(race_id, t_end)
 
         if self.logger:
             self.logger.info("controller", "race_ended",
-                             race_id=self.race_id, ends=self.ended_capture_count,
+                             race_id=race_id, ends=self.ended_capture_count,
                              t_end=t_end)
-        if self.signal_race_ended:
-            try:
-                self.signal_race_ended(self.race_id)
-            except Exception:
-                pass
-        return self.race_id
+        self._emit("race_ended", race_id=race_id)
+        return race_id
 
     def _race_dir(self, race_id: int, name: str):
         """Unique, deterministic per-race directory: races/<id>_<sanitized name>."""
@@ -389,12 +391,8 @@ class CaptureController:
             # Notify the UI so the last-capture panel / log thumbnails can show
             # the photo now that the deferred selection landed (§3). Emitted from
             # the deferred-timer thread, never the trigger path.
-            if self.signal_image_ready:
-                try:
-                    self.signal_image_ready(sequence, str(chosen_primary.relative_to(
-                        self.storage.data_root)))
-                except Exception:
-                    pass
+            self._emit("image_ready", sequence=sequence,
+                       path=str(chosen_primary.relative_to(self.storage.data_root)))
 
     def set_bow_number(self, capture_id: int, value: str | None) -> None:
         self.storage.update_capture(capture_id, bow_number=value)
@@ -412,16 +410,13 @@ class CaptureController:
         """Promote *frame_id* to the capture's primary photo (operator review).
 
         Returns the new primary_image path relative to ``data_root`` (or None).
-        Emits ``signal_image_ready`` so list thumbnails refresh.
+        Emits ``image_ready`` so list thumbnails refresh.
         """
         self.storage.set_primary(capture_id, frame_id)
         cap = self.storage.capture(capture_id)
         path = cap["primary_image"] if cap else None
-        if cap and path and self.signal_image_ready:
-            try:
-                self.signal_image_ready(cap["sequence"], path)
-            except Exception:
-                pass
+        if cap and path:
+            self._emit("image_ready", sequence=cap["sequence"], path=path)
         return path
 
     def soft_delete(self, capture_id: int) -> None:
@@ -435,11 +430,7 @@ class CaptureController:
             return
         cap = rows[-1]
         self.storage.update_capture(cap["id"], deleted=1)
-        if self.signal_capture_deleted:
-            try:
-                self.signal_capture_deleted(cap["sequence"])
-            except Exception:
-                pass
+        self._emit("capture_deleted", sequence=cap["sequence"])
 
     def stop(self) -> None:
         with self._timers_lock:
@@ -458,78 +449,27 @@ class CalibrationError(Exception):
 
 
 def _load_latency(config, buffer) -> float | None:
-    """Latency median (ms) from calibration.json, validated against the live
+    """Latency median (ms) from the calibration file, validated against the live
     stream (spec §8): refuse to start unless the file exists AND its resolution
     and fps match the live stream.
 
-    Latency is a property of the PIPELINE (device → tunnel → decode → buffer),
-    driven by resolution and fps — not by the scene. mean_frame_bytes is
-    deliberately NOT gated: JPEG size varies with scene complexity, so a scene
-    change would otherwise demand a needless re-calibration even though the
-    pipeline latency is unchanged."""
-    import json as _json
-    root = config.data_root
-    cal = root / "calibration.json"
-    if not cal.exists():
+    Thin wrapper over :class:`calibration.Calibration`: it keeps the historical
+    name/return type and raises :class:`CalibrationError` on a missing,
+    unreadable, or mismatched calibration."""
+    cal = Calibration.load(config.data_root)
+    if cal is None:
+        if calibration_path(config.data_root).exists():
+            raise CalibrationError(f"{CALIBRATION_FILENAME} unreadable")
         raise CalibrationError(
-            "calibration.json missing — run Calibrate first (§8, §5.5)")
+            f"{CALIBRATION_FILENAME} missing — run Calibrate first (§8, §5.5)")
     try:
-        data = _json.loads(cal.read_text())
-    except Exception as exc:
-        raise CalibrationError(f"calibration.json unreadable: {exc}")
-
-    median = float(data.get("latency_median_ms", 0.0))
-    cal_res = str(data.get("resolution", "") or "")
-    cal_fps = float(data.get("fps", 0) or 0)
-
-    live_res, _live_mean, live_fps = _measure_live(buffer)
-
-    if cal_res and live_res and cal_res != live_res:
-        raise CalibrationError(
-            f"calibrated resolution {cal_res} != live {live_res} — re-calibrate")
-    if cal_fps and live_fps and abs(live_fps - cal_fps) > max(1, cal_fps * 0.05):
-        raise CalibrationError(
-            f"calibrated fps {cal_fps:.0f} != live {live_fps:.1f} — re-calibrate")
-    return median
-
-
-def _measure_live(buffer):
-    """Return (resolution_str, mean_frame_bytes, measured_fps) from the buffer."""
-    try:
-        with buffer._lock:
-            snap = list(buffer._buf)
-    except AttributeError:
-        snap = []
-    frames = snap[-30:] if len(snap) > 30 else snap
-    if not frames:
-        raise CalibrationError("no frames in buffer — is the stream up?")
-    mean = int(sum(len(f.jpeg) for f in frames) / len(frames))
-    # resolution from the newest frame
-    w = h = 0
-    try:
-        from PIL import Image
-        import io as _io
-        im = Image.open(_io.BytesIO(frames[-1].jpeg)); im.load()
-        w, h = im.size
-    except Exception:
-        pass
-    res = f"{w}x{h}" if w and h else ""
-    # fps from frame timestamps. Only report when the sampled window spans a
-    # meaningful duration; at startup frames arrive in a burst so a short window
-    # reads an inflated instantaneous rate and would spuriously flag the
-    # calibration as stale. fps=0 defers the check to the stream health instead.
-    if len(frames) >= 2:
-        span = frames[-1].t_recv - frames[0].t_recv
-        fps = (len(frames) - 1) / span if span >= 0.5 else 0.0
-    else:
-        fps = 0.0
-    return res, mean, fps
-
-
-def live_lens_name(resolution: str) -> str:
-    """No lens info is available from the stream; the check is skipped unless the
-    calibration recorded a lens. Kept as a hook for future lens telemetry."""
-    return ""
+        live_res, _live_mean, live_fps = buffer.live_format()
+    except ValueError as exc:
+        raise CalibrationError(str(exc))
+    reason = cal.mismatch(live_res, live_fps)
+    if reason:
+        raise CalibrationError(reason)
+    return cal.latency_median_ms
 
 
 def calibration_status(config, buffer):
@@ -540,29 +480,21 @@ def calibration_status(config, buffer):
     ``ok`` is False when calibration is missing, unreadable, or the live
     resolution/fps no longer match. Does NOT raise (UI-safe); on measurement
     failure it reports ok=True with an empty detail so the status bar can keep
-    showing stream health without spurious alarms."""
-    import json as _json
-    root = config.data_root
-    cal = root / "calibration.json"
-    if not cal.exists():
-        return False, "no calibration.json — run Calibrate"
-    try:
-        data = _json.loads(cal.read_text())
-    except Exception:
-        return False, "calibration.json unreadable"
-    cal_res = str(data.get("resolution", "") or "")
-    cal_fps = float(data.get("fps", 0) or 0)
+    showing stream health without spurious alarms.
 
+    Thin wrapper over :class:`calibration.Calibration` (spec §8)."""
+    cal = Calibration.load(config.data_root)
+    if cal is None:
+        if calibration_path(config.data_root).exists():
+            return False, f"{CALIBRATION_FILENAME} unreadable"
+        return False, f"no {CALIBRATION_FILENAME} — run Calibrate"
     try:
-        live_res, _mean, live_fps = _measure_live(buffer)
+        live_res, _mean, live_fps = buffer.live_format()
     except Exception:
         return True, ""  # stream measurement unavailable; defer to stream health
     if not live_res and live_fps <= 0:
         return True, ""
-
-    if cal_res and live_res and cal_res != live_res:
-        return False, f"RESOLUTION CHANGED: cal {cal_res} vs live {live_res} — re-calibrate"
-    if cal_fps and live_fps and abs(live_fps - cal_fps) > max(1, cal_fps * 0.05):
-        return False, (f"FPS CHANGED: cal {cal_fps:.0f} vs live {live_fps:.1f} "
-                       "— re-calibrate")
+    reason = cal.mismatch(live_res, live_fps)
+    if reason:
+        return False, reason
     return True, ""

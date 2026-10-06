@@ -2,7 +2,7 @@
 
 Sequential by design (single-display constraint 2): a full-screen millisecond
 counter, then capture of 20 frames, then (after leaving full screen) entry of
-the 20 counter values one at a time. Writes calibration.json.
+the 20 counter values one at a time. Writes the calibration result file.
 """
 from __future__ import annotations
 
@@ -132,7 +132,8 @@ class CalibrationDialog(QDialog):
         lay.addWidget(self.scroll, 1)
 
         self.value_fields: list[QLineEdit] = []
-        self.finish_btn = QPushButton("Compute and save calibration.json")
+        self.finish_btn = QPushButton(
+            f"Compute and save {cal.CALIBRATION_FILENAME}")
         self.finish_btn.setEnabled(False)
         self.finish_btn.clicked.connect(self._finish)
         lay.addWidget(self.finish_btn)
@@ -141,7 +142,7 @@ class CalibrationDialog(QDialog):
         # Non-blocking so the full-screen counter actually paints and ticks while
         # the phone films it (spec §5.5). Sample the buffer on a QTimer; each tick
         # must not block the event loop.
-        fps = _measure_fps(self.buffer._snapshot())
+        fps = _measure_fps(self.buffer.recent(30))
         if not fps or fps <= 0:
             fps = float(self.buffer.assumed_fps or 30)
         # One counter change per camera frame period keeps the low digits crisp
@@ -185,11 +186,7 @@ class CalibrationDialog(QDialog):
     def _sample(self) -> None:
         span = self.buffer.span()
         if span is not None:
-            try:
-                with self.buffer._lock:
-                    snapshot = list(self.buffer._buf)
-            except AttributeError:
-                snapshot = []
+            snapshot = self.buffer.recent(self.buffer.maxlen)
             # Walk NEWEST first (the deque is oldest→newest, so reversed), and
             # stop as soon as frames fall before the capture started — those are
             # stale pre-counter frames and every earlier one is older still.
@@ -298,7 +295,7 @@ class CalibrationDialog(QDialog):
             f"median L = {result['latency_median_ms']:.1f} ms  "
             f"(n={result['n']})\n"
             f"IQR      = {result['latency_iqr_ms']:.1f} ms\n\n"
-            "Latency written to calibration.json.")
+            f"Latency written to {cal.CALIBRATION_FILENAME}.")
         self.accept()
 
 

@@ -35,6 +35,7 @@ from ..controller import CaptureController
 from ..export import export_all_csv, export_all_html
 from ..framebuffer import FrameBuffer
 from ..mjpeg import Frame
+from ..races import recorded_keys
 from ..storage import Storage
 
 # Rotating category labels so the seeded roster looks like a real programme.
@@ -198,9 +199,16 @@ def run_final_race(config, storage, buffer, controller, *, crossings=8, fps=30,
 
     deleted_seqs: list[int] = []
     image_ready: list[tuple[int, str]] = []
-    controller.signal_capture_added = on_capture
-    controller.signal_capture_deleted = deleted_seqs.append
-    controller.signal_image_ready = lambda seq, p: image_ready.append((seq, p))
+
+    def on_event(kind, payload):
+        if kind == "capture_added":
+            on_capture(payload["capture"])
+        elif kind == "capture_deleted":
+            deleted_seqs.append(payload["sequence"])
+        elif kind == "image_ready":
+            image_ready.append((payload["sequence"], payload["path"]))
+
+    controller.events = on_event
 
     feeder = _Feeder(buffer, fps, jpeg)
     feeder.start()
@@ -351,8 +359,8 @@ def verify_end_of_day(storage, data_root, seed_stats, final_stats):
     add("seed_frame_count", seed_frame_total == seed_stats["frames"],
         f"{seed_frame_total} == {seed_stats['frames']}")
 
-    # --- the Ready screen's gray-out set (race_keys) -----------------------
-    keys = storage.race_keys()
+    # --- the Ready screen's gray-out set (races.recorded_keys) -------------
+    keys = recorded_keys(storage)
     add("race_keys_distinct", len(keys) == n_races,
         f"{len(keys)} keys for {n_races} races")
 

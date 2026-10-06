@@ -140,8 +140,7 @@ def build_index(storage: Storage) -> str:
     races = storage.list_races(reviewed_only=True)  # id DESC (newest first)
     rows = []
     for r in races:
-        race = storage.get_race(r["id"])
-        captures = storage.captures_for_race(r["id"], include_deleted=False)
+        race, captures = storage.race_bundle(r["id"])  # step 1.4e
         n = len(captures)
         t0 = race["t0_wall"] if race["t0_wall"] is not None else None
         gun = local_hms(t0) if t0 is not None else "—"

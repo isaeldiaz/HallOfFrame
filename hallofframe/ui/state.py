@@ -22,7 +22,7 @@ import enum
 
 class AppState(enum.Enum):
     STREAM_DOWN = "stream_down"    # no frames arriving
-    RECALIBRATE = "recalibrate"    # calibration.json no longer matches live stream
+    RECALIBRATE = "recalibrate"    # calibration file no longer matches live stream
     READY = "ready"
     ARMED = "armed"
     RECORDING = "recording"

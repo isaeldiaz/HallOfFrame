@@ -7,6 +7,7 @@ import pytest
 from hallofframe.controller import CaptureController
 from hallofframe.framebuffer import FrameBuffer, Frame
 from hallofframe.main import build_trigger
+from hallofframe.races import recorded_keys
 from hallofframe.storage import Storage
 from hallofframe.ui.main_window import MainWindow
 from hallofframe.ui.state import AppState
@@ -109,7 +110,7 @@ class TestArmDisarm(unittest.TestCase):
             self.assertEqual(win._recorded_count_for_key(("num", "102", "1")), 0)
             # The provisional (name-keyed) race must NOT fire the blue
             # "recorded, not in roster" banner.
-            win._render_roster_banner(win._load_result, storage.race_keys())
+            win._render_roster_banner(win._load_result, recorded_keys(storage))
             self.assertEqual(win.banner_host.lay.count(), 1)  # amber dup only
         finally:
             ctl.stop()

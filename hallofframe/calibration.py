@@ -3,9 +3,9 @@
 Sequential flow mandated by the single-display hardware (constraint 2):
 full-screen counter -> capture 20 frames -> leave full-screen -> operator
 enters the 20 counter values. This module computes the median and IQR of L and
-writes ``calibration.json`` with the capture format (resolution, fps, lens,
-mean frame bytes) so a mismatch with the live stream can be detected at race
-start (§8).
+writes the calibration result file with the capture format (resolution, fps,
+lens, mean frame bytes) so a mismatch with the live stream can be detected at
+race start (§8).
 
 The latency formula is applied in the controller; here we only measure.
 """
@@ -14,12 +14,83 @@ from __future__ import annotations
 import json
 import statistics
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .framebuffer import FrameBuffer
 from .mjpeg import Frame
 
 N_SAMPLES = 20
+
+# The calibration result filename lives here, in ONE place: every reader
+# (controller, about screen) goes through Calibration.load / calibration_path so
+# the name is never duplicated (spec §8).
+CALIBRATION_FILENAME = "calibration.json"
+
+
+def calibration_path(data_root) -> Path:
+    """Path of the calibration result file under *data_root* (spec §8)."""
+    return Path(data_root) / CALIBRATION_FILENAME
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """The persisted latency calibration (spec §5.5, §8).
+
+    ``resolution`` is "" and ``fps``/``mean_frame_bytes`` may be 0 when the
+    writer could not measure them; ``mismatch`` treats an unknown field as
+    "no constraint" so a partial file still validates.
+    """
+    latency_median_ms: float
+    latency_iqr_ms: float
+    resolution: str      # "1440x1080" or ""
+    fps: float           # 0 when unknown
+    mean_frame_bytes: int
+    measured_at: str
+
+    @classmethod
+    def load(cls, data_root: Path) -> "Calibration | None":
+        """Load the calibration file, or None if it is missing or unreadable
+        (spec §8). A malformed body is treated the same as unreadable."""
+        path = calibration_path(data_root)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            return None
+        try:
+            return cls(
+                latency_median_ms=float(data.get("latency_median_ms", 0.0)),
+                latency_iqr_ms=float(data.get("latency_iqr_ms", 0.0)),
+                resolution=str(data.get("resolution", "") or ""),
+                fps=float(data.get("fps", 0) or 0),
+                mean_frame_bytes=int(data.get("mean_frame_bytes", 0) or 0),
+                measured_at=str(data.get("measured_at", "") or ""),
+            )
+        except Exception:
+            return None
+
+    def mismatch(self, live_resolution: str, live_fps: float) -> str | None:
+        """Compare the calibrated pipeline format against the live stream.
+
+        Returns None when they agree (or when a field is unknown on either
+        side), else a human-readable reason. Resolution must be equal when both
+        are known; fps must be within ``max(1, cal_fps*0.05)`` when both are
+        known (spec §8). ``mean_frame_bytes`` is deliberately NOT gated: JPEG
+        size varies with scene complexity, so a scene change would otherwise
+        demand a needless re-calibration even though pipeline latency is
+        unchanged.
+        """
+        if (self.resolution and live_resolution
+                and self.resolution != live_resolution):
+            return (f"RESOLUTION CHANGED: cal {self.resolution} vs live "
+                    f"{live_resolution} — re-calibrate")
+        if (self.fps and live_fps
+                and abs(live_fps - self.fps) > max(1, self.fps * 0.05)):
+            return (f"FPS CHANGED: cal {self.fps:.0f} vs live {live_fps:.1f} "
+                    "— re-calibrate")
+        return None
 
 
 def parse_counter(value: str) -> tuple[float, float] | None:
@@ -74,8 +145,7 @@ def capture_calibration_frames(buffer: FrameBuffer, count: int = N_SAMPLES
         if span is None:
             time.sleep(0.05)
             continue
-        with buffer._lock:
-            snapshot = list(buffer._buf)
+        snapshot = buffer.recent(buffer.maxlen)
         for f in snapshot:
             if id(f) not in seen:
                 seen.add(id(f))
@@ -134,6 +204,6 @@ def write_calibration(data_root: Path, latency_median_ms: float, latency_iqr_ms:
         "lens": lens,
         "mean_frame_bytes": mean_frame_bytes,
     }
-    path = data_root / "calibration.json"
+    path = calibration_path(data_root)
     path.write_text(json.dumps(cal, indent=2) + "\n")
     return path

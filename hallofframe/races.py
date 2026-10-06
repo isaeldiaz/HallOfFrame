@@ -173,6 +173,42 @@ def race_key(race_no, heat_no, name) -> tuple:
     return ("name", _norm(name), "")
 
 
+def recorded_keys(storage) -> set:
+    """Distinct normalised keys already stored, so the UI can gray out races
+    that have already been run (still overwritable). Identity is the
+    ``(race_no, heat_no)`` pair (BEHAVIOUR §1); the name is not part of it.
+
+    Step 1.4f: the key logic lives here, not in ``storage.py`` — storage only
+    exposes raw ``race_identity_rows()`` so it never imports this module."""
+    return {race_key(r["race_no"], r["heat_no"], r["name"])
+            for r in storage.race_identity_rows()}
+
+
+def rename_races(storage, key, new_name: str) -> int:
+    """Update ``race.name`` for every recorded race matching the normalised key
+    (the explicit *Also update recorded race* action). Returns the number of
+    rows changed. Never touches the roster. The key comparison lives here
+    (step 1.4f); ``storage.rename_race_ids`` performs the write."""
+    ids = [r["id"] for r in storage.race_identity_rows()
+           if race_key(r["race_no"], r["heat_no"], r["name"]) == key]
+    return storage.rename_race_ids(ids, new_name)
+
+
+def repoint_race(storage, race_id, race_no, heat_no, name=None) -> None:
+    """WP6: restyle a recorded race's key to a duplicate row's literal
+    formatting (``0102`` -> ``102``). Refuses a normalised-key change — merge
+    may only restyle, never move a race. Optionally updates ``name``. The key
+    guard lives here (step 1.4f); ``storage.repoint_race`` performs the write."""
+    row = storage.get_race(race_id)
+    if row is None:
+        return
+    old_key = race_key(row["race_no"], row["heat_no"], row["name"])
+    new_key = race_key(race_no, heat_no, row["name"])
+    if old_key != new_key:
+        raise ValueError("repoint may only restyle a key, never move a race")
+    storage.repoint_race(race_id, race_no, heat_no, name)
+
+
 @dataclass
 class RosterLoad:
     """The result of loading a roster CSV (BEHAVIOUR §4).

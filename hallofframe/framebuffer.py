@@ -26,7 +26,6 @@ class FrameBuffer:
         self.maxlen = int(seconds * assumed_fps * 1.5)  # note int() — maxlen rejects float
         self._buf: deque[Frame] = deque(maxlen=self.maxlen)
         self._lock = threading.Lock()
-        self._resize_warning_emitted = False
         # Real-clock time of the last append. This is the liveness signal: a
         # stream is "down" when no frame has arrived for a while, even though the
         # ring still holds seconds of now-stale frames (their t_recv is in the
@@ -39,8 +38,48 @@ class FrameBuffer:
             self._buf.append(frame)
             self._last_append_mono = self._clock()
 
-    def _snapshot(self) -> list[Frame]:
-        return list(self._buf)
+    def recent(self, n: int) -> list[Frame]:
+        """The last *n* frames, oldest→newest, under the lock (spec §6.3).
+
+        Used by the calibration/format readers so no caller reaches into the
+        private deque. ``n <= 0`` returns an empty list; asking for more than
+        the ring holds returns everything."""
+        if n <= 0:
+            return []
+        with self._lock:
+            frames = list(self._buf)
+        return frames[-n:]
+
+    def live_format(self) -> tuple[str, int, float]:
+        """(resolution, mean_frame_bytes, fps) from the last 30 frames.
+
+        The pipeline properties that determine latency and that calibration is
+        validated against at race start (spec §8). Raises ``ValueError`` when
+        the ring is empty (stream down). fps is 0.0 when the sampled window
+        spans less than 0.5 s: at startup frames arrive in a burst so a short
+        window reads an inflated instantaneous rate and would spuriously flag
+        the calibration as stale (spec §8)."""
+        frames = self.recent(30)
+        if not frames:
+            raise ValueError("no frames in buffer — is the stream up?")
+        mean = int(sum(len(f.jpeg) for f in frames) / len(frames))
+        # resolution from the newest frame
+        w = h = 0
+        try:
+            from PIL import Image
+            import io as _io
+            im = Image.open(_io.BytesIO(frames[-1].jpeg))
+            im.load()
+            w, h = im.size
+        except Exception:
+            pass
+        res = f"{w}x{h}" if w and h else ""
+        if len(frames) >= 2:
+            span = frames[-1].t_recv - frames[0].t_recv
+            fps = (len(frames) - 1) / span if span >= 0.5 else 0.0
+        else:
+            fps = 0.0
+        return res, mean, fps
 
     def newest(self) -> Optional[Frame]:
         """Most recently appended frame. O(1) — for preview rendering only.
@@ -104,14 +143,3 @@ class FrameBuffer:
         else:
             fps = 0.0
         return (age <= stale_after_s), fps, age
-
-    def check_fps(self, measured_fps: float) -> None:
-        """Warn (once) if the live measured fps diverges from assumed_fps by
-        more than 20%, since maxlen derives from assumed_fps (§6.3)."""
-        if measured_fps <= 0:
-            return
-        ratio = measured_fps / self.assumed_fps
-        if (ratio < 0.8 or ratio > 1.2) and not self._resize_warning_emitted:
-            self._resize_warning_emitted = True
-            return True
-        return False

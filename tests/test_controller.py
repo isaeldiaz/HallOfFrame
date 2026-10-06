@@ -14,7 +14,8 @@ import unittest
 import pytest
 
 from fakes import FakeScheduler
-from hallofframe.controller import CaptureController
+from hallofframe.controller import (CalibrationError, Capture,
+                                    CaptureController, RaceStateError)
 from hallofframe.mjpeg import Frame
 
 
@@ -106,7 +107,9 @@ class TestController(Base):
             self.controller.record_crossing(1000.0 + 5.0 + i)
         self.settle()
         deleted = []
-        self.controller.signal_capture_deleted = deleted.append
+        self.controller.events = lambda kind, payload: (
+            deleted.append(payload["sequence"]) if kind == "capture_deleted"
+            else None)
         self.controller.undo_last()
         rows = self.storage.captures_for_race(race_id, include_deleted=True)
         self.assertEqual([r["sequence"] for r in rows], [1, 2, 3])
@@ -118,7 +121,8 @@ class TestController(Base):
 
     def test_undo_last_noop_without_race(self):
         self.controller.undo_last()  # must not raise
-        self.controller.signal_capture_deleted = lambda s: self.fail("unexpected signal")
+        self.controller.events = lambda kind, payload: self.fail(
+            "unexpected event")
 
     def test_debounced_press_recorded(self):
         self.seed_buffer(self.buffer)
@@ -220,7 +224,8 @@ class TestController(Base):
         self.controller.record_crossing(1000.0 + 5.0)
         self.commit()
         before = [c["id"] for c in self.storage.captures_for_race(race_id)]
-        self.storage.repoint_race(race_id, "102", "1")
+        from hallofframe.races import repoint_race
+        repoint_race(self.storage, race_id, "102", "1")
         self.assertEqual(self.storage.get_race(race_id)["race_no"], "102")
         after = [c["id"] for c in self.storage.captures_for_race(race_id)]
         self.assertEqual(after, before)
@@ -230,11 +235,60 @@ class TestController(Base):
         # not un-dimm a recorded race or split the recorded set.
         self.controller.start_race(1000.0, name="Old name",
                                    race_no="102", heat_no="1")
-        from hallofframe.races import RaceInfo, race_key
-        recorded = self.storage.race_keys()
+        from hallofframe.races import RaceInfo, race_key, recorded_keys
+        recorded = recorded_keys(self.storage)
         renamed = RaceInfo(race_no="102", heat_no="1", name="New name")
         self.assertIn(renamed.key, recorded)
         self.assertEqual(renamed.key, race_key("102", "1", "anything"))
+
+    # --- start_race refusal semantics + the single events hook (step 1.3/1.6)
+    def test_start_race_raises_when_already_running(self):
+        self.seed_buffer(self.buffer)
+        self.controller.start_race(1000.0, name="Race-1")
+        with self.assertRaises(RaceStateError):
+            self.controller.start_race(1001.0, name="Race-2")
+
+    def test_start_race_raises_when_prior_race_open(self):
+        self.seed_buffer(self.buffer)
+        self.controller.start_race(1000.0, name="Race-1")
+        # Simulate a prior race that was never ended (running False, no ended_at).
+        self.controller.running = False
+        with self.assertRaises(RaceStateError):
+            self.controller.start_race(1001.0, name="Race-2")
+
+    def test_second_race_after_ended_starts_without_warning(self):
+        self.seed_buffer(self.buffer)
+        warnings = []
+        self.controller.events = lambda kind, payload: (
+            warnings.append(payload["message"]) if kind == "warning" else None)
+        first = self.controller.start_race(1000.0, name="Race-1")
+        self.controller.end_race(1005.0)
+        second = self.controller.start_race(1010.0, name="Race-2")
+        self.assertNotEqual(first, second)
+        self.assertEqual(warnings, [])
+
+    def test_events_arrive_through_single_hook(self):
+        self.seed_buffer(self.buffer)
+        events = []
+        self.controller.events = lambda kind, payload: events.append(
+            (kind, payload))
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        self.controller.record_crossing(1000.0 + 5.0)
+        self.settle()
+        self.controller.end_race(1006.0)
+        kinds = [kind for kind, _ in events]
+        self.assertEqual(events[0], ("race_started", {"race_id": race_id}))
+        added = next(payload for kind, payload in events
+                     if kind == "capture_added")
+        self.assertIsInstance(added["capture"], Capture)
+        self.assertEqual(added["capture"].sequence, 1)
+        ready = next(payload for kind, payload in events
+                     if kind == "image_ready")
+        self.assertEqual(ready["sequence"], 1)
+        self.assertIn("path", ready)
+        self.assertEqual(events[-1], ("race_ended", {"race_id": race_id}))
+        self.assertIn("capture_added", kinds)
+        self.assertIn("image_ready", kinds)
 
 
 @pytest.mark.usefixtures("controller_env")
@@ -261,7 +315,8 @@ class TestCalibrationValidation(Base):
         self._seed_real_jpeg(self.buffer, bio.getvalue())
         cfg = self.config_factory(timing={"viewing_mode": "water"})
         c = CaptureController(cfg, self.storage, self.buffer)
-        self.assertIsNone(c.start_race(1000.0, name="Race-T"))
+        with self.assertRaises(CalibrationError):
+            c.start_race(1000.0, name="Race-T")
         c.stop()
 
     def test_water_mode_starts_with_stream_down(self):
@@ -366,7 +421,8 @@ class TestCalibrationValidation(Base):
             "fps": 30, "lens": "", "mean_frame_bytes": len(jpg)}))
         cfg = self.config_factory(timing={"viewing_mode": "water"})
         c = CaptureController(cfg, self.storage, self.buffer)
-        self.assertIsNone(c.start_race(1000.0, name="Race-T"))
+        with self.assertRaises(CalibrationError):
+            c.start_race(1000.0, name="Race-T")
         c.stop()
 
     def test_water_mode_scene_change_does_not_block_start(self):

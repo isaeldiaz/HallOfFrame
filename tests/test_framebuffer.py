@@ -12,6 +12,15 @@ def make_frames(t0=1000.0, fps=30, count=300):
             for i in range(count)]
 
 
+def make_jpeg(size=(1440, 1080), color=(120, 120, 120)) -> bytes:
+    """A real, decodable JPEG (resolution must come from the bytes)."""
+    from PIL import Image
+    import io as _io
+    bio = _io.BytesIO()
+    Image.new("RGB", size, color).save(bio, "JPEG")
+    return bio.getvalue()
+
+
 class TestFrameBuffer(unittest.TestCase):
     def test_newest_returns_last_appended(self):
         fb = FrameBuffer()
@@ -165,6 +174,69 @@ class TestFrameBuffer(unittest.TestCase):
         stop.set()
         th_prod.join()
         self.assertEqual(errors, [])
+
+
+class TestFrameBufferAccessors(unittest.TestCase):
+    """Step 1.2: recent() and live_format() replace callers reaching into
+    ``_lock``/``_buf``/``_snapshot`` (spec §6.3, §8)."""
+
+    def test_recent_returns_last_n_in_order(self):
+        fb = FrameBuffer()
+        for f in make_frames(count=10):
+            fb.append(f)
+        self.assertEqual([f.seq for f in fb.recent(3)], [8, 9, 10])
+
+    def test_recent_more_than_available(self):
+        fb = FrameBuffer()
+        for f in make_frames(count=5):
+            fb.append(f)
+        self.assertEqual([f.seq for f in fb.recent(50)], [1, 2, 3, 4, 5])
+
+    def test_recent_zero_and_negative(self):
+        fb = FrameBuffer()
+        for f in make_frames(count=5):
+            fb.append(f)
+        self.assertEqual(fb.recent(0), [])
+        self.assertEqual(fb.recent(-1), [])
+
+    def test_recent_empty(self):
+        self.assertEqual(FrameBuffer().recent(10), [])
+
+    def test_live_format_empty_raises(self):
+        with self.assertRaises(ValueError):
+            FrameBuffer().live_format()
+
+    def test_live_format_reports_resolution_mean_and_fps(self):
+        fb = FrameBuffer(assumed_fps=30)
+        jpg = make_jpeg((1440, 1080))
+        dt = 1.0 / 30
+        for i in range(60):
+            t = 1000.0 + i * dt
+            fb.append(Frame(t, t, i + 1, jpg))
+        res, mean, fps = fb.live_format()
+        self.assertEqual(res, "1440x1080")
+        self.assertEqual(mean, len(jpg))
+        self.assertAlmostEqual(fps, 30.0, delta=1.0)
+
+    def test_live_format_burst_defers_fps(self):
+        # Frames arriving in a burst span < 0.5 s: fps reads 0.0 so a stale
+        # calibration is not spuriously flagged at startup (spec §8).
+        fb = FrameBuffer(assumed_fps=30)
+        jpg = make_jpeg((640, 480))
+        for i in range(10):
+            t = 1000.0 + i * 0.001
+            fb.append(Frame(t, t, i + 1, jpg))
+        res, _mean, fps = fb.live_format()
+        self.assertEqual(res, "640x480")
+        self.assertEqual(fps, 0.0)
+
+    def test_live_format_unreadable_jpeg_blank_resolution(self):
+        fb = FrameBuffer()
+        for f in make_frames(count=5):
+            fb.append(f)
+        res, mean, _fps = fb.live_format()
+        self.assertEqual(res, "")
+        self.assertGreater(mean, 0)
 
 
 if __name__ == "__main__":
