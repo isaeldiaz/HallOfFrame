@@ -126,46 +126,6 @@ accept the fallback for a real regatta.
 
 ---
 
-## 3.5 Finish horn (optional): dialout group + USB relay
-
-Only needed if the operator uses the relay-driven 12 V finish horn (§13.2). The
-LCUS-1 relay enumerates on a CH340 serial adapter as `/dev/ttyUSB0`,
-`root:dialout`, mode `crw-rw----` — the same shape as §3's input device, so the
-operator needs the `dialout` group.
-
-```bash
-# 1. Check the board is detected (CH340 vendor 1a86:7523)
-lsusb | grep -i ch340          # "QinHeng Electronics CH340 serial converter"
-ls /dev/ttyUSB*                # expect /dev/ttyUSB0
-
-# 2. If /dev/ttyUSB0 appears then vanishes ~1 s later, the brltty braille
-#    service grabbed it (CH340 shares its USB ID). Remove brltty and replug:
-#    sudo apt remove brltty
-
-# 3. Grant the operator access to the serial port
-sudo usermod -aG dialout "$USER"
-#    then log out and back in (group membership is set at session start).
-
-# 4. pyserial must be installed in the venv (§4) — it is now part of the
-#    default install command.
-```
-
-### Verify (after logging back in)
-
-```bash
-id -nG | tr ' ' '\n' | grep -qx dialout && echo "dialout group: OK" || echo "dialout group: MISSING"
-~/regatta/venv/bin/python -m hallofframe.tools.test_horn ~/regatta-data/config.toml --beep
-```
-
-The relay audibly clicks twice (self-test toggle) and the horn sounds once for
-`duration_ms`. The tool prints `self-test: OK` with `status=no-feedback` — the
-LC-1 board never replies to any command, so the audible click is the real proof.
-If the relay does not appear at `/dev/ttyUSB*`, the port renumbered (e.g. to
-`ttyUSB1`); update `[horn] device` in `config.toml` (or add a udev rule matching
-the board's serial for a stable name).
-
----
-
 ## 4. Python environment
 
 ```bash
@@ -173,7 +133,7 @@ python3 -m venv ~/regatta/venv
 source ~/regatta/venv/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install PySide6-Essentials requests evdev pillow pyserial
+python -m pip install PySide6-Essentials requests evdev pillow
 ```
 
 Notes on each choice:
@@ -204,11 +164,6 @@ Notes on each choice:
   so this is a download, not a build. (The system having Pillow 12.1.1 on
   Python 3.14 is *not* evidence for that — Ubuntu's is a distro-built `.deb`
   compiled against the system interpreter, which says nothing about PyPI.)
-- **`pyserial`** is optional but required for the optional finish horn (§13.2).
-  The LCUS-1 relay speaks the standard LC USB-switch protocol over CH340 serial;
-  the board gives **no electronic reply**, so `pyserial` is used only to send
-  the 4-byte on/off commands from a worker thread (never the trigger path).
-  Without it the horn silently degrades to disabled.
 - **No TOML writer is needed.** Spec v1.2 §8 settles that the application never
   writes `config.toml`; everything machine-produced goes to `calibration.json`.
   Stdlib `tomllib` suffices, and the `tomli-w` dependency listed in v1.1 is
@@ -557,8 +512,6 @@ id -nG | tr ' ' '\n' | grep -qx input && ok "input group" || no "input group" "u
 [ -x "$V" ] && ok "venv present" || no "venv present" "see §4"
 $V -c "import PySide6,evdev,requests,PIL" 2>/dev/null \
   && ok "python imports" || no "python imports" "pip install (see §4)"
-$V -c "import serial" 2>/dev/null \
-  && ok "pyserial (horn)" || no "pyserial (horn)" "optional: pip install pyserial (§3.5)"
 [ "$($V -c 'import evdev;print(len(evdev.list_devices()))' 2>/dev/null)" -gt 0 ] 2>/dev/null \
   && ok "readable input devices" || no "readable input devices" "input group not active in this session"
 apt-mark showhold | grep -qx python3 && ok "python3 held" || no "python3 held" "see §6"
@@ -605,7 +558,7 @@ everything while online:
 # Python side — note `pip wheel`, not `pip download`: it *builds* evdev into a
 # real wheel, so the restore needs no compiler.
 source ~/regatta/venv/bin/activate
-pip wheel -w ~/regatta/wheelhouse PySide6-Essentials requests evdev pillow pyserial
+pip wheel -w ~/regatta/wheelhouse PySide6-Essentials requests evdev pillow
 
 # Debian side. --reinstall is REQUIRED: §2 already installed these, and a plain
 # --download-only resolves to "0 newly installed" and downloads nothing.
@@ -633,7 +586,7 @@ Restore, with no network:
 sudo dpkg -i ~/regatta/debs/*.deb; sudo apt-get -f install
 python3 -m venv ~/regatta/venv && source ~/regatta/venv/bin/activate
 pip install --no-index --find-links ~/regatta/wheelhouse \
-    PySide6-Essentials requests evdev pillow pyserial
+    PySide6-Essentials requests evdev pillow
 ```
 
 The wheelhouse is valid only for the same Python minor version and architecture

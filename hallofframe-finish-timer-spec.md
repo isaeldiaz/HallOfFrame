@@ -1358,13 +1358,6 @@ start_keycodes = [184]       # KEY_F14
 grab_device = false          # true = exclusive grab; required if using the
                              # internal keyboard as the trigger (§6.4)
 
-[horn]
-enabled = false              # optional 12 V finish horn via a USB relay
-device = ""                  # e.g. /dev/ttyUSB0 (LCUS-1 via CH340 serial)
-baud = 9600
-relay = 1                    # relay channel on the board
-duration_ms = 300            # active duration; close crossings merge (§13.2)
-
 [archive]
 enabled = true
 every_nth_frame = 1
@@ -1776,19 +1769,6 @@ implementation can be planned against the constraints already locked in here.
   from one action. A delay of up to ~500 ms from the capture to the horn beeping
   is acceptable, so it must not live on the evdev trigger path — it should be
   driven asynchronously like the deferred image selection (§6.5).
-
-  > **Implemented (CDC/serial route).** The *off-the-shelf USB relay, host-timed*
-  > route below is now built as `horn.py` (a worker thread fed by a queue, driven
-  > on each committed crossing off the trigger path) and configured via a `[horn]`
-  > block in §8 (`enabled`, `device`, `baud`, `relay`, `duration_ms`). An LCUS-1
-  > board over CH340 serial (`/dev/ttyUSB0`) is the current hardware. Two
-  > limitations remain from the original plan and are still open: there is **no
-  > manual-honk binding** outside a race, and the LC-1 board gives **no electronic
-  > reply to any command**, so the app cannot read back or ACK state and cannot
-  > detect a dead horn — the audible click is the only confirmation (see the
-  > "Software shape" note below and the fail-safe caveats in this section). The
-  > firmware-dongle and audio-tone routes below are unchanged and remain the
-  > recommended long-term directions if fail-safe/readback matters.
 
   The hardware interface is not settled. Three routes are surveyed below; the
   second is the recommended direction and the third the documented fallback.

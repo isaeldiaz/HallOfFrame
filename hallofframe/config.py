@@ -65,14 +65,6 @@ DEFAULTS: dict[str, Any] = {
     "races": {
         "csv_path": "{event_name}_races.csv",
     },
-    "horn": {
-        "enabled": False,
-        "device": "",          # e.g. /dev/ttyUSB0 (LCUS-1 via CH340)
-        "baud": 9600,
-        "relay": 1,            # relay channel on the LCUS-1 board
-        "duration_ms": 300,    # active horn duration; short so close crossings
-                               # each get their own clear beep (they merge)
-    },
     "archive": {
         "enabled": True,
         "every_nth_frame": 1,
@@ -131,11 +123,6 @@ def _validate(raw: dict[str, Any], path: Path) -> None:
     if timing.get("image_mode", "auto") not in ("auto", "off"):
         raise ConfigError(
             f"{path}: [timing] image_mode must be 'auto' or 'off'")
-
-    horn = raw.get("horn", {})
-    if horn.get("enabled", False) and not str(horn.get("device", "")).strip():
-        raise ConfigError(f"{path}: [horn] enabled requires a 'device' (e.g. "
-                          f"/dev/ttyUSB0)")
 
 
 def load_config(path: str | os.PathLike[str] | None = None) -> Config:

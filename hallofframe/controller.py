@@ -36,12 +36,11 @@ class Capture:
 
 class CaptureController:
     def __init__(self, config, storage: Storage, framebuffer: FrameBuffer,
-                 logger=None, horn=None):
+                 logger=None):
         self.config = config
         self.storage = storage
         self.buffer = framebuffer
         self.logger = logger
-        self.horn = horn  # optional Horn driver (None disables audio feedback)
 
         self.t0: float | None = None
         self.t0_wall: float | None = None
@@ -306,10 +305,6 @@ class CaptureController:
                       bool(payload["debounce_suspect"]))
         self._emit_capture(cap)
 
-        # Audible confirmation of a committed crossing (off the trigger path).
-        if self.horn is not None:
-            self.horn.honk()
-
         # Deferred image selection: schedule after window_after + margin so the
         # after-window frames exist (spec §6.5). The timer removes itself from
         # the set when it fires so the set does not grow for every capture.
@@ -440,8 +435,6 @@ class CaptureController:
             for t in list(self._timers):
                 t.cancel()
                 self._timers.discard(t)
-        if self.horn is not None:
-            self.horn.stop()
         self._queue.put(("stop", None))
 
 

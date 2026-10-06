@@ -31,20 +31,17 @@ class _TriggerBridge(QObject):
     capture_deleted = Signal(int)   # (sequence)
 
 
-def build_core(config, logger=None):
+def build_core(config):
     """Construct transport, reader, buffer, storage and controller.
     Returns a dict of the parts so headless tests can reuse it without Qt."""
     import time
     from .controller import CaptureController
     from .framebuffer import FrameBuffer
-    from .horn import Horn
     from .mjpeg import MJPEGReader
     from .storage import Storage
     from .transport import UsbTransport
 
     storage = Storage(config.data_root, event_name=config.event_name)
-
-    horn = Horn(config, logger=logger)
 
     transport_cfg = config.section("transport")
     transport = UsbTransport(
@@ -58,7 +55,7 @@ def build_core(config, logger=None):
     buffer = FrameBuffer(seconds=float(stream["buffer_seconds"]),
                          assumed_fps=int(stream["assumed_fps"]))
 
-    controller = CaptureController(config, storage, buffer, horn=horn)
+    controller = CaptureController(config, storage, buffer)
 
     auth = None
     if stream["username"]:
@@ -174,7 +171,7 @@ def main(argv=None) -> int:
                            event_name=config.event_name)
     logger.info("app", "start", version=__import__("hallofframe").__version__)
 
-    core = build_core(config, logger=logger)
+    core = build_core(config)
     app = QApplication(sys.argv)
 
     from .trigger import TriggerListener
