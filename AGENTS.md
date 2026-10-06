@@ -136,14 +136,19 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
     name`) in the dropdown but stores/exports the three fields separately. It
     passes the selected race's fields to `start_race`. A one-column (legacy)
     CSV or a missing file degrades gracefully (the UI falls back to a timestamp
-    name; `write_example` writes a starter file).
-- **Race selector (Ready screen).** Names already stored in `{event_name}.db`
-  (`Storage.race_names()`, distinct names across all `race` rows) are **grayed
-  out** in the dropdown but stay selectable, so a completed race can be
-  overwritten. The default selection skips recorded names to the **next
-  not-yet-recorded race**; once every race is recorded it wraps to the first.
-  The gray set refreshes whenever the app returns to READY and when a race
-  ends, so a just-finished race turns gray immediately.
+    name; `write_example` writes a starter file). The Qt-free `Roster` class in
+    `hallofframe/roster.py` owns the file and the race-day edits: skip/unskip,
+    `move` up/down, `add` after the selected row, `rename`; display order is
+    always file order (no sorting). The old Merge/repoint and near-miss
+    suggestion flows were removed (phase 2).
+- **Race selector (Ready screen).** Keys already stored in `{event_name}.db`
+  (`roster.recorded_keys(storage)`, distinct across all `race` rows) are
+  **grayed out** in the dropdown but stay selectable, so a completed race can be
+  overwritten. `Shift+↑`/`Shift+↓` move the selected roster row. The default
+  selection skips recorded names to the **next not-yet-recorded race**; once
+  every race is recorded it wraps to the first. The gray set refreshes whenever
+  the app returns to READY and when a race ends, so a just-finished race turns
+  gray immediately.
 - The app never writes `config.toml`.
 
 ## Run / test

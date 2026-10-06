@@ -7,9 +7,9 @@ and a numeric percentage field — never drag-only (§5).
 
 The picker is a view model of rows (BEHAVIOUR §9): ``_races`` holds only roster
 rows (byte-faithful, written to the CSV by WP4) while ``_rows`` holds what the
-combo currently displays — race rows, an optional create row (WP5), and the
-always-last ``Unlisted race`` sentinel (WP7). The combo index maps 1:1 to
-``_rows``, never to ``_races``, and selection is restored by key, not position.
+combo currently displays — the race rows and the always-last ``Unlisted race``
+sentinel (WP7). The combo index maps 1:1 to ``_rows``, never to ``_races``, and
+selection is restored by key, not position.
 """
 from __future__ import annotations
 
@@ -20,11 +20,34 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from ..races import RaceInfo, _norm, near_misses, parse_key
+from ..roster import RaceInfo, _norm
 from . import styles
 from .preview_widget import PreviewWidget
 
 UNLISTED_TEXT = "Unlisted race"
+
+
+def roster_path(config) -> str:
+    """Resolve the roster file path from ``[races]`` in *config*.
+
+    Lives beside the picker that consumes it so ``main_window`` never has to
+    know the file extension (plan step 2.4). Relative paths sit under the data
+    root."""
+    import os
+    path = os.path.expanduser(config.section("races")["csv_path"])
+    if not os.path.isabs(path):
+        path = os.path.join(config.data_root, path)
+    return path
+
+
+def choose_roster_file(parent, start_dir) -> str:
+    """Open the roster file chooser (kept here so ``main_window`` stays free of
+    the extension). Returns the chosen path, or "" if cancelled."""
+    from PySide6.QtWidgets import QFileDialog
+    path, _ = QFileDialog.getOpenFileName(
+        parent, "Load roster…", str(start_dir),
+        "Roster CSV (*.csv);;All files (*)")
+    return path
 
 # Custom item role for the skipped-row strike-through (Qt has no such standard
 # role; the delegate reads it back to strike the rendered text).
@@ -35,10 +58,9 @@ _STRIKE_ROLE = Qt.ItemDataRole.UserRole + 1
 class _Row:
     """One row in the picker view model (BEHAVIOUR §9).
 
-    ``kind``: "race" (a roster row), "unlisted" (the sentinel), "create" (WP5),
-    or "header" (decorative, not selectable). ``selectable`` is whether the
-    operator can land on it; ``steppable`` is whether ↑/↓ will land on it — the
-    sentinel and the create row are selectable but never steppable.
+    ``kind``: "race" (a roster row) or "unlisted" (the sentinel). ``selectable``
+    is whether the operator can land on it; ``steppable`` is whether ↑/↓ will
+    land on it — the sentinel is selectable but never steppable.
     """
     kind: str
     text: str
@@ -49,8 +71,6 @@ class _Row:
     steppable: bool = True
     dim: bool = False
     strike: bool = False
-    create_race_no: str = ""
-    create_heat_no: str = ""
 
 
 class _ClickLabel(QLabel):
@@ -271,8 +291,11 @@ class ReadyScreen(QWidget):
         """Populate the picker. Races already stored in the DB (*recorded*, a set
         of normalised ``RaceInfo.key`` values) and races skipped in the roster
         (*skipped*) are grayed out (still selectable, so a race can be
-        overwritten); the default selection skips them to the next available."""
-        self._races = list(races)
+        overwritten); the default selection skips them to the next available.
+
+        An empty roster (missing file, or no rows) still gets a synthetic
+        ``000``/``1`` race so the operator can arm immediately (spec §8)."""
+        self._races = list(races) or [RaceInfo(race_no="000", heat_no="1")]
         self._recorded = set(recorded or ())
         self._skipped = set(skipped or ())
         self._rebuild_rows()
@@ -306,6 +329,18 @@ class ReadyScreen(QWidget):
         self._sel_row = self._first_unrecorded()
         self._sync_combo()
 
+    def select_key(self, key) -> bool:
+        """Select the race row whose normalised key is *key* (plan step 2.5).
+
+        Returns True when a matching row exists and is now selected; False leaves
+        the current selection untouched."""
+        idx = self._row_index_by_key(key)
+        if idx is None:
+            return False
+        self._sel_row = idx
+        self._sync_combo()
+        return True
+
     # --- row model --------------------------------------------------------
     def _race_matches(self, race: RaceInfo, q: str) -> bool:
         return (q in _fold(race.race_no)) or (q in _fold(race.name))
@@ -329,30 +364,13 @@ class ReadyScreen(QWidget):
                 if r.key not in seen:
                     seen.add(r.key)
                     matched.append(r)
-            exact = bool(matched)
         else:
             matched = list(self._races)
-            exact = True
 
         for r in matched:
             rows.append(self._race_row(r))
 
-        # 2. Near misses + create row (WP5), only while filtering.
-        if self._filter_active and q:
-            if not exact:
-                for r in near_misses(self._races, self._filter_text):
-                    rows.append(self._race_row(r, detail="↵ select", dim=False))
-                parsed = parse_key(self._filter_text)
-                if parsed is not None:
-                    rn, hn = parsed
-                    label = f"Add heat H{hn} to race {rn}…" if hn else \
-                        f"Add race {rn} to the roster…"
-                    rows.append(_Row(
-                        kind="create", text=label, selectable=True,
-                        steppable=False, detail="↓ then ↵",
-                        create_race_no=rn, create_heat_no=hn))
-
-        # 3. Unlisted race sentinel, always last (WP7).
+        # The unlisted race sentinel is always last (WP7).
         rows.append(_Row(
             kind="unlisted", text=UNLISTED_TEXT, race=None, key=None,
             selectable=True, steppable=False, detail="arms immediately", dim=True))
@@ -474,16 +492,15 @@ class ReadyScreen(QWidget):
         self._sync_combo()
 
     def move_filter_selection(self, delta: int) -> None:
-        """Move ↑/↓ within the filtered set. A deliberate ``↓`` reaches the
-        create row and the unlisted sentinel; ``↑`` never lands on either, so a
-        create row is reached by ``↓`` and never highlighted by default (WP5)."""
+        """Move ↑/↓ within the filtered set. A deliberate ``↓`` may reach the
+        unlisted sentinel; ``↑`` never lands on it."""
         if not self._rows:
             return
         n = len(self._rows)
         for step in range(1, n + 1):
             idx = (self._sel_row + (delta * step)) % n
             row = self._rows[idx]
-            if row.steppable or (row.kind in ("create", "unlisted") and delta > 0):
+            if row.steppable or (row.kind == "unlisted" and delta > 0):
                 self._sel_row = idx
                 self._sync_combo()
                 return

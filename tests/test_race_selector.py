@@ -12,7 +12,7 @@ import pytest
 from PySide6.QtCore import Qt
 
 from hallofframe.framebuffer import FrameBuffer
-from hallofframe.races import RaceInfo, recorded_keys, rename_races, repoint_race
+from hallofframe.roster import RaceInfo, recorded_keys, rename_races
 from hallofframe.storage import Storage
 from hallofframe.ui.ready_screen import ReadyScreen
 
@@ -60,16 +60,6 @@ class TestStorageRaceNames(unittest.TestCase):
                          ("124", "1", "D U17 2x"))
         # exactly once
         self.assertFalse(self.storage.identify_race(rid, "999", "2", "X"))
-
-    def test_repoint_race_restyles_key_only(self):
-        rid = self.storage.create_race(
-            "X", t0_monotonic=1000.0, t0_wall=1000.0, start_mode="direct",
-            radio_delay_ms=0.0, delta_used=0.0, viewing_mode="screen",
-            race_no="0102", heat_no="1")
-        repoint_race(self.storage, rid, "102", "1")   # restyle, same key
-        self.assertEqual(self.storage.get_race(rid)["race_no"], "102")
-        with self.assertRaises(ValueError):
-            repoint_race(self.storage, rid, "999", "1")  # normalised-key change
 
     def test_rename_races_updates_matching_rows(self):
         self._add_race("Final", 1, race_no="101", heat_no="1")
@@ -204,42 +194,38 @@ class TestReadyScreenRaceSelector(unittest.TestCase):
         self.assertEqual([r.race.display for r in race_rows],
                          ["217-H3 - H U15 1x", "217-H4 - H U15 1x"])
 
-    def test_filter_no_exact_match_shows_create_row(self):
+    def test_filter_no_match_still_offers_unlisted(self):
         self._filter_races([
             RaceInfo("217", "3", "H U15 1x"),
             RaceInfo("227", "1", "D U15 2x"),
         ])
-        self.rs.filter_edit.setText("271")
-        kinds = [r.kind for r in self.rs._rows]
-        self.assertIn("create", kinds)
-        create = next(r for r in self.rs._rows if r.kind == "create")
-        self.assertEqual(create.text, "Add race 271 to the roster…")
-        self.assertEqual((create.create_race_no, create.create_heat_no),
-                         ("271", ""))
-
-    def test_filter_non_numeric_has_no_create_row(self):
-        self._filter_races([
-            RaceInfo("217", "3", "H U15 1x"),
-            RaceInfo("227", "1", "D U15 2x"),
-        ])
-        self.rs.filter_edit.setText("senior")
+        self.rs.filter_edit.setText("999")
         self.assertNotIn("create", [r.kind for r in self.rs._rows])
         self.assertTrue(any(r.kind == "unlisted" for r in self.rs._rows))
 
-    def test_filter_one_char_has_no_create_row(self):
-        self._filter_races([RaceInfo("217", "3", "H U15 1x")])
-        self.rs.filter_edit.setText("2")
-        self.assertNotIn("create", [r.kind for r in self.rs._rows])
+    def test_filter_narrows_by_substring(self):
+        self._filter_races([
+            RaceInfo("217", "3", "H U15 1x"),
+            RaceInfo("227", "1", "D U15 2x"),
+        ])
+        self.rs.filter_edit.setText("227")
+        race_rows = [r for r in self.rs._rows if r.kind == "race"]
+        self.assertEqual([r.race.display for r in race_rows],
+                         ["227-H1 - D U15 2x"])
+        self.assertTrue(any(r.kind == "unlisted" for r in self.rs._rows))
 
-    def test_down_reaches_create_row_but_up_does_not(self):
-        self._filter_races([RaceInfo("217", "3", "H U15 1x")])
-        self.rs.filter_edit.setText("271")   # no exact match -> create row present
-        # default lands on the suggestion (217); a deliberate ↓ reaches create.
-        self.rs.next_race()
-        self.assertEqual(self.rs.current_row().kind, "create")
-        # but ↑ never lands on it (goes back to the suggestion).
-        self.rs.prev_race()
-        self.assertEqual(self.rs.current_row().kind, "race")
+    def test_select_key_selects_matching_race(self):
+        self.rs.set_races(self.races, recorded=set())
+        self.assertTrue(self.rs.select_key(self.rec3))
+        self.assertEqual(self.rs.current_race_name(), "103-H1 - Heat")
+        # An unknown key leaves the current selection untouched.
+        self.assertFalse(self.rs.select_key(("num", "999", "1")))
+        self.assertEqual(self.rs.current_race_name(), "103-H1 - Heat")
+
+    def test_select_key_after_set_races(self):
+        self.rs.set_races(self.races, recorded={self.rec1})
+        self.assertTrue(self.rs.select_key(("num", "101", "1")))
+        self.assertEqual(self.rs.current_race_name(), "101-H1 - Final A")
 
     def test_clear_filter_restores_selection(self):
         self._filter_races([

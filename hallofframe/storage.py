@@ -236,7 +236,7 @@ class Storage:
     def race_identity_rows(self):
         """Every race's ``(id, race_no, heat_no, name)`` identity fields.
 
-        The normalisation/key comparison lives in ``races.py`` (``race_key``);
+        The normalisation/key comparison lives in ``roster.py`` (``race_key``);
         storage only exposes the raw rows so it never imports the roster module
         (spec §6.7)."""
         with self._lock:
@@ -246,7 +246,7 @@ class Storage:
     def rename_race_ids(self, race_ids, new_name: str) -> int:
         """Set ``race.name`` for the given ids in one commit and touch each.
 
-        The caller (``races.rename_races``) selects the ids by normalised key;
+        The caller (``roster.rename_races``) selects the ids by normalised key;
         storage stays free of roster knowledge. Returns the number changed."""
         with self._lock:
             for rid in race_ids:
@@ -271,24 +271,6 @@ class Storage:
             self._touch(race_id)
             self._conn.commit()
             return True
-
-    def repoint_race(self, race_id: int, race_no, heat_no, name=None) -> None:
-        """WP6: restyle a recorded race's key to a duplicate row's literal
-        formatting (``0102`` -> ``102``). The normalised-key guard (merge may
-        only restyle, never move a race) lives in ``races.repoint_race`` so this
-        method carries no roster knowledge. Optionally updates ``name``."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT name FROM race WHERE id=?", (race_id,)).fetchone()
-            if row is None:
-                return
-            if name is None:
-                name = row["name"]
-            self._conn.execute(
-                "UPDATE race SET race_no=?, heat_no=?, name=? WHERE id=?",
-                (race_no or None, heat_no or None, name, race_id))
-            self._touch(race_id)
-            self._conn.commit()
 
     def mark_race_ended(self, race_id: int, t_end_mono: float) -> None:
         with self._lock:
