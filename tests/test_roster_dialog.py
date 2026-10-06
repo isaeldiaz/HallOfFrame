@@ -6,22 +6,15 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+import pytest
 
 from hallofframe.races import read_rows, write_example
 
-try:
-    _QT = QApplication.instance() is not None or bool(QApplication([]))
-except Exception:  # pragma: no cover
-    _QT = False
+pytestmark = pytest.mark.qt
 
 
-@unittest.skipUnless(_QT, "PySide6 unavailable")
+@pytest.mark.usefixtures("qapp")
 class TestRosterDialogs(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._app = QApplication.instance() or QApplication([])
-
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)

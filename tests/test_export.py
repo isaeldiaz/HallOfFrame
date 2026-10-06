@@ -1,35 +1,26 @@
 """T9 — Export (spec §6.8, F6)."""
 import csv
-import tempfile
 import unittest
-from pathlib import Path
 
-from hallofframe.config import Config
+import pytest
+
 from hallofframe.export import (clipboard_data, export_all_csv, export_all_html,
                                 export_csv, format_elapsed, parse_elapsed, utc_iso)
-from hallofframe.storage import Storage
 
 
-def make_config(data_root):
-    data = {"paths": {"data_root": str(data_root)},
-            "stream": {"assumed_fps": 30},
-            "timing": {"viewing_mode": "water"}}
-    return Config(data=data, path=Path(data_root) / "config.toml")
+@pytest.fixture
+def export_env(request, data_root, storage):
+    inst = request.instance
+    inst.data_root = data_root
+    inst.storage = storage
+    inst.race_id = storage.create_race(
+        "Men under 18, single, final", 1000.0, 1000.0, "direct", 0.0, 0.0,
+        "water", 30, race_no="101", heat_no="1")
+    yield
 
 
+@pytest.mark.usefixtures("export_env")
 class TestExport(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.data_root = Path(self.tmp.name)
-        self.storage = Storage(self.data_root)
-        self.race_id = self.storage.create_race(
-            "Men under 18, single, final", 1000.0, 1000.0, "direct", 0.0, 0.0,
-            "water", 30, race_no="101", heat_no="1")
-
-    def tearDown(self):
-        self.storage.close()
-        self.tmp.cleanup()
-
     def test_format_elapsed(self):
         self.assertEqual(format_elapsed(0.0), "0:00.00")
         self.assertEqual(format_elapsed(372.483), "6:12.48")

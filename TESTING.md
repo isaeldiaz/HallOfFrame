@@ -16,6 +16,21 @@ Tests are numbered `T0`–`T10` and map one-to-one onto the implementation-order
 gates in spec §12. Do not begin stage N+1 until stage N's test passes or its
 failure is recorded per §2 and explicitly accepted.
 
+## 0. Running the suite
+
+The default run is the fast subset — tests taking over 2 s carry the `slow`
+marker and are excluded:
+
+```bash
+./venv/bin/python -m pytest -m "not slow"
+```
+
+Run the slow tests separately with `./venv/bin/python -m pytest -m slow`.
+Qt tests carry the `qt` marker and run headless under
+`QT_QPA_PLATFORM=offscreen` via the session-scoped `qapp` fixture
+(`tests/conftest.py`); all test configuration comes from the shared fixtures
+there rather than per-file `make_config` copies.
+
 ---
 
 ## 1. Conventions

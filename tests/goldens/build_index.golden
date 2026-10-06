@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>event — HallOfFrame results</title></head><body style="margin:0;background:#0d1114;font-family:'IBM Plex Sans','Helvetica Neue',Arial,sans-serif;color:#f2f6f8;-webkit-font-smoothing:antialiased"><div style="max-width:960px;margin:0 auto"><header style="padding:34px 40px 26px;border-bottom:1px solid #1c2429;background:#11161a"><div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap"><div style="display:flex;flex-direction:column;gap:4px"><div style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;font-weight:600;letter-spacing:.08em;color:#6fb2e8">event</div><div style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:24px;font-weight:600">HallOf<span style="color:#ff5a42">Frame</span></div><div style="font-size:14px;color:#8fa0ab">Finish-line results · races</div></div><div style="font-size:13px;color:#5f6f79">2 races</div></div></header><main style="padding:10px 40px 24px"><table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:12px;letter-spacing:.1em;color:#5f6f79"><th style="padding:14px 8px 6px">RACE</th><th style="padding:14px 8px 6px">CATEGORY</th><th style="padding:14px 8px 6px">GUN</th><th style="padding:14px 8px 6px;text-align:right">#</th><th style="padding:14px 8px 6px;text-align:right"></th></tr></thead><tbody><tr style="border-bottom:1px solid #232b31"><td style="padding:14px 8px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;color:#6fb2e8">RACE 102 · HEAT 2</td><td style="padding:14px 8px;font-size:15px;color:#f2f6f8">Women open, double, heat</td><td style="padding:14px 8px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;color:#c6d3da">22:23:20</td><td style="padding:14px 8px;text-align:right;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;color:#8fa0ab">1</td><td style="padding:14px 8px;text-align:right;white-space:nowrap"><a href="/race/2" style="color:#6fb2e8;text-decoration:none;font-size:14px;margin-right:14px">View</a><button type="button" data-excel="2" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;font-weight:600;color:#6fb2e8;background:transparent;border:none;padding:0;cursor:pointer">Copy table</button></td></tr><tr style="border-bottom:1px solid #232b31"><td style="padding:14px 8px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;color:#6fb2e8">RACE 101 · HEAT 1</td><td style="padding:14px 8px;font-size:15px;color:#f2f6f8">Men under 18, single, final</td><td style="padding:14px 8px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;color:#c6d3da">22:13:20</td><td style="padding:14px 8px;text-align:right;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;color:#8fa0ab">3</td><td style="padding:14px 8px;text-align:right;white-space:nowrap"><a href="/race/1" style="color:#6fb2e8;text-decoration:none;font-size:14px;margin-right:14px">View</a><button type="button" data-excel="1" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;font-size:14px;font-weight:600;color:#6fb2e8;background:transparent;border:none;padding:0;cursor:pointer">Copy table</button></td></tr></tbody></table></main><footer style="padding:18px 40px 26px;border-top:1px solid #1c2429;background:#11161a;font-size:12px;color:#5f6f79">Copy table copies a race to the clipboard — paste it into a spreadsheet to keep the column layout. · <span style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace">HallOfFrame v<VERSION> · <BUILD_STAMP></span> · <a href="https://github.com/isaeldiaz/HallOfFrame" style="color:#6fb2e8;text-decoration:none">github.com/isaeldiaz/HallOfFrame</a></footer></div><script>
+(function () {
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  function flash(btn) {
+    var old = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(function () { btn.textContent = old; }, 1500);
+  }
+  var btns = document.querySelectorAll('[data-excel]');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function () {
+      var id = this.getAttribute('data-excel');
+      var btn = this;
+      fetch('/excel/' + id)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (navigator.clipboard && window.ClipboardItem) {
+            navigator.clipboard.write([new ClipboardItem({
+              'text/html': new Blob([data.html], { type: 'text/html' }),
+              'text/plain': new Blob([data.tsv], { type: 'text/plain' })
+            })]).then(function () { flash(btn); },
+                     function () { fallbackCopy(data.tsv); flash(btn); });
+          } else {
+            fallbackCopy(data.tsv);
+            flash(btn);
+          }
+        })
+        .catch(function () { btn.textContent = 'Copy failed'; });
+    });
+  }
+})();
+</script></body>
+</html>

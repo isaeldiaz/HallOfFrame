@@ -36,11 +36,14 @@ class Capture:
 
 class CaptureController:
     def __init__(self, config, storage: Storage, framebuffer: FrameBuffer,
-                 logger=None):
+                 logger=None, scheduler=None):
         self.config = config
         self.storage = storage
         self.buffer = framebuffer
         self.logger = logger
+        # Injection seam: a callable scheduler(delay_s, callback) returning an
+        # object with .cancel(). None keeps the default threading.Timer path.
+        self._scheduler = scheduler
 
         self.t0: float | None = None
         self.t0_wall: float | None = None
@@ -267,10 +270,13 @@ class CaptureController:
     def _writer_loop(self) -> None:
         while True:
             kind, payload = self._queue.get()
-            if kind == "capture":
-                self._handle_capture(payload)
-            elif kind == "stop":
-                break
+            try:
+                if kind == "capture":
+                    self._handle_capture(payload)
+                elif kind == "stop":
+                    break
+            finally:
+                self._queue.task_done()
 
     def _handle_capture(self, payload: dict) -> None:
         race_id = payload["race_id"]
@@ -317,11 +323,16 @@ class CaptureController:
                     self._timers.discard(timer)
                 self._select_images(capture_id, sequence, target, race_dir)
 
-            timer = threading.Timer(delay, _fire)
-            timer.daemon = True
-            with self._timers_lock:
-                self._timers.add(timer)
-            timer.start()
+            if self._scheduler is not None:
+                timer = self._scheduler(delay, _fire)
+                with self._timers_lock:
+                    self._timers.add(timer)
+            else:
+                timer = threading.Timer(delay, _fire)
+                timer.daemon = True
+                with self._timers_lock:
+                    self._timers.add(timer)
+                timer.start()
 
         if self.logger:
             self.logger.info("controller", "capture",

@@ -3,68 +3,39 @@
 Qt UI test, run headless (offscreen). Skips cleanly if PySide6/display is
 unavailable so the rest of the suite stays runnable.
 """
-import os
-import tempfile
 import time
 import unittest
-from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
 
-from hallofframe.config import Config
 from hallofframe.controller import CaptureController
-from hallofframe.framebuffer import FrameBuffer
-from hallofframe.mjpeg import Frame
-from hallofframe.storage import Storage
 from hallofframe.ui.review_dialog import RaceReviewDialog
 
-try:
-    from PySide6.QtWidgets import QApplication
-    _QT = True
-except Exception:  # pragma: no cover
-    _QT = False
+pytestmark = pytest.mark.qt
 
 
-def _make_config(data_root):
-    data = {
-        "paths": {"data_root": str(data_root)},
-        "stream": {"assumed_fps": 30, "buffer_seconds": 10.0},
-        "timing": {"viewing_mode": "screen", "reaction_offset_ms": 0.0,
-                   "debounce_ms": 20, "start_mode": "direct", "radio_delay_ms": 0.0},
-        "capture": {"window_before_ms": 50, "window_after_ms": 50},
-        "archive": {"enabled": False, "every_nth_frame": 1},
-    }
-    return Config(data=data, path=Path(data_root) / "config.toml")
+@pytest.fixture
+def review_dialog_env(request, data_root, config, storage, buffer, qapp):
+    inst = request.instance
+    inst.data_root = data_root
+    inst.config = config()
+    inst.storage = storage
+    inst.buffer = buffer
+    inst.controller = CaptureController(inst.config, inst.storage, inst.buffer)
+    inst.controller.start_race(1000.0, name="Race-test")
+    for seq in (1, 2, 3):
+        inst.controller.record_crossing(1000.0 + seq)
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and len(
+            inst.storage.captures_for_race(inst.controller.race_id)) < 3:
+        time.sleep(0.02)
+    assert len(inst.storage.captures_for_race(inst.controller.race_id)) == 3
+    yield
+    inst.controller.stop()
 
 
-@unittest.skipUnless(_QT, "PySide6 unavailable")
+@pytest.mark.usefixtures("review_dialog_env")
 class TestReviewDialog(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._app = QApplication.instance() or QApplication([])
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.data_root = Path(self.tmp.name)
-        self.config = _make_config(self.data_root)
-        self.storage = Storage(self.data_root)
-        self.buffer = FrameBuffer(assumed_fps=30)
-        self.controller = CaptureController(self.config, self.storage, self.buffer)
-        self.controller.start_race(1000.0, name="Race-test")
-        for seq in (1, 2, 3):
-            self.controller.record_crossing(1000.0 + seq)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and len(
-                self.storage.captures_for_race(self.controller.race_id)) < 3:
-            time.sleep(0.02)
-        self.assertEqual(
-            len(self.storage.captures_for_race(self.controller.race_id)), 3)
-
-    def tearDown(self):
-        self.controller.stop()
-        self.storage.close()
-        self.tmp.cleanup()
-
     def test_lists_all_captures_and_edits_bow(self):
         dlg = RaceReviewDialog(self.controller, self.controller.race_id,
                                self.data_root)
