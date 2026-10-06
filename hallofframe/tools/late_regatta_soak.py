@@ -35,7 +35,7 @@ from ..controller import CaptureController
 from ..export import export_all_csv, export_all_html
 from ..framebuffer import FrameBuffer
 from ..mjpeg import Frame
-from ..races import recorded_keys
+from ..roster import recorded_keys
 from ..storage import Storage
 
 # Rotating category labels so the seeded roster looks like a real programme.

@@ -215,27 +215,12 @@ class TestController(Base):
         self.assertIn("124", text)
         self.assertIn("D U17 2x", text)
 
-    def test_repoint_leaves_captures_untouched(self):
-        # WP6: a merge re-points the race's key formatting but never touches
-        # capture/capture_frame rows.
-        self.seed_buffer(self.buffer)
-        race_id = self.controller.start_race(1000.0, name="B",
-                                             race_no="0102", heat_no="1")
-        self.controller.record_crossing(1000.0 + 5.0)
-        self.commit()
-        before = [c["id"] for c in self.storage.captures_for_race(race_id)]
-        from hallofframe.races import repoint_race
-        repoint_race(self.storage, race_id, "102", "1")
-        self.assertEqual(self.storage.get_race(race_id)["race_no"], "102")
-        after = [c["id"] for c in self.storage.captures_for_race(race_id)]
-        self.assertEqual(after, before)
-
     def test_race_recognised_after_name_change(self):
         # WP1: identity is (race_no, heat_no); renaming the roster label must
         # not un-dimm a recorded race or split the recorded set.
         self.controller.start_race(1000.0, name="Old name",
                                    race_no="102", heat_no="1")
-        from hallofframe.races import RaceInfo, race_key, recorded_keys
+        from hallofframe.roster import RaceInfo, race_key, recorded_keys
         recorded = recorded_keys(self.storage)
         renamed = RaceInfo(race_no="102", heat_no="1", name="New name")
         self.assertIn(renamed.key, recorded)

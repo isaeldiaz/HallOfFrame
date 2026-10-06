@@ -27,13 +27,13 @@ from ..controller import (CalibrationError, CaptureController, RaceStateError,
                           calibration_status)
 from ..export import clipboard_data, export_all_html, local_hms
 from ..framebuffer import FrameBuffer
-from ..races import (RaceInfo, RosterLoad, _cell, format_display, load_races,
-                     race_key, read_rows, recorded_keys, skip_race, write_example)
+from ..roster import (Roster, RosterLoad, RosterWriteError, format_display,
+                      race_key, recorded_keys)
 from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
 from ..ui.race_screen import RaceScreen
-from ..ui.ready_screen import ReadyScreen
+from ..ui.ready_screen import ReadyScreen, choose_roster_file, roster_path
 from ..ui.review_screen import ReviewScreen
 from ..ui.about_screen import AboutOverlay
 from ..ui.state import AppState, derive_state
@@ -143,10 +143,7 @@ class MainWindow(QMainWindow):
         self._last_capture: int | None = None
         self._last_state = None
         self._advance_race_default = False
-        self._races = []
-        self._roster_path: str | None = None
-        self._roster_rows: list | None = None
-        self._load_result: RosterLoad | None = None
+        self.roster = Roster(None)
         # Set by main.py to keep the trigger device grab tied to state (§9/Opt A).
         self.on_state_changed = None
 
@@ -219,6 +216,8 @@ class MainWindow(QMainWindow):
                    sc("D", self._export_html), sc("R", self._on_r),
                    sc("N", self._next_race), sc("/", self._focus_filter),
                    sc("End", self._end_unlisted)]
+        sc("Shift+Up", lambda: self._move_selected_race(-1))
+        sc("Shift+Down", lambda: self._move_selected_race(1))
         race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
                 sc("Enter", lambda: self.on_evdev_start(time.monotonic())),
                 sc("Space",
@@ -379,7 +378,7 @@ class MainWindow(QMainWindow):
             kb.add("↑/↓", "Select crossing", True)
             kb.add("Tab", "Next bow field")
             kb.add("Del", "Soft-delete")
-            kb.add("E", "Copy as Excel", callback=self._export)
+            kb.add("E", "Edit race", callback=self._edit_race)
             kb.add("Esc", "Back to Ready", callback=self._close_review)
         elif state == AppState.RACE_OVER:
             kb.add("R", "Review crossings", True, callback=self._open_review)
@@ -393,6 +392,8 @@ class MainWindow(QMainWindow):
             kb.add("Ctrl+S", "Arm", True, callback=self._arm_start)
             kb.add("C", "Calibrate", callback=self._calibrate)
             kb.add("L", "Load race", callback=self._load_selected_race)
+            kb.add("Shift+↑", "Move up", callback=lambda: self._move_selected_race(-1))
+            kb.add("Shift+↓", "Move down", callback=lambda: self._move_selected_race(1))
             kb.add("D", "Save DB HTML", callback=self._export_html)
             kb.add("Ctrl+Q", "Quit", callback=self._quit)
             if state == AppState.STREAM_DOWN:
@@ -569,81 +570,13 @@ class MainWindow(QMainWindow):
             self._review_screen = ReviewScreen(self.controller, self.config.data_root,
                                                race_id=race_id)
             self.center.addWidget(self._review_screen)
-            self._review_screen.identify_requested.connect(self._open_identify)
-            self._review_screen.merge_requested.connect(self._open_merge)
+            self._review_screen.edit_race_requested.connect(self._edit_race)
         elif self._review_screen.race_id != race_id:
             self._review_screen.race_id = race_id
         self._review_screen.load_captures()
-        row = self.controller.storage.get_race(race_id)
-        is_unlisted = not (row and (row["race_no"] or ""))
-        self._review_screen.refresh_roster_actions(
-            is_unlisted=is_unlisted, has_duplicates=bool(self._has_duplicates()))
         self._reviewing = True
         self._recompute_state()
         self._review_screen.setFocus()
-
-    def _has_duplicates(self) -> list:
-        """Duplicate roster keys, from the raw rows (the parsed ``_races`` is
-        already de-duplicated, so it cannot be the source — WP6 merge)."""
-        groups: dict = {}
-        if not self._roster_rows:
-            return []
-        for row in self._roster_rows[1:]:
-            if not row or not any(_cell(c) for c in row):
-                continue
-            r = RaceInfo(race_no=_cell(row[0]),
-                         heat_no=_cell(row[1]) if len(row) > 1 else "",
-                         name=_cell(row[2]) if len(row) > 2 else "")
-            groups.setdefault(r.key, []).append(r)
-        return [v for v in groups.values() if len(v) >= 2]
-
-    def _recorded_count_for_key(self, key) -> int:
-        return sum(1 for r in self.controller.storage.all_races()
-                   if race_key(r["race_no"], r["heat_no"], r["name"]) == key)
-
-    def _open_identify(self) -> None:
-        race_id = self._review_race_id or self.controller.race_id
-        if race_id is None:
-            return
-        row = self.controller.storage.get_race(race_id)
-        if not row or (row["race_no"] or ""):
-            self._show_toast("This race has already been identified.")
-            return
-        if not self._roster_path:
-            self._show_toast("No roster loaded.")
-            return
-        from ..ui.roster_dialog import IdentifyDialog
-        dlg = IdentifyDialog(self._roster_path, row["id"], row["name"],
-                             self.controller.storage,
-                             expected=self._roster_rows, logger=self._logger,
-                             parent=self)
-        dlg.result_applied.connect(self._apply_roster_result)
-        dlg.exec()
-
-    def _open_merge(self) -> None:
-        groups = self._has_duplicates()
-        if not groups or not self._roster_path:
-            self._show_toast("No duplicate roster rows to merge.")
-            return
-        dup = groups[0]
-        # Merge availability is decided by the number of *recorded races* for
-        # the shared key (BEHAVIOUR §8): 0 = pure CSV merge, 1 = re-point that
-        # race, >=2 = two real results, blocked.
-        count = self._recorded_count_for_key(dup[0].key)
-        if count >= 2:
-            self._show_toast("Two recorded races share this key — merge is "
-                             "unavailable.")
-            return
-        recorded = recorded_keys(self.controller.storage)
-        keep = next((r for r in dup if r.key in recorded), dup[0])
-        remove = next((r for r in dup if r is not keep), dup[1])
-        from ..ui.roster_dialog import MergeDialog
-        dlg = MergeDialog(self._roster_path, keep, remove,
-                          self.controller.storage,
-                          expected=self._roster_rows, parent=self,
-                          recorded_count=count, logger=self._logger)
-        dlg.result_applied.connect(self._apply_roster_result)
-        dlg.exec()
 
     def _close_review(self) -> None:
         if self._review_race_id is not None:
@@ -669,9 +602,6 @@ class MainWindow(QMainWindow):
         if self._last_state == AppState.RACE_OVER:
             self._race_over = False
             self._recompute_state()
-        if getattr(row, "kind", None) == "create":
-            self._open_add_race(race_no=row.create_race_no,
-                                heat_no=row.create_heat_no)
 
     def _next_race(self) -> None:
         if self._last_state == AppState.READY:
@@ -717,71 +647,95 @@ class MainWindow(QMainWindow):
         self._recompute_state()
 
     def _on_e(self) -> None:
-        """E: rename the selected race in Ready/review; export in Race-over."""
+        """E: edit the selected/under-review race; export in Race-over."""
         if self._last_state == AppState.RACE_OVER:
             self._export()
-            return
-        self._open_rename()
+        elif self._last_state == AppState.REVIEW:
+            self._edit_race()
+        else:
+            self._open_rename()
 
     # ---------------------------------------------------------------- roster editing
     def _open_add_race(self, race_no: str = "", heat_no: str = "") -> None:
         if self._last_state in (AppState.ARMED, AppState.RECORDING):
             self._show_toast("Can't edit the roster while armed or recording.")
             return
-        if not self._roster_path:
+        if not self.roster.path:
             self._show_toast("No roster loaded — Load roster… first.")
             return
         from ..ui.roster_dialog import AddRaceDialog
-        dlg = AddRaceDialog(self._roster_path, race_no, heat_no,
-                            expected=self._roster_rows, logger=self._logger,
-                            parent=self)
-        dlg.result_applied.connect(self._apply_roster_result)
+        dlg = AddRaceDialog(self.roster.path, race_no, heat_no,
+                            expected=self.roster.rows, logger=self._logger,
+                            parent=self, after_key=self.ready.selected_key())
+        dlg.result_applied.connect(lambda _r: self._reload_roster())
         dlg.exec()
-        chosen = dlg.chosen_race
-        if chosen is not None:
-            self._select_race_by_key(chosen.key)
-
-    def _select_race_by_key(self, key) -> None:
-        recorded = recorded_keys(self.controller.storage)
-        self.ready.set_races(self._races, recorded=recorded,
-                             skipped=self._skipped_keys())
-        # Rebuild happened inside set_races; select the row by key.
-        for i, row in enumerate(self.ready._rows):
-            if row.kind == "race" and row.key == key:
-                self.ready._sel_row = i
-                self.ready._sync_combo()
-                return
 
     def _open_rename(self) -> None:
+        """E in READY: correct the selected roster row's name (F6)."""
         if self._last_state in (AppState.ARMED, AppState.RECORDING):
             self._show_toast("Can't rename while armed or recording.")
             return
-        if not self._roster_path:
+        if not self.roster.path:
             self._show_toast("No roster loaded — Load roster… first.")
             return
-        if self._reviewing:
-            # E in review renames the race under review, not the Ready selection.
-            row = self.controller.storage.get_race(self.controller.race_id)
-            if not row or not (row["race_no"] or ""):
-                self._show_toast("Nothing to rename on an unlisted race.")
-                return
-            race = RaceInfo(race_no=row["race_no"], heat_no=row["heat_no"],
-                            name=row["name"])
+        if self.ready.selected_is_unlisted():
+            self._show_toast("Nothing to rename on an unlisted race.")
+            return
+        race, _ = self.ready.current_selection()
+        if race is not None:
+            self._rename_dialog(race.race_no, race.heat_no, race.name)
+
+    def _edit_race(self) -> None:
+        """Review-side *Edit race* (step 2.6): an unlisted race gets its number
+        after the fact via ``storage.identify_race``; a listed race is renamed.
+        The dialog also offers to append the row to the roster."""
+        if self._last_state in (AppState.ARMED, AppState.RECORDING):
+            self._show_toast("Can't edit the roster while armed or recording.")
+            return
+        race_id = self._review_race_id or self.controller.race_id
+        if race_id is None:
+            return
+        row = self.controller.storage.get_race(race_id)
+        if row is None:
+            return
+        if not (row["race_no"] or ""):
+            self._rename_dialog(row["race_no"] or "", row["heat_no"] or "",
+                                row["name"] or "", editable=True,
+                                race_id=race_id)
         else:
-            if self.ready.selected_is_unlisted():
-                self._show_toast("Nothing to rename on an unlisted race.")
-                return
-            race, _ = self.ready.current_selection()
-            if race is None:
-                return
+            self._rename_dialog(row["race_no"], row["heat_no"], row["name"])
+        self._reload_roster()
+        self._recompute_state()
+
+    def _rename_dialog(self, race_no, heat_no, name, *, editable=False,
+                       race_id=None) -> None:
         from ..ui.roster_dialog import RenameDialog
-        dlg = RenameDialog(self._roster_path, race,
+        dlg = RenameDialog(self.roster.path, race_no, heat_no, name,
                            recorded_keys(self.controller.storage),
                            self.controller.storage,
-                           expected=self._roster_rows, logger=self._logger,
-                           parent=self)
-        dlg.result_applied.connect(self._apply_roster_result)
+                           expected=self.roster.rows, logger=self._logger,
+                           parent=self, editable_numbers=editable,
+                           race_id=race_id, roster=self.roster)
+        dlg.result_applied.connect(lambda _r: self._reload_roster())
         dlg.exec()
+
+    def _move_selected_race(self, delta: int) -> None:
+        """Shift+↑/↓ in READY: move the selected row one place in file order
+        (plan step 2.4). The file is never re-sorted; the moved row stays
+        selected."""
+        if self._last_state not in (AppState.READY, AppState.STREAM_DOWN,
+                                    AppState.RECALIBRATE):
+            return
+        key = self.ready.selected_key()
+        if key is None:
+            return
+        try:
+            self.roster.move(key, delta)
+        except RosterWriteError as exc:
+            self._show_toast(f"Could not move race: {exc}")
+            return
+        self._render_roster()
+        self.ready.select_key(key)
 
     def _toggle_skip(self) -> None:
         if self._last_state in (AppState.ARMED, AppState.RECORDING):
@@ -790,20 +744,19 @@ class MainWindow(QMainWindow):
         if self.ready.selected_is_unlisted():
             return
         race, _ = self.ready.current_selection()
-        if race is None or not self._roster_path:
+        if race is None or not self.roster.path:
             return
-        skipping = race.key not in self._skipped_keys()
+        skipping = race.key not in self.roster.skipped_keys()
         try:
-            result = skip_race(self._roster_path, race.key, skip=skipping,
-                               expected=self._roster_rows)
+            self.roster.skip(race.key, skip=skipping)
         except Exception as exc:
             self._show_toast(f"Could not update roster: {exc}")
             return
         if self._logger is not None:
             self._logger.info("roster", "skip" if skipping else "unskip",
                               key=str(race.key), name=race.name,
-                              file=self._roster_path)
-        self._apply_roster_result(result)
+                              file=self.roster.path)
+        self._render_roster()
 
     def _toggle_about(self) -> None:
         # The trigger keyboard is grabbed while armed or recording: nothing may
@@ -882,22 +835,26 @@ class MainWindow(QMainWindow):
             self.about.setGeometry(self.centralWidget().rect())
 
     # ------------------------------------------------------------------ selector
-    def _load_races(self, csv_path: str | None = None) -> None:
-        """Load the roster (startup or a manual Load roster…) and surface the
-        result loudly: fill the roster chip and render any banner (F10).
+    def _load_races(self, path: str | None = None) -> None:
+        """Load the roster (startup or a manual Load roster…) and render it.
 
         A configured-but-missing path never auto-writes an example roster; it is
-        offered as an action instead (BEHAVIOUR §4).
-        """
-        import os
-        if csv_path is None:
-            races_cfg = self.config.section("races")
-            csv_path = os.path.expanduser(races_cfg["csv_path"])
-            if not os.path.isabs(csv_path):
-                csv_path = os.path.join(self.config.data_root, csv_path)
-        self._roster_path = csv_path
-        result = load_races(csv_path)
-        self._apply_roster_result(result)
+        offered as an action instead (BEHAVIOUR §4)."""
+        if path is None:
+            path = roster_path(self.config)
+        self.roster.load(path)
+        self._render_roster()
+
+    def _render_roster(self) -> None:
+        """The single render step (plan step 2.4): push ``roster.races``, the
+        recorded keys and the skipped keys into the picker, then rebuild the chip
+        and banners. Display order is file order — never sorted."""
+        result = self.roster.result
+        recorded = recorded_keys(self.controller.storage)
+        self.ready.set_races(self.roster.races, recorded=recorded,
+                             skipped=self.roster.skipped_keys())
+        self._render_roster_chip(result)
+        self._render_roster_banner(result, recorded)
 
     def _render_roster_chip(self, result: RosterLoad) -> None:
         import os
@@ -967,65 +924,33 @@ class MainWindow(QMainWindow):
             return f"{rn}-H{hn}" if hn else str(rn)
         return str(key[1]) if key else ""
 
-    def _skipped_keys(self) -> set:
-        keys = set()
-        if not self._roster_rows:
-            return keys
-        for row in self._roster_rows[1:]:
-            if not row or not any(_cell(c) for c in row):
-                continue
-            if len(row) >= 5 and row[4] == "skipped":
-                r = RaceInfo(race_no=_cell(row[0]),
-                             heat_no=_cell(row[1]) if len(row) > 1 else "",
-                             name=_cell(row[2]) if len(row) > 2 else "")
-                keys.add(r.key)
-        return keys
-
-    def _apply_roster_result(self, result: RosterLoad) -> None:
-        self._load_result = result
-        self._races = result.races
-        self._roster_rows = read_rows(self._roster_path) \
-            if self._roster_path else None
-        recorded = recorded_keys(self.controller.storage)
-        if result.missing:
-            # No roster found: still armable. Default the picker to a synthetic
-            # race 000 / heat 1 so the operator can start immediately.
-            picker_races = [RaceInfo(race_no="000", heat_no="1")]
-        else:
-            picker_races = self._races
-        self.ready.set_races(picker_races, recorded=recorded,
-                             skipped=self._skipped_keys())
-        self._render_roster_chip(result)
-        self._render_roster_banner(result, recorded)
-
     def _reload_roster(self) -> None:
-        self._load_races(self._roster_path)
+        self.roster.load()
+        self._render_roster()
 
     def _load_roster_dialog(self) -> None:
         if self._last_state in (AppState.ARMED, AppState.RECORDING):
             self._show_toast("Can't load a roster while armed or recording.")
             return
-        from PySide6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load roster…", str(self.config.data_root),
-            "Roster CSV (*.csv);;All files (*)")
+        path = choose_roster_file(self, self.config.data_root)
         if path:
-            self._load_races(path)
+            self.roster.load(path)
+            self._render_roster()
 
     def _write_example_roster(self) -> None:
-        if self._roster_path:
+        if self.roster.path:
             try:
-                write_example(self._roster_path)
+                self.roster.write_example()
             except OSError as exc:
                 self._show_toast(f"Could not write example roster: {exc}")
                 return
-            self._load_races(self._roster_path)
+            self._render_roster()
 
     def _show_duplicates(self) -> None:
-        if not self._load_result or not self._load_result.duplicates:
+        dupes = self.roster.result.duplicates
+        if not dupes:
             return
-        parts = [f"{self._key_display(k)} (lines {a}, {b})"
-                 for k, a, b in self._load_result.duplicates]
+        parts = [f"{self._key_display(k)} (lines {a}, {b})" for k, a, b in dupes]
         self._show_toast("Duplicates: " + "; ".join(parts))
 
     def _show_dropped(self, dropped) -> None:

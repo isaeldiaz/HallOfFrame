@@ -80,68 +80,6 @@ def _fold(s) -> str:
                    if not unicodedata.combining(c))
 
 
-def parse_key(text) -> tuple[str, str] | None:
-    """Parse filter text into ``(race_no, heat_no)`` or ``None``.
-
-    The create row (WP5) appears only when the filter parses as a race number
-    with an optional heat — ``"217"`` -> ``("217", "")``, ``"217-H3"`` ->
-    ``("217", "3")``. Never for an empty or one-character filter, and never for
-    text that is not a numeric race key, so ``"senior"`` can never become a race.
-    """
-    t = _cell(text)
-    if len(t) < 2:
-        return None
-    import re
-    m = re.fullmatch(r"([0-9a-z]+?)(?:[-\s]*[h]([0-9]+))?", t.casefold())
-    if not m:
-        return None
-    rn, hn = m.group(1), m.group(2) or ""
-    if not rn.isdigit():
-        return None
-    return (rn, hn)
-
-
-def _edit_distance(a: str, b: str) -> int:
-    if len(a) < len(b):
-        a, b = b, a
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
-                           prev[j - 1] + (ca != cb)))
-        prev = cur
-    return prev[-1]
-
-
-def near_misses(races: list, query: str) -> list[RaceInfo]:
-    """Closest roster matches to *query*, best first (WP5).
-
-    Near misses: digit transpositions (distance 2), ±1 digit edits (distance 1),
-    and same-name-different-number. Used to show suggestions above the quieter
-    create row instead of an empty result with nothing beneath it.
-    """
-    q = _norm(query, drop_h=True)
-    scored: list[tuple[int, RaceInfo]] = []
-    for r in races:
-        rn = _norm(r.race_no, drop_h=True)
-        if rn.isdigit() and q.isdigit():
-            d = _edit_distance(q, rn)
-            if d <= 2:
-                scored.append((d, r))
-                continue
-        if r.name and _fold(q) in _fold(r.name):
-            scored.append((1, r))
-    scored.sort(key=lambda t: t[0])
-    seen: set = set()
-    out = []
-    for _, r in scored:
-        if r.key not in seen:
-            seen.add(r.key)
-            out.append(r)
-    return out[:3]
-
-
 def _norm(s, drop_h: bool = False) -> str:
     """Normalise one key field (BEHAVIOUR §1): trim, casefold, drop a leading
     ``h`` heat prefix (*drop_h*, for number fields only — never for a name),
@@ -192,21 +130,6 @@ def rename_races(storage, key, new_name: str) -> int:
     ids = [r["id"] for r in storage.race_identity_rows()
            if race_key(r["race_no"], r["heat_no"], r["name"]) == key]
     return storage.rename_race_ids(ids, new_name)
-
-
-def repoint_race(storage, race_id, race_no, heat_no, name=None) -> None:
-    """WP6: restyle a recorded race's key to a duplicate row's literal
-    formatting (``0102`` -> ``102``). Refuses a normalised-key change — merge
-    may only restyle, never move a race. Optionally updates ``name``. The key
-    guard lives here (step 1.4f); ``storage.repoint_race`` performs the write."""
-    row = storage.get_race(race_id)
-    if row is None:
-        return
-    old_key = race_key(row["race_no"], row["heat_no"], row["name"])
-    new_key = race_key(race_no, heat_no, row["name"])
-    if old_key != new_key:
-        raise ValueError("repoint may only restyle a key, never move a race")
-    storage.repoint_race(race_id, race_no, heat_no, name)
 
 
 @dataclass
@@ -423,112 +346,115 @@ def skip_race(csv_path, key, skip: bool = True, expected=None) -> RosterLoad:
     return mutate_roster(csv_path, _mutate, expected)
 
 
-def remove_row(csv_path, key, expected=None) -> RosterLoad:
-    """Remove the first roster row matching *key*. For merge (two rows sharing
-    one key) use :func:`remove_row_exact` so the correct row is removed."""
-    def _mutate(rows):
-        i = _find_row(rows, key)
-        if i < 0:
-            raise RosterWriteError("race not in roster — reload first")
-        return [r for j, r in enumerate(rows) if j != i]
-    return mutate_roster(csv_path, _mutate, expected)
-
-
-def remove_row_exact(csv_path, race_no, heat_no, name, expected=None) -> RosterLoad:
-    """Remove the specific roster row whose *literal* fields match (merge needs
-    to drop one of two rows that share a normalised key, so matching by key is
-    ambiguous)."""
-    def _mutate(rows):
-        for i, row in enumerate(rows):
-            if (_cell(row[0]) == _cell(race_no) and _cell(row[1]) == _cell(heat_no)
-                    and _cell(row[2]) == _cell(name)):
-                return [r for j, r in enumerate(rows) if j != i]
-        raise RosterWriteError("race not in roster — reload first")
-    return mutate_roster(csv_path, _mutate, expected)
-
-
-def add_row(csv_path, race_no, heat_no, name, expected=None,
+def add_row(csv_path, race_no, heat_no, name, after_key=None, expected=None,
             source: str = "added") -> tuple[RosterLoad, str]:
-    """Insert a new race/heat row in numeric order by normalised
-    ``(race_no, heat_no)`` (BEHAVIOUR §3); append if the file is not sorted.
-    Returns ``(result, outcome)`` where ``outcome`` is ``"ok"`` or
-    ``"collision"`` (the key already exists; nothing was written)."""
+    """Insert a new race/heat row after *after_key*, else append (BEHAVIOUR §3).
+
+    The display order is file order (spec: no sorting); *after_key* is the key
+    of the row the new one follows. Returns ``(result, outcome)`` where
+    ``outcome`` is ``"ok"`` or ``"collision"`` (the key already exists; nothing
+    was written)."""
     new_key = race_key(race_no, heat_no, name)
+
+    class _KeyExists(Exception):
+        """Internal: the mutation detected an existing key."""
+
     def _mutate(rows):
         if _find_row(rows, new_key) >= 0:
-            raise _Collision()
+            raise _KeyExists()
         new_row = [race_no, heat_no, name, source, ""]
         data = rows[1:]
-        try:
-            pos = _sorted_insert_pos(data, new_key)
-        except _Unsorted:
-            pos = len(data)
+        pos = len(data)
+        if after_key is not None:
+            i = _find_row(rows, after_key)
+            if i >= 0:
+                pos = i
         return [rows[0]] + data[:pos] + [new_row] + data[pos:]
     try:
         return mutate_roster(csv_path, _mutate, expected), "ok"
-    except _Collision:
+    except _KeyExists:
         return load_races(csv_path), "collision"
 
 
-class _Collision(Exception):
-    """Internal: the mutation detected an existing key (handled as a result)."""
+class Roster:
+    """The roster CSV and the five race-day operations (plan step 2.3).
 
+    One Qt-free owner of the file: the main window only forwards. ``rows`` is
+    the raw cell list last loaded and is passed as ``expected`` to every write,
+    so a mutation whose file has changed underneath the operator is refused with
+    ``RosterWriteError`` (BEHAVIOUR §2). Display order is file order — nothing
+    here sorts. ``races`` drops duplicate keys (first wins) exactly as
+    ``load_races`` reports them.
+    """
 
-class _Unsorted(Exception):
-    """Internal: the file is not in sorted order, so insert at the end."""
+    def __init__(self, path: str | None):
+        self.path: str | None = path
+        self.result: RosterLoad = RosterLoad(path=str(path) if path else "")
+        self.races: list[RaceInfo] = []
+        self.rows: list[list[str]] | None = None
+        if path:
+            self.load(path)
 
+    def load(self, path: str | None = None) -> RosterLoad:
+        """Re-read the CSV (optionally switching to *path*) and remember the raw
+        rows for the next optimistic-concurrency check (BEHAVIOUR §2, §4)."""
+        if path is not None:
+            self.path = path
+        self.result = load_races(self.path)
+        self.races = self.result.races
+        self.rows = read_rows(self.path) if self.path else None
+        return self.result
 
-def _numkey(s: str):
-    n = _norm(s, drop_h=True)
-    return (0, int(n)) if n.isdigit() else (1, n)
+    def skipped_keys(self) -> set:
+        """Normalised keys of rows whose ``status`` column is ``skipped`` (F11).
 
+        A legacy 3-column file has no status column, so nothing is skipped."""
+        skipped: set = set()
+        for row in (self.rows or [])[1:]:
+            if len(row) > 4 and _cell(row[4]).lower() == "skipped":
+                race = RaceInfo(race_no=_cell(row[0]),
+                                heat_no=_cell(row[1]) if len(row) > 1 else "",
+                                name=_cell(row[2]) if len(row) > 2 else "")
+                skipped.add(race.key)
+        return skipped
 
-def _sort_key(k) -> tuple:
-    if k[0] != "num":
-        return (1, _numkey(k[1]))
-    return (0, _numkey(k[1]), _numkey(k[2]))
+    def skip(self, key, skip: bool) -> RosterLoad:
+        """Mark a row skipped (or un-skip it) via the ``status`` column (F11)."""
+        skip_race(self.path, key, skip=skip, expected=self.rows)
+        return self.load()
 
+    def move(self, key, delta: int) -> RosterLoad:
+        """Move a data row one place: *delta* -1 up, +1 down (plan step 2.4).
 
-def _sorted_insert_pos(data: list[list[str]], new_key) -> int:
-    import bisect
-    keys = []
-    for row in data:
-        r = RaceInfo(race_no=_cell(row[0]), heat_no=_cell(row[1]),
-                     name=_cell(row[2]) if len(row) > 2 else "")
-        keys.append(r.key)
-    # Verify the file is genuinely sorted by normalised (race_no, heat_no)
-    # (BEHAVIOUR §3); if not, the caller appends instead of sorting the file.
-    for a, b in zip(keys, keys[1:]):
-        if _sort_key(a) > _sort_key(b):
-            raise _Unsorted()
-    return bisect.bisect_left([_sort_key(k) for k in keys], _sort_key(new_key))
+        Swaps the row with its neighbour in file order and refuses at either end
+        with ``RosterWriteError``; the file is never re-sorted."""
+        def _mutate(rows):
+            i = _find_row(rows, key)
+            if i < 0:
+                raise RosterWriteError("race not in roster — reload first")
+            j = i + delta
+            if j < 1 or j >= len(rows):
+                raise RosterWriteError("cannot move past the end of the roster")
+            rows = [list(r) for r in rows]
+            rows[i], rows[j] = rows[j], rows[i]
+            return rows
+        mutate_roster(self.path, _mutate, self.rows)
+        return self.load()
 
+    def add(self, race_no, heat_no, name,
+            after_key=None) -> tuple[RosterLoad, str]:
+        """Add a race row after *after_key* (else append). ``outcome`` is
+        ``"ok"`` or ``"collision"`` when the key already exists (BEHAVIOUR §3)."""
+        _result, outcome = add_row(self.path, race_no, heat_no, name,
+                                   after_key=after_key, expected=self.rows)
+        return self.load(), outcome
 
-def add_heat(csv_path, race_no, name, expected=None) -> tuple[RosterLoad, str]:
-    """Add the next unused heat of *race_no* directly after its existing heats
-    (F2, BEHAVIOUR §3). Returns ``(result, new_heat)``."""
-    current = read_rows(csv_path)
-    if current is None:
-        raise RosterWriteError("roster missing on disk — reload first")
-    used = set()
-    base = _norm(race_no, drop_h=True)
-    for row in current[1:]:
-        if _norm(_cell(row[0]), drop_h=True) == base:
-            used.add(_norm(_cell(row[1]), drop_h=True))
-    heat = 1
-    while str(heat) in used:
-        heat += 1
-    new_key = race_key(race_no, str(heat), name)
+    def rename(self, key, new_name) -> RosterLoad:
+        """Rename a race's label (F6); the numbers are the key, not editable."""
+        rename_race(self.path, key, new_name, expected=self.rows)
+        return self.load()
 
-    def _mutate(rows):
-        data = rows[1:]
-        last = -1
-        for j, row in enumerate(data):
-            if _norm(_cell(row[0]), drop_h=True) == base:
-                last = j
-        if last < 0:
-            raise RosterWriteError("race has no heats in the roster — reload first")
-        return [rows[0]] + data[:last + 1] + \
-            [[race_no, str(heat), name, "added", ""]] + data[last + 1:]
-    result = mutate_roster(csv_path, _mutate, expected)
-    return result, str(heat)
+    def write_example(self) -> None:
+        """Write the starter roster if the operator asks for one (WP4)."""
+        write_example(self.path)
+        self.load()

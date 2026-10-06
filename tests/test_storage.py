@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from hallofframe import storage as storage_mod
-from hallofframe.races import recorded_keys, rename_races, repoint_race
+from hallofframe.roster import recorded_keys, rename_races
 
 
 class _Clock:
@@ -60,7 +60,6 @@ def test_every_write_method_advances_updated_at(storage, clock):
     assert storage.last_updated(rid) == storage.last_updated()
 
     steps = [
-        ("repoint_race", lambda: repoint_race(storage, rid, "101", "1")),
         ("rename_races",
          lambda: rename_races(storage, ("num", "101", "1"), "Renamed")),
         ("mark_race_ended", lambda: storage.mark_race_ended(rid, 2000.0)),
