@@ -14,6 +14,8 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
 from hallofframe.config import Config
 from hallofframe.controller import CaptureController
 from hallofframe.framebuffer import FrameBuffer
@@ -40,6 +42,7 @@ class Base(unittest.TestCase):
 
 
 class TestNearEndOfRegatta(Base):
+    @pytest.mark.slow
     def test_full_day_seed_and_final_race(self):
         seed = seed_regatta(self.storage, races=40, min_captures=4,
                             max_captures=6, frames_per_capture=31, fps=30)
@@ -92,6 +95,7 @@ class TestNearEndOfRegatta(Base):
         failures = [(name, detail) for name, ok, detail in checks if not ok]
         self.assertEqual(failures, [], f"{len(failures)} checks failed: {failures}")
 
+    @pytest.mark.slow
     def test_session_timers_drain_between_races(self):
         # The accumulation half: many races on one controller, deferred
         # selection timers must drain to zero every time (no leak).

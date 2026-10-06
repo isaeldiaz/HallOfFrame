@@ -10,6 +10,7 @@ interval does not change when fps does (§6.5).
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from typing import Optional
 
@@ -17,9 +18,11 @@ from .mjpeg import Frame
 
 
 class FrameBuffer:
-    def __init__(self, seconds: float = 10.0, assumed_fps: int = 30):
+    def __init__(self, seconds: float = 10.0, assumed_fps: int = 30,
+                 clock=time.monotonic):
         self.seconds = seconds
         self.assumed_fps = assumed_fps
+        self._clock = clock
         self.maxlen = int(seconds * assumed_fps * 1.5)  # note int() — maxlen rejects float
         self._buf: deque[Frame] = deque(maxlen=self.maxlen)
         self._lock = threading.Lock()
@@ -32,10 +35,9 @@ class FrameBuffer:
 
     def append(self, frame: Frame) -> None:
         """Thread-safe. O(1)."""
-        import time
         with self._lock:
             self._buf.append(frame)
-            self._last_append_mono = time.monotonic()
+            self._last_append_mono = self._clock()
 
     def _snapshot(self) -> list[Frame]:
         return list(self._buf)
@@ -92,12 +94,11 @@ class FrameBuffer:
         derived from the frame timestamps. Returns (False, 0.0, None) when no
         frame has ever been appended.
         """
-        import time
         with self._lock:
             frames = list(self._buf)
         if self._last_append_mono is None:
             return False, 0.0, None
-        age = time.monotonic() - self._last_append_mono
+        age = self._clock() - self._last_append_mono
         if len(frames) >= 2:
             fps = (len(frames) - 1) / (frames[-1].t_recv - frames[0].t_recv)
         else:

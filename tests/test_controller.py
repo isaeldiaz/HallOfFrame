@@ -1,127 +1,110 @@
-"""T6 — CaptureController + storage, headless (spec §6.5, §6.7, N4)."""
-import os
-import tempfile
-import threading
+"""T6 — CaptureController + storage, headless (spec §6.5, §6.7, N4).
+
+Phase 0, step 0.5: the deferred image-selection timer is driven by the
+deterministic :class:`~fakes.FakeScheduler` instead of real sleeps. The
+persistence writer thread stays real, so tests drain it with
+``controller._queue.join()`` (which relies on the ``task_done()`` calls added to
+``CaptureController._writer_loop``).
+"""
+from __future__ import annotations
+
 import time
 import unittest
-from pathlib import Path
 
-from hallofframe.config import Config
+import pytest
+
+from fakes import FakeScheduler
 from hallofframe.controller import CaptureController
-from hallofframe.framebuffer import FrameBuffer
 from hallofframe.mjpeg import Frame
-from hallofframe.storage import Storage
 
 
-def make_config(data_root, window_ms=50, viewing="screen", image_mode="auto"):
-    data = {
-        "paths": {"data_root": str(data_root)},
-        "stream": {"assumed_fps": 30, "buffer_seconds": 10.0},
-        "timing": {"viewing_mode": viewing, "reaction_offset_ms": 0.0,
-                   "debounce_ms": 20, "start_mode": "direct", "radio_delay_ms": 0.0,
-                   "image_mode": image_mode},
-        "capture": {"window_before_ms": window_ms, "window_after_ms": window_ms},
-        "archive": {"enabled": False, "every_nth_frame": 1},
-    }
-    return Config(data=data, path=Path(data_root) / "config.toml")
-
-
-def seed_buffer(buffer: FrameBuffer, t0=1000.0, fps=30, seconds=6.0):
-    dt = 1.0 / fps
-    n = int(seconds * fps)
-    for i in range(n):
-        t = t0 + i * dt
-        buffer.append(Frame(t, t, i + 1, b"\xff\xd8jpeg%d\xff\xd9" % i))
+@pytest.fixture
+def controller_env(request, data_root, config, storage, buffer, seeded_buffer):
+    inst = request.instance
+    inst.data_root = data_root
+    inst.config_factory = config
+    inst.config = config()
+    inst.storage = storage
+    inst.buffer = buffer
+    inst.scheduler = FakeScheduler()
+    inst.controller = CaptureController(inst.config, inst.storage, inst.buffer,
+                                        scheduler=inst.scheduler)
+    inst.seed_buffer = seeded_buffer
+    yield
+    inst.controller.stop()
 
 
 class Base(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.data_root = Path(self.tmp.name)
-        self.config = make_config(self.data_root)
-        self.storage = Storage(self.data_root)
-        self.buffer = FrameBuffer(assumed_fps=30)
-        self.controller = CaptureController(self.config, self.storage, self.buffer)
+    def commit(self):
+        """Wait for the real writer thread to drain the capture queue."""
+        self.controller._queue.join()
 
-    def tearDown(self):
-        self.controller.stop()
-        time.sleep(0.05)
-        self.storage.close()
-        self.tmp.cleanup()
+    def settle(self):
+        """Drain the writer queue, then fire the deferred selection timers."""
+        self.controller._queue.join()
+        self.scheduler.advance(0.6)
 
 
+@pytest.mark.usefixtures("controller_env")
 class TestController(Base):
-    def _wait_for_frames(self, capture_id, timeout=3.0, spanning=False):
-        """Wait for the deferred selection. ``spanning`` waits for the whole
-        window: _select_images commits one frame at a time, so the first row
-        appears while the after-window frames are still being written."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            frames = self.storage.frames_for_capture(capture_id)
-            if frames and (not spanning
-                           or (any(f["offset_ms"] <= 0 for f in frames)
-                               and any(f["offset_ms"] >= 0 for f in frames))):
-                return True
-            time.sleep(0.02)
-        return False
-
     def test_trigger_without_race_ignored(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         self.assertIsNone(self.controller.record_crossing(2000.0))
         self.assertEqual(self.storage.captures_for_race(99999), [])
 
     def test_normal_crossing(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         cap_id = self.storage.insert_capture(race_id, 1, 2000.0, 2000.0, 1000.0, 0.0)
         # use controller path instead
         self.storage.update_capture(cap_id, deleted=1)
         t_press = 1000.0 + 5.0  # 5 s after start
         self.controller.record_crossing(t_press)
-        time.sleep(0.05)
+        self.commit()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
-        self.assertTrue(self._wait_for_frames(row["id"], spanning=True))
+        self.scheduler.advance(0.6)
         frames = self.storage.frames_for_capture(row["id"])
         self.assertTrue(any(f["offset_ms"] <= 0 for f in frames))
         self.assertTrue(any(f["offset_ms"] >= 0 for f in frames))
 
     def test_deferred_window(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         t_press = 1000.0 + 5.0
         self.controller.record_crossing(t_press)
-        time.sleep(0.02)  # row committed, selection not yet
+        self.commit()  # row committed, selection not yet
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(len(rows), 1)
         # frames not yet attached (deferred ~window_after_ms + margin)
         self.assertEqual(self.storage.frames_for_capture(rows[0]["id"]), [])
-        self.assertTrue(self._wait_for_frames(rows[0]["id"]))
+        self.scheduler.advance(0.6)
+        self.assertTrue(self.storage.frames_for_capture(rows[0]["id"]))
 
     def test_soft_delete_sequence_not_reused(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         for i in range(3):
             self.controller.record_crossing(1000.0 + 5.0 + i)
-        time.sleep(0.1)
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual([r["sequence"] for r in rows], [1, 2, 3])
         # soft delete middle
         self.storage.update_capture(rows[1]["id"], deleted=1)
         # new capture gets sequence 4, not 2
         self.controller.record_crossing(1000.0 + 9.0)
-        time.sleep(0.1)
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual([r["sequence"] for r in rows], [1, 3, 4])
 
     def test_undo_last_marks_newest_deleted_and_signals(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         for i in range(3):
             self.controller.record_crossing(1000.0 + 5.0 + i)
-        time.sleep(0.1)
+        self.settle()
         deleted = []
         self.controller.signal_capture_deleted = deleted.append
         self.controller.undo_last()
@@ -138,12 +121,12 @@ class TestController(Base):
         self.controller.signal_capture_deleted = lambda s: self.fail("unexpected signal")
 
     def test_debounced_press_recorded(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         t_press = 1000.0 + 5.0
         self.controller.record_crossing(t_press)
         self.controller.record_crossing(t_press + 0.02, debounce_suspect=True)
-        time.sleep(0.1)
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[1]["debounce_suspect"], 1)
@@ -151,38 +134,38 @@ class TestController(Base):
     def test_buffer_empty_records_missing(self):
         race_id = self.controller.start_race(1000.0, name="Race-T")
         self.controller.record_crossing(1000.0 + 5.0)
-        time.sleep(0.2)
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["primary_image"])
         self.assertEqual(rows[0]["image_flag"], "missing")
 
     def test_target_older_than_span(self):
-        seed_buffer(self.buffer)  # oldest t=1000
+        self.seed_buffer(self.buffer)  # oldest t=1000
         race_id = self.controller.start_race(1000.0, name="Race-T")
         # delta negative so target is way before the buffer's oldest frame
         self.controller.delta = -500.0
         t_press = 1000.0 + 2.0
         self.controller.record_crossing(t_press)
-        self.assertTrue(self._wait_for_frames(1, timeout=3))
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(rows[0]["image_flag"], "approximate")
 
     def test_target_newer_than_newest(self):
-        seed_buffer(self.buffer)  # newest ~ t0+6
+        self.seed_buffer(self.buffer)  # newest ~ t0+6
         race_id = self.controller.start_race(1000.0, name="Race-T")
         self.controller.delta = -10.0  # target = t_press + 10
         t_press = 1000.0 + 20.0  # target way past newest
         self.controller.record_crossing(t_press)
-        time.sleep(0.2)
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(rows[0]["image_flag"], "approximate")
 
     def test_bow_number_update(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         self.controller.record_crossing(1000.0 + 5.0)
-        time.sleep(0.1)
+        self.settle()
         rows = self.storage.captures_for_race(race_id)
         cap_id = rows[0]["id"]
         self.controller.set_bow_number(cap_id, "14")
@@ -192,11 +175,11 @@ class TestController(Base):
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
 
     def test_update_crossing_time_recomputes_press_timestamps(self):
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         t0 = 1000.0
         race_id = self.controller.start_race(t0, name="Race-T")
         self.controller.record_crossing(t0 + 5.0)
-        time.sleep(0.1)
+        self.settle()
         cap_id = self.storage.captures_for_race(race_id)[0]["id"]
         t0_wall = self.storage.get_race(race_id)["t0_wall"]
 
@@ -210,7 +193,7 @@ class TestController(Base):
     def test_unlisted_race_creates_provisional_key(self):
         # WP7: an unlisted race is created with a timestamp name and null
         # race_no/heat_no, identified once afterwards in review.
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-20260829-134812",
                                              race_no=None, heat_no=None)
         row = self.storage.get_race(race_id)
@@ -231,14 +214,11 @@ class TestController(Base):
     def test_repoint_leaves_captures_untouched(self):
         # WP6: a merge re-points the race's key formatting but never touches
         # capture/capture_frame rows.
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="B",
                                              race_no="0102", heat_no="1")
         self.controller.record_crossing(1000.0 + 5.0)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and self.storage.captures_for_race(
-                race_id) == []:
-            time.sleep(0.02)
+        self.commit()
         before = [c["id"] for c in self.storage.captures_for_race(race_id)]
         self.storage.repoint_race(race_id, "102", "1")
         self.assertEqual(self.storage.get_race(race_id)["race_no"], "102")
@@ -257,6 +237,7 @@ class TestController(Base):
         self.assertEqual(renamed.key, race_key("102", "1", "anything"))
 
 
+@pytest.mark.usefixtures("controller_env")
 class TestCalibrationValidation(Base):
     """Spec §8: water mode refuses to start unless calibration matches the live
     stream; screen mode never needs calibration (§5.4)."""
@@ -268,7 +249,7 @@ class TestCalibrationValidation(Base):
 
     def test_screen_mode_no_calibration_ok(self):
         # default make_config is viewing="screen": latency cancels, no cal needed
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         race_id = self.controller.start_race(1000.0, name="Race-T")
         self.assertIsNotNone(race_id)
 
@@ -278,7 +259,7 @@ class TestCalibrationValidation(Base):
         bio = _io.BytesIO()
         Image.new("RGB", (160, 90), (120, 120, 120)).save(bio, "JPEG")
         self._seed_real_jpeg(self.buffer, bio.getvalue())
-        cfg = make_config(self.data_root, viewing="water")
+        cfg = self.config_factory(timing={"viewing_mode": "water"})
         c = CaptureController(cfg, self.storage, self.buffer)
         self.assertIsNone(c.start_race(1000.0, name="Race-T"))
         c.stop()
@@ -286,21 +267,19 @@ class TestCalibrationValidation(Base):
     def test_water_mode_starts_with_stream_down(self):
         # A dead stream (empty buffer) auto-degrades to timing-only in ANY
         # mode: no calibration required, no image attached (§6.5).
-        cfg = make_config(self.data_root, viewing="water", image_mode="auto")
-        c = CaptureController(cfg, self.storage, self.buffer)
+        cfg = self.config_factory(
+            timing={"viewing_mode": "water", "image_mode": "auto"})
+        c = CaptureController(cfg, self.storage, self.buffer,
+                              scheduler=FakeScheduler())
+        rows = []
         try:
             race_id = c.start_race(1000.0, name="Race-Down")
             self.assertIsNotNone(race_id)
             self.assertTrue(c.image_off)
             self.assertEqual(c.delta, 0.0)
             c.record_crossing(1020.0)
-            deadline = time.monotonic() + 3.0
-            rows = []
-            while time.monotonic() < deadline:
-                rows = self.storage.captures_for_race(race_id)
-                if rows:
-                    break
-                time.sleep(0.02)
+            c._queue.join()
+            rows = self.storage.captures_for_race(race_id)
         finally:
             c.stop()
         self.assertEqual(len(rows), 1)
@@ -314,24 +293,22 @@ class TestCalibrationValidation(Base):
         # holds seconds of frames from before it went down, so span() is NOT
         # None — yet the stream is down. The race must still degrade to
         # timing-only rather than attach a stale pre-arming frame to crossings.
-        seed_buffer(self.buffer)
+        self.seed_buffer(self.buffer)
         # Emulate the stream having stopped ~5 s ago.
         self.buffer._last_append_mono = time.monotonic() - 5.0
-        cfg = make_config(self.data_root, viewing="water", image_mode="auto")
-        c = CaptureController(cfg, self.storage, self.buffer)
+        cfg = self.config_factory(
+            timing={"viewing_mode": "water", "image_mode": "auto"})
+        c = CaptureController(cfg, self.storage, self.buffer,
+                              scheduler=FakeScheduler())
+        rows = []
         try:
             race_id = c.start_race(1000.0, name="Race-Drop")
             self.assertIsNotNone(race_id)
             self.assertTrue(c.image_off)
             self.assertEqual(c.delta, 0.0)
             c.record_crossing(1000.0 + 5.0)
-            deadline = time.monotonic() + 3.0
-            rows = []
-            while time.monotonic() < deadline:
-                rows = self.storage.captures_for_race(race_id)
-                if rows:
-                    break
-                time.sleep(0.02)
+            c._queue.join()
+            rows = self.storage.captures_for_race(race_id)
         finally:
             c.stop()
         self.assertEqual(len(rows), 1)
@@ -350,7 +327,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1440x1080",
             "fps": 30, "lens": "", "mean_frame_bytes": len(jpg)}))
-        cfg = make_config(self.data_root, viewing="water")
+        cfg = self.config_factory(timing={"viewing_mode": "water"})
         c = CaptureController(cfg, self.storage, self.buffer)
         self.assertIsNotNone(c.start_race(1000.0, name="Race-T"))
         c.stop()
@@ -358,21 +335,19 @@ class TestCalibrationValidation(Base):
     def test_timing_only_mode_starts_without_calibration(self):
         # image_mode="off": timing-only, no camera, no calibration needed — even
         # in water viewing mode, and with an empty buffer (stream off).
-        cfg = make_config(self.data_root, viewing="water", image_mode="off")
-        c = CaptureController(cfg, self.storage, self.buffer)
+        cfg = self.config_factory(
+            timing={"viewing_mode": "water", "image_mode": "off"})
+        c = CaptureController(cfg, self.storage, self.buffer,
+                              scheduler=FakeScheduler())
+        rows = []
         try:
             race_id = c.start_race(1000.0, name="Timing-Only")
             self.assertIsNotNone(race_id)
             self.assertEqual(c.delta, 0.0)
             cap = c.record_crossing(1020.0)
             self.assertIsNone(cap)  # fast path; committed off-thread
-            deadline = time.monotonic() + 3.0
-            rows = []
-            while time.monotonic() < deadline:
-                rows = self.storage.captures_for_race(race_id)
-                if rows:
-                    break
-                time.sleep(0.02)
+            c._queue.join()
+            rows = self.storage.captures_for_race(race_id)
         finally:
             c.stop()
         self.assertEqual(len(rows), 1)
@@ -389,7 +364,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1920x1080",
             "fps": 30, "lens": "", "mean_frame_bytes": len(jpg)}))
-        cfg = make_config(self.data_root, viewing="water")
+        cfg = self.config_factory(timing={"viewing_mode": "water"})
         c = CaptureController(cfg, self.storage, self.buffer)
         self.assertIsNone(c.start_race(1000.0, name="Race-T"))
         c.stop()
@@ -407,7 +382,7 @@ class TestCalibrationValidation(Base):
         (self.data_root / "calibration.json").write_text(json.dumps({
             "latency_median_ms": 94.0, "resolution": "1440x1080",
             "fps": 30, "lens": "", "mean_frame_bytes": 1}))  # live is >>1
-        cfg = make_config(self.data_root, viewing="water")
+        cfg = self.config_factory(timing={"viewing_mode": "water"})
         c = CaptureController(cfg, self.storage, self.buffer)
         self.assertIsNotNone(c.start_race(1000.0, name="Race-T"))
         c.stop()

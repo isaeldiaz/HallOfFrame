@@ -59,6 +59,13 @@ hallofframe/
                      near-complete DB, plays the final race, verifies integrity/
                      exports/latency/memory. Shared with tests/test_late_regatta.py.
 tests/               pytest suites (controller, export, framebuffer, mjpeg).
+  conftest.py        Shared fixtures (data_root, config, storage, buffer,
+                     seeded_buffer, controller, session-scoped qapp) and the
+                     --update-goldens option. `config` is a factory taking
+                     per-section overrides.
+  fakes.py           FakeScheduler / FakeClock for deterministic tests.
+  goldens/           Byte-exact export/web snapshots (tests/test_goldens.py).
+  test_trigger.py    Synthetic evdev dispatch tests (no device needed).
 ```
 
 ## Key architectural rules
@@ -134,9 +141,17 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 # run (installed deps in venv; typically under systemd-inhibit, see INSTALL.md §7)
 ~/regatta/venv/bin/python -m hallofframe   # or ./venv/bin/python -m hallofframe
 
-# tests
-./venv/bin/python -m pytest -q
+# tests — default run is the fast suite (slow tests are deselected)
+./venv/bin/python -m pytest -m "not slow"
+./venv/bin/python -m pytest -m slow        # the few >2 s tests
 ```
+
+Test infrastructure (Phase 0): `pytest.ini` registers the `qt` (needs PySide6)
+and `slow` (>2 s) markers and sets `testpaths = tests`. A single session-scoped
+`qapp` fixture owns the `QApplication` (offscreen) so Qt tests never create or
+destroy their own. `tests/goldens/` holds byte-exact snapshots; regenerate with
+`pytest tests/test_goldens.py --update-goldens`. CI is
+`.github/workflows/ci.yml` (Python 3.12 and 3.14, no `evdev`).
 
 Race lifecycle (keyboard is grabbed during a race, see `grab_device`):
 `Ctrl+S` arm → ENTER starts (`t0`) → SPACE records crossings → **F12 (or End

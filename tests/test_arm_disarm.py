@@ -1,16 +1,9 @@
 """Unit tests for trigger building, grab management, and arm/disarm lifecycle."""
-import os
-import tempfile
 import time
 import unittest
-from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
-
-from hallofframe.config import Config
 from hallofframe.controller import CaptureController
 from hallofframe.framebuffer import FrameBuffer, Frame
 from hallofframe.main import build_trigger
@@ -18,30 +11,7 @@ from hallofframe.storage import Storage
 from hallofframe.ui.main_window import MainWindow
 from hallofframe.ui.state import AppState
 
-try:
-    _QT = QApplication.instance() is not None or bool(QApplication([]))
-except Exception:  # pragma: no cover
-    _QT = False
-
-
-def _make_config(data_root, device_path="/dev/input/event3"):
-    data = {
-        "paths": {"data_root": str(data_root)},
-        "stream": {"assumed_fps": 30, "buffer_seconds": 10.0},
-        "timing": {"viewing_mode": "screen", "reaction_offset_ms": 0.0,
-                   "debounce_ms": 20, "start_mode": "direct", "radio_delay_ms": 0.0},
-        "capture": {"window_before_ms": 50, "window_after_ms": 50},
-        "archive": {"enabled": False, "every_nth_frame": 1},
-        "trigger": {
-            "device_path": device_path,
-            "crossing_keycodes": [57],
-            "start_keycodes": [28],
-            "end_keycodes": [88],
-            "grab_device": True,
-        },
-        "ui": {"finish_line_x": 0.5, "preview_fps": 10},
-    }
-    return Config(data=data, path=Path(data_root) / "config.toml")
+pytestmark = pytest.mark.qt
 
 
 def _seed_buffer(buffer: FrameBuffer, n=5):
@@ -51,23 +21,23 @@ def _seed_buffer(buffer: FrameBuffer, n=5):
         buffer.append(Frame(t, t, i + 1, b"\xff\xd8fake\xff\xd9"))
 
 
-@unittest.skipUnless(_QT, "PySide6 unavailable")
+@pytest.fixture
+def arm_env(request, data_root, config, storage, buffer, qapp):
+    inst = request.instance
+    inst.data_root = data_root
+    inst.config_factory = config
+    inst.config = config(trigger={"device_path": ""})
+    inst.storage = storage
+    inst.buffer = buffer
+    inst.controller = CaptureController(inst.config, inst.storage, inst.buffer)
+    inst.win = MainWindow(inst.config, inst.controller, inst.buffer)
+    yield
+    inst.controller.stop()
+    inst.win.close()
+
+
+@pytest.mark.usefixtures("arm_env")
 class TestArmDisarm(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.data_root = Path(self.tmp.name)
-        self.config = _make_config(self.data_root, device_path="")
-        self.storage = Storage(self.data_root)
-        self.buffer = FrameBuffer(assumed_fps=30)
-        self.controller = CaptureController(self.config, self.storage, self.buffer)
-        self.win = MainWindow(self.config, self.controller, self.buffer)
-
-    def tearDown(self):
-        self.controller.stop()
-        self.storage.close()
-        self.win.close()
-        self.tmp.cleanup()
-
     def test_arm_and_disarm_via_f12(self):
         _seed_buffer(self.buffer)
         self.win._recompute_state()
@@ -122,8 +92,7 @@ class TestArmDisarm(unittest.TestCase):
                      "0102,1,First,sheet,\n"
                      "102,1,Second,sheet,\n"
                      "103,1,Heat,sheet,\n", encoding="utf-8")
-        cfg = _make_config(self.data_root)
-        cfg.data["races"] = {"csv_path": str(p)}
+        cfg = self.config_factory(races={"csv_path": str(p)})
         storage = Storage(self.data_root)
         buffer = FrameBuffer(assumed_fps=30)
         ctl = CaptureController(cfg, storage, buffer)
@@ -149,8 +118,7 @@ class TestArmDisarm(unittest.TestCase):
 
     def test_missing_roster_defaults_to_000_heat_1(self):
         p = self.data_root / "does-not-exist.csv"
-        cfg = _make_config(self.data_root)
-        cfg.data["races"] = {"csv_path": str(p)}
+        cfg = self.config_factory(races={"csv_path": str(p)})
         storage = Storage(self.data_root)
         ctl = CaptureController(cfg, storage, self.buffer)
         win = MainWindow(cfg, ctl, self.buffer)
@@ -167,7 +135,8 @@ class TestArmDisarm(unittest.TestCase):
             win.close()
 
     def test_build_trigger_fallback_on_invalid_device(self):
-        cfg = _make_config(self.data_root, device_path="/dev/input/nonexistent_device_xyz")
+        cfg = self.config_factory(
+            trigger={"device_path": "/dev/input/nonexistent_device_xyz"})
         listener, fallback, extras = build_trigger(cfg, lambda *a: None, lambda *a: None, lambda *a: None)
         self.assertIsNone(listener)
         self.assertTrue(fallback)

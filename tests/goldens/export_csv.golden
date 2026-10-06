@@ -1,0 +1,4 @@
+race_no,heat_no,name,sequence,bow_number,elapsed_seconds,elapsed_formatted,wall_clock_utc,image_file,image_flag,notes
+101,1,"Men under 18, single, final",1,07,6.120000,0:06.12,2023-11-14T22:13:26.120Z,races/Race-20231114-2213/cap_0001.jpg,,photo finish
+101,1,"Men under 18, single, final",2,04,7.450000,0:07.45,2023-11-14T22:13:27.450Z,,approximate,
+101,1,"Men under 18, single, final",3,12,8.010000,0:08.01,2023-11-14T22:13:28.010Z,,missing,lane 3

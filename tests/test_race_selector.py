@@ -8,18 +8,15 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
 
 from hallofframe.framebuffer import FrameBuffer
 from hallofframe.races import RaceInfo
 from hallofframe.storage import Storage
 from hallofframe.ui.ready_screen import ReadyScreen
 
-try:
-    _QT = QApplication.instance() is not None or bool(QApplication([]))
-except Exception:  # pragma: no cover
-    _QT = False
+pytestmark = pytest.mark.qt
 
 
 class TestStorageRaceNames(unittest.TestCase):
@@ -82,7 +79,7 @@ class TestStorageRaceNames(unittest.TestCase):
         self.assertEqual(row["name"], "Renamed")
 
 
-@unittest.skipUnless(_QT, "PySide6 unavailable")
+@pytest.mark.usefixtures("qapp")
 class TestReadyScreenRaceSelector(unittest.TestCase):
     def setUp(self):
         self.rs = ReadyScreen(FrameBuffer(assumed_fps=30))

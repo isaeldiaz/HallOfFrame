@@ -100,6 +100,21 @@ class TriggerListener(threading.Thread):
         fcntl.ioctl(self._device.fd, EVIOCSCLOCKID,
                     struct.pack("i", time.CLOCK_MONOTONIC))
 
+    def _dispatch(self, code: int, value: int, timestamp: float) -> None:
+        if value != 1:
+            return  # ignore release (0) and auto-repeat (2)
+        handler = self.handlers.get(code)
+        if handler is None:
+            return
+        now = timestamp  # kernel timestamp, interrupt time
+        # A press inside the debounce window is a suspect double.
+        # RECORD and flag it — never drop (§6.4).
+        suspect = now - self._last_trigger_mono < self.debounce_s
+        if suspect:
+            self.debounce_suspect_count += 1
+        self._last_trigger_mono = now
+        handler(now, code, suspect)
+
     def run(self) -> None:
         import evdev
         if self._device is None:
@@ -112,19 +127,7 @@ class TriggerListener(threading.Thread):
                         break
                     if event.type != evdev.ecodes.EV_KEY:
                         continue
-                    if event.value != 1:
-                        continue  # ignore release (0) and auto-repeat (2)
-                    handler = self.handlers.get(event.code)
-                    if handler is None:
-                        continue
-                    now = event.timestamp()  # kernel timestamp, interrupt time
-                    # A press inside the debounce window is a suspect double.
-                    # RECORD and flag it — never drop (§6.4).
-                    suspect = now - self._last_trigger_mono < self.debounce_s
-                    if suspect:
-                        self.debounce_suspect_count += 1
-                    self._last_trigger_mono = now
-                    handler(now, event.code, suspect)
+                    self._dispatch(event.code, event.value, event.timestamp())
             except (evdev.UInputError, OSError):
                 pass
             finally:
