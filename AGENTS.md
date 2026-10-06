@@ -153,3 +153,8 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   Quit**. If a request mentions an end/quit problem, that is implemented —
   check the current `end_race()`/UI wiring before assuming it's missing.
 - Version in `hallofframe/__init__.py` (`__version__`).
+- **Retired: relay-driven finish horn.** `hallofframe/horn.py`, its
+  `tools/test_horn.py` CLI, and the `[horn]` config block were removed (they
+  shipped in commit `8f0c9a4`, preserved at tag `horn-relay`, reverted by
+  `d734372`). No tests or other modules depended on it. Reintegration steps and
+  the LCUS-1 protocol are recorded in the spec §13.2 implementation note.

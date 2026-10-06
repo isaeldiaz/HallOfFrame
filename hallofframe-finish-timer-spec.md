@@ -1905,6 +1905,37 @@ implementation can be planned against the constraints already locked in here.
   horn-fired timestamp so the ~500 ms budget is measured, per §12.2's "numbers,
   not adjectives".
 
+  > **Retired implementation (2026-10-06).** The *off-the-shelf USB relay,
+  > host-timed* route was implemented and shipped, then retired from `main` at
+  > the project's request (the USB-serial relay is no longer part of the
+  > deployed setup). The exact, tested code is preserved at tag **`horn-relay`**
+  > (commit `8f0c9a4`) and was removed by the revert commit `d734372`; restore
+  > it with `git revert d734372` (or `git cherry-pick 8f0c9a4`).
+  >
+  > **What was built.** `hallofframe/horn.py` — a `Horn` class owning a
+  > `queue.Queue`-fed worker thread, so `honk()` only enqueues and returns and
+  > never touches the evdev trigger path. `CaptureController` called
+  > `horn.honk()` after each committed capture and `horn.stop()` at shutdown;
+  > `main.py`'s `build_core()` constructed it and passed it as
+  > `CaptureController(..., horn=horn)`. The LCUS-1 command is four bytes
+  > `0xA0, relay, state, (0xA0 + relay + state) & 0xFF` over CH340 serial
+  > (`device`, e.g. `/dev/ttyUSB0`; `baud` 9600). Config was a `[horn]` block in
+  > §8 (`enabled`, `device`, `baud`, `relay`, `duration_ms`), and
+  > `tools/test_horn.py` drove a reachability/switch self-test with an optional
+  > `--beep`. `pyserial` was an optional dependency; when it was absent, or the
+  > port failed to open, the horn degraded to a no-op and the app kept running
+  > timing-only. The LC-1 board returns no electronic feedback, so `self_test()`
+  > could only confirm that the port opened and writes succeeded — the audible
+  > relay click was the only real confirmation. Close crossings merged into one
+  > blast rather than chopping the relay on/off.
+  >
+  > **To reintegrate.** `git revert d734372`, reinstall `pyserial`, and re-add
+  > the `[horn]` block to the event's `config.toml` (the revert restores the
+  > code and its `[horn]` defaults). Nothing else in the app depended on it and
+  > no automated tests covered it, so the revert is self-contained. The other
+  > hardware routes surveyed above (custom CDC dongle, coded-tone audio) remain
+  > unbuilt and are the likely direction if the horn returns.
+
 - **Reverse the capture-list ordering.** §7.3 leaves newest-at-top vs
   newest-at-bottom configurable; the current default shows crossings slowest
   (first) to fastest (last) top-to-bottom, which is inverted relative to how
