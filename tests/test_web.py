@@ -191,6 +191,22 @@ class TestConditionalRequests(unittest.TestCase):
         _, headers2, _ = self._get("/")
         self.assertNotEqual(first, headers2["ETag"])
 
+    def test_if_none_match_wins_over_if_modified_since(self):
+        # RFC 7232 §6: a changed ETag must not be overridden by a coarse,
+        # still-matching Last-Modified (same-second edit).
+        _, headers, _ = self._get("/")
+        status, _, _ = self._get(
+            "/", {"If-None-Match": '"stale"',
+                  "If-Modified-Since": headers["Last-Modified"]})
+        self.assertEqual(status, 200)
+
+    def test_unreviewed_race_is_not_served(self):
+        rid = self.storage.create_race("Not reviewed", 7000.0, 7000.0, "direct",
+                                       0.0, 0.0, "water", 30, race_no="999",
+                                       heat_no="1")
+        self.assertEqual(self._get(f"/race/{rid}")[0], 404)
+        self.assertEqual(self._get(f"/excel/{rid}")[0], 404)
+
     def test_image_immutable_cache_headers(self):
         status, headers, body = self._get("/img/races/101%20H1/c.jpg")
         self.assertEqual(status, 200)
@@ -232,6 +248,17 @@ class TestImageResolution(unittest.TestCase):
 
     def test_missing_returns_none(self):
         self.assertIsNone(resolve_image_file(self.data_root, "races/nope.jpg"))
+
+    def test_rejects_non_frame_files(self):
+        # Only captured frames under races/ are servable; config.toml, the DB
+        # and other data-root files must never be exposed by /img/.
+        (self.data_root / "config.toml").write_text("secret", encoding="utf-8")
+        (self.data_root / "event.db").write_bytes(b"db")
+        (self.data_root / "races" / "notes.txt").write_text("x", encoding="utf-8")
+        self.assertIsNone(resolve_image_file(self.data_root, "config.toml"))
+        self.assertIsNone(resolve_image_file(self.data_root, "event.db"))
+        self.assertIsNone(resolve_image_file(self.data_root, "races/notes.txt"))
+        self.assertIsNone(resolve_image_file(self.data_root, "races/\x00evil.jpg"))
 
 
 if __name__ == "__main__":

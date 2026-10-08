@@ -52,6 +52,7 @@ _IMG_TYPES = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
     ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
 }
+_IMG_SUFFIXES = frozenset(_IMG_TYPES)
 
 
 def _parse_iso(iso: str) -> datetime.datetime | None:
@@ -80,12 +81,22 @@ def _excel_filename(storage: Storage, race_id: int) -> str:
 
 
 def resolve_image_file(data_root: Path, rel: str) -> Path | None:
-    """Resolve a stored relative image path to a file inside *data_root*, or
-    None if it escapes the root or does not exist. Guarded against ``../``
-    traversal so a crafted URL cannot read arbitrary files."""
-    target = (Path(data_root) / rel).resolve()
-    root = Path(data_root).resolve()
-    if not target.is_relative_to(root) or not target.is_file():
+    """Resolve a stored relative image path to a captured frame file, or None.
+
+    Only files under ``<data_root>/races`` with an image suffix are served, so a
+    crafted URL cannot read ``config.toml``, the database or logs even though
+    they live under the data root. Guarded against ``../`` traversal and null
+    bytes in *rel*."""
+    try:
+        target = (Path(data_root) / rel).resolve()
+        races_root = (Path(data_root) / "races").resolve()
+    except (ValueError, OSError):
+        return None
+    if not target.is_relative_to(races_root):
+        return None
+    if target.suffix.lower() not in _IMG_SUFFIXES:
+        return None
+    if not target.is_file():
         return None
     return target
 
@@ -194,12 +205,15 @@ class WebHandler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str,
               extra: dict[str, str] | None = None) -> None:
         self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
+        if code != 304:
+            # RFC 7232 §4.1: a 304 carries no representation, so it must not
+            # advertise the (empty) body's length.
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        if self.command != "HEAD":
+        if self.command != "HEAD" and code != 304:
             self.wfile.write(body)
 
     def _html(self, code: int, body: str,
@@ -227,9 +241,14 @@ class WebHandler(BaseHTTPRequestHandler):
             "public, max-age=31536000, immutable" if immutable else "no-cache")
         inm = self.headers.get("If-None-Match")
         ims = self.headers.get("If-Modified-Since")
-        if (inm and inm == etag) or (ims and last_modified and ims == last_modified):
-            return headers, True
-        return headers, False
+        # RFC 7232 §6: when If-None-Match is present, If-Modified-Since is
+        # ignored. ORing them let a coarse (1 s) Last-Modified match while the
+        # ETag had already changed, serving a stale page after an edit.
+        if inm:
+            not_modified = inm == etag
+        else:
+            not_modified = bool(ims and last_modified and ims == last_modified)
+        return headers, not_modified
 
     # --- routes ----------------------------------------------------------
     def do_GET(self):
@@ -256,6 +275,14 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         self._html(404, "<h1>404</h1><p>Not found.</p>")
 
+    def _published(self, storage: Storage, race_id: int) -> bool:
+        """True only for a race the operator has closed in review.
+
+        The index hides unreviewed races; the race/excel routes must enforce the
+        same gate, or a still-running race is reachable by its (sequential) id."""
+        race = storage.get_race(race_id)
+        return race is not None and bool(race["reviewed"])
+
     def _race(self, storage: Storage, path: str) -> None:
         rest = path[len("/race/"):]
         try:
@@ -263,7 +290,7 @@ class WebHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
-        if storage.get_race(race_id) is None:
+        if not self._published(storage, race_id):
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
         headers, not_modified = self._cache(
@@ -287,7 +314,7 @@ class WebHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
-        if storage.get_race(race_id) is None:
+        if not self._published(storage, race_id):
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
         headers, not_modified = self._cache(

@@ -143,6 +143,15 @@ class TestExport(unittest.TestCase):
         self.assertNotIn("Elapsed Time", tsv)
         self.assertNotIn("Bow number", tsv)
 
+    def test_clipboard_flattens_tabs_and_newlines(self):
+        self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 3.0, 0.0,
+                                    bow_number="04", notes="a\tb\nc")
+        tsv, _ = clipboard_data(self.storage, self.race_id)
+        lines = tsv.strip("\r\n").split("\r\n")
+        data_row = lines[5]  # five heading lines precede the crossings
+        self.assertEqual(len(data_row.split("\t")), 4)
+        self.assertIn("a b c", data_row)
+
     def _write_html(self):
         self.storage.insert_capture(self.race_id, 1, 3000.0, 3000.0, 10.0, 0.0,
                                     bow_number="09")

@@ -50,7 +50,14 @@ def clipboard_data(storage: Storage, race_id: int,
             c["notes"] or "",
         ])
 
-    tsv = "\r\n".join("\t".join(str(cell) for cell in row) for row in rows) + "\r\n"
+    # Tabs/newlines inside a value (e.g. a multi-line note) would shift columns
+    # when pasted into a spreadsheet; the HTML variant is escaped, so flatten
+    # the plain-text cells too.
+    def _cell(value) -> str:
+        return (str(value).replace("\t", " ").replace("\r", " ")
+                .replace("\n", " "))
+
+    tsv = "\r\n".join("\t".join(_cell(c) for c in row) for row in rows) + "\r\n"
 
     body = "".join(
         "<tr>" + "".join(f"<td>{html.escape(str(cell))}</td>" for cell in row)
