@@ -14,6 +14,15 @@ _COLUMNS = ["race_no", "heat_no", "name", "sequence", "bow_number",
             "image_file", "image_flag", "notes"]
 
 
+def _safe(value) -> str:
+    """Neutralize spreadsheet formula injection (OWASP CSV injection).
+
+    A cell starting with ``=``, ``+``, ``-`` or ``@`` is prefixed with a single
+    quote so Excel/LibreOffice treat it as text instead of evaluating it."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+
+
 def _data_rows(storage: Storage, race_id: int):
     """Yield the exported table as a header row followed by data rows. Each
     data row is prefixed with the race's three identifying fields."""
@@ -44,7 +53,7 @@ def export_csv(storage: Storage, race_id: int, out_path: str | Path) -> Path:
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         for row in _data_rows(storage, race_id):
-            writer.writerow(row)
+            writer.writerow([_safe(cell) for cell in row])
     return out_path
 
 
@@ -65,7 +74,7 @@ def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
     out_path = Path(out_path)
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(_ALL_COLUMNS)
+        writer.writerow([_safe(cell) for cell in _ALL_COLUMNS])
         for race, captures in _all_race_blocks(storage):
             t0_wall = race["t0_wall"] if race["t0_wall"] is not None else None
             base = [
@@ -76,10 +85,12 @@ def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
                 local_hms(t0_wall) if t0_wall is not None else "",
             ]
             if not captures:
-                writer.writerow(base + [""] * (len(_ALL_COLUMNS) - len(base)))
+                writer.writerow([_safe(cell)
+                                 for cell in base + [""] * (len(_ALL_COLUMNS)
+                                                            - len(base))])
                 continue
             for c in captures:
-                writer.writerow(base + [
+                writer.writerow([_safe(cell) for cell in base + [
                     c["sequence"],
                     c["bow_number"] or "",
                     f"{c['elapsed_s']:.6f}",
@@ -88,5 +99,5 @@ def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
                     c["primary_image"] or "",
                     c["image_flag"] or "",
                     c["notes"] or "",
-                ])
+                ]])
     return out_path

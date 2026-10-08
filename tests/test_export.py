@@ -69,6 +69,16 @@ class TestExport(unittest.TestCase):
             rows = list(csv.reader(fh))[1:]
         self.assertEqual([r[3] for r in rows], ["2"])
 
+    def test_csv_neutralizes_formula_injection(self):
+        self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 3.0, 0.0,
+                                    bow_number="=1+1", notes="@SUM(A1)")
+        out = self.data_root / "export.csv"
+        export_csv(self.storage, self.race_id, out)
+        with open(out, newline="", encoding="utf-8") as fh:
+            row = list(csv.reader(fh))[1]
+        self.assertEqual(row[4], "'=1+1")
+        self.assertEqual(row[10], "'@SUM(A1)")
+
     def test_utc_iso(self):
         self.assertRegex(utc_iso(0.0), r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 
