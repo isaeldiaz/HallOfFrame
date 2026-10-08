@@ -5,6 +5,8 @@ from unittest import mock
 
 import pytest
 
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from hallofframe.controller import CaptureController
 from hallofframe.framebuffer import FrameBuffer, Frame
 from hallofframe.main import build_trigger

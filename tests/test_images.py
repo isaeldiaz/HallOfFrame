@@ -7,6 +7,9 @@ fits the result to the requested size keeping aspect, and can crop a normalised
 from __future__ import annotations
 
 import pytest
+
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from PIL import Image
 from PySide6.QtCore import QSize
 

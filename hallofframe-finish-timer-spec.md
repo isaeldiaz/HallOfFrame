@@ -1,7 +1,7 @@
 # HallOfFrame Finish-Line Timing System — Build Specification
 
 **Document version:** 1.2
-**Status:** Design complete, not yet implemented
+**Status:** Implemented (v1.2)
 **Audience:** An AI coding assistant or developer implementing this system from scratch.
 
 > **v1.1 changelog.** Revised against the hardware/software audit in

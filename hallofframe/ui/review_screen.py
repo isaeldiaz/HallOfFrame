@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 from . import styles
 from .crossing_list import CrossingList
 from .images import load_scaled
-from ..render import local_hms, parse_elapsed
+from ..render import format_elapsed, local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
 # flag, bow field), but resizeEvent() keeps it under a share of the screen: a
@@ -464,7 +464,7 @@ class ReviewScreen(QWidget):
 
     def _bow_edited(self, sequence: int, value: str) -> None:
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
-        if cap:
+        if cap and (value or "") != (cap["bow_number"] or ""):
             self.controller.set_bow_number(cap["id"], value or None)
 
     def _time_edited(self, sequence: int, raw: str) -> None:
@@ -477,6 +477,13 @@ class ReviewScreen(QWidget):
         """
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
         if cap is None:
+            return
+        # editingFinished also fires on Return/Enter and on a focus move after an
+        # edit, not only on a real change: advancing through a row would otherwise
+        # rewrite a full-precision stored time with the rounded M:SS.cc the field
+        # displays (and churn updated_at, which the web "Results updated"/ETag
+        # read). Skip when the text still matches.
+        if raw.strip() == format_elapsed(cap["elapsed_s"]):
             return
         elapsed = parse_elapsed(raw)
         if elapsed is None:

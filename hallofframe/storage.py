@@ -591,12 +591,16 @@ class Storage:
             return self._conn.execute(q, (race_id,)).fetchall()
 
     # --- frame ------------------------------------------------------------
-    def frame_exists(self, race_id: int, t_ms: int) -> bool:
+    def frame_times(self, race_id: int, lo: int, hi: int) -> set[int]:
+        """The ``t_ms`` values already stored for *race_id* in ``[lo, hi]``.
+
+        One query for a whole selection window, so the deferred-selection writer
+        does not round-trip per frame (plan step 5.2)."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT 1 FROM frame WHERE race_id=? AND t_ms=?",
-                (race_id, t_ms)).fetchone()
-            return row is not None
+            rows = self._conn.execute(
+                "SELECT t_ms FROM frame WHERE race_id=? AND t_ms BETWEEN ? AND ?",
+                (race_id, lo, hi)).fetchall()
+        return {r["t_ms"] for r in rows}
 
     def insert_frames(self, rows) -> list:
         """Insert gun-indexed frames, one transaction (plan step 5.1).

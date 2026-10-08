@@ -21,11 +21,14 @@ from unittest import mock
 
 import pytest
 
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QImage, QKeyEvent
 from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.controller import CaptureController
+from hallofframe.render import format_elapsed
 from hallofframe.session import Phase
 from hallofframe.ui.state import AppState
 
@@ -350,6 +353,32 @@ class TestReviewScreen(unittest.TestCase):
         self.key(Qt.Key_Return)
         self.assertEqual(self.times()[seq], before,
                          "an invalid edit must not change the stored time")
+
+    def test_advancing_through_a_row_leaves_elapsed_and_updated_at_untouched(self):
+        # A stored time keeps full precision; the field displays only M:SS.cc.
+        # Qt emits editingFinished on Return/Enter (the operator's advance key)
+        # even when nothing was typed, so advancing through a row must not write
+        # the rounded display back, nor churn updated_at (which the web "Results
+        # updated"/ETag read). The time's window holds no frames, so the advance
+        # save-frame path is a no-op and any write must come from the time edit.
+        cap_id = self.storage.insert_capture(
+            self.race_id, 4, 372.4837, time.time(), 372.4837, 0.0,
+            target_ms=372484)
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        screen._select(4)
+        self.app.processEvents()
+        before = dict(self.storage.capture(cap_id))
+        te = screen.list._rows[4].time_edit
+        self.assertEqual(te.text(), format_elapsed(372.4837))
+        te.setFocus()
+        self.app.processEvents()
+        self.key(Qt.Key_Return)       # commits editingFinished without an edit
+        after = dict(self.storage.capture(cap_id))
+        self.assertEqual(after["elapsed_s"], before["elapsed_s"])
+        self.assertEqual(after["updated_at"], before["updated_at"],
+                         "advancing through a row must not bump updated_at")
 
     # --- 6. remove / restore / clone (plan step 7.2) ---------------------
     def test_delete_key_reaches_the_controller_and_strikes_the_row(self):

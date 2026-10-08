@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from fakes import FakeScheduler
 from hallofframe.main import build_core
 from hallofframe.tools.fake_camera import start_server

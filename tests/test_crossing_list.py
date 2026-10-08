@@ -7,6 +7,9 @@ screen, with no parameter to change it. These tests pin that down plus the
 from __future__ import annotations
 
 import pytest
+
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QLineEdit

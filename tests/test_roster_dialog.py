@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from hallofframe.roster import RaceInfo, load_races, read_rows, write_example
 
 pytestmark = pytest.mark.qt

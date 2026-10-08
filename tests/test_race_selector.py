@@ -9,6 +9,9 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from PySide6.QtCore import Qt
 
 from hallofframe.framebuffer import FrameBuffer

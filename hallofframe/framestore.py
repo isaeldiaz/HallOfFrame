@@ -44,8 +44,9 @@ class FrameStore:
             return []
 
         frames_dir = self.race_dir / "frames"
-        new = [(ms, f) for ms, f in by_ms.items()
-               if not self.storage.frame_exists(self.race_id, ms)]
+        existing = self.storage.frame_times(
+            self.race_id, min(by_ms), max(by_ms))
+        new = [(ms, f) for ms, f in by_ms.items() if ms not in existing]
         if new:
             frames_dir.mkdir(parents=True, exist_ok=True)
             for ms, frame in new:

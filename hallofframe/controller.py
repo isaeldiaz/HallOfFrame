@@ -152,8 +152,11 @@ class CaptureController:
         # is configured start_mode="radio".
         delay_s = (self.radio_delay_ms / 1000.0
                    if self.start_mode == "radio" else 0.0)
-        self.t0 = t_press - delay_s
-        self.t0_wall = time.time() - delay_s
+        # Latch the press instant now (the wall clock is read beside t_press so
+        # the two clocks stay close), but do not commit it to ``self`` until the
+        # race is certain to start.
+        t0 = t_press - delay_s
+        t0_wall = time.time() - delay_s
         # Validate calibration against the live stream BEFORE starting (spec §8):
         # refuse to start with a stale or mismatched Δ. Runs off the timing path's
         # per-crossing work, so a one-time decode here is acceptable.
@@ -179,6 +182,10 @@ class CaptureController:
                 self.delta = self._compute_delta()
             except CalibrationError as exc:
                 raise CalibrationError(f"race NOT started: {exc}") from exc
+        # Commit t0 only once the race is certain to start: a CalibrationError
+        # above must not leave a t0 for a race that never began.
+        self.t0 = t0
+        self.t0_wall = t0_wall
         self.running = True
         self.t0_reconstructed = False
         self.ended_at_mono = None

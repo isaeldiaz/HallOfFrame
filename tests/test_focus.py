@@ -10,6 +10,8 @@ import unittest
 
 import pytest
 
+pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 
