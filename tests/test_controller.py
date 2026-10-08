@@ -264,7 +264,7 @@ class TestController(Base):
         row = self.storage.get_race(race_id)
         self.assertEqual((row["race_no"], row["heat_no"]), ("124", "1"))
         # export carries the identified fields
-        from hallofframe.export import export_all_csv
+        from hallofframe.render.csv import export_all_csv
         out = self.data_root / "export.csv"
         export_all_csv(self.storage, out)
         text = out.read_text()

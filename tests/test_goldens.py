@@ -19,9 +19,13 @@ from pathlib import Path
 import pytest
 
 from hallofframe import __version__, buildinfo
-from hallofframe import export, web
+from hallofframe import render, web
+from hallofframe.render import clipboard as render_clipboard
+from hallofframe.render import csv as render_csv
+from hallofframe import storage as storage_mod
 from hallofframe.framestore import FrameStore
 from hallofframe.mjpeg import Frame
+from hallofframe.render import html as render_html
 
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 
@@ -54,7 +58,13 @@ def fixed_clock(monkeypatch):
         datetime = _FixedDatetime
         timezone = _dt.timezone
 
-    monkeypatch.setattr(export, "datetime", _Shim)
+    monkeypatch.setattr(render, "datetime", _Shim)
+    monkeypatch.setattr(render_html, "datetime", _Shim)
+    # ``race.updated_at`` / ``meta.db_updated_at`` come from storage's real
+    # clock; pin it to FROZEN_NOW so the "Results updated" lines are stable.
+    monkeypatch.setattr(
+        storage_mod, "_utcnow",
+        lambda: _dt.datetime(*FROZEN_NOW, tzinfo=_dt.timezone.utc).isoformat())
     return _Shim
 
 
@@ -135,26 +145,26 @@ def _check(name: str, actual: str, update: bool) -> None:
 
 def test_export_csv_golden(seeded, data_root, update_goldens):
     out = data_root / "race.csv"
-    export.export_csv(seeded, 1, out)
+    render_csv.export_csv(seeded, 1, out)
     _check("export_csv.golden", out.read_text(encoding="utf-8"), update_goldens)
 
 
 def test_export_all_csv_golden(seeded, data_root, update_goldens):
     out = data_root / "all.csv"
-    export.export_all_csv(seeded, out)
+    render_csv.export_all_csv(seeded, out)
     _check("export_all_csv.golden", out.read_text(encoding="utf-8"),
            update_goldens)
 
 
 def test_export_all_html_golden(seeded, data_root, update_goldens):
     out = data_root / "all.html"
-    export.export_all_html(seeded, out)
+    render_html.export_all_html(seeded, out)
     _check("export_all_html.golden", out.read_text(encoding="utf-8"),
            update_goldens)
 
 
 def test_clipboard_data_golden(seeded, update_goldens):
-    tsv, markup = export.clipboard_data(seeded, 1)
+    tsv, markup = render_clipboard.clipboard_data(seeded, 1)
     combined = f"<<<TSV>>>\n{tsv}<<<HTML>>>\n{markup}\n"
     _check("clipboard_data.golden", combined, update_goldens)
 

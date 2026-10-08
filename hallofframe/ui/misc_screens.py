@@ -9,7 +9,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ..export import format_elapsed
+from ..render import format_elapsed
 from . import styles
 from .widgets import KeyCap
 

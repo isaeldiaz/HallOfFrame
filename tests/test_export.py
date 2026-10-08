@@ -4,8 +4,10 @@ import unittest
 
 import pytest
 
-from hallofframe.export import (clipboard_data, export_all_csv, export_all_html,
-                                export_csv, format_elapsed, parse_elapsed, utc_iso)
+from hallofframe.render import format_elapsed, parse_elapsed, utc_iso
+from hallofframe.render.clipboard import clipboard_data
+from hallofframe.render.csv import export_all_csv, export_csv
+from hallofframe.render.html import export_all_html
 
 
 @pytest.fixture
@@ -190,6 +192,29 @@ class TestExport(unittest.TestCase):
         self.assertNotIn("<18>", markup)
         self.assertIn("APPROX", markup)
         self.assertIn("NO IMAGE", markup)   # the no-image capture placeholder
+
+
+def test_export_shim_reexports_and_warns():
+    import importlib
+    import warnings
+
+    import hallofframe.export as shim
+
+    old_names = [
+        "_C", "_MONO", "_SANS", "_esc", "_src", "_row_value", "_thumb_html",
+        "_meta_cell", "_card_html", "_race_html", "_all_race_blocks",
+        "_FILTER_JS", "_THUMB_W", "_THUMB_H", "_data_rows", "_COLUMNS",
+        "_ALL_COLUMNS", "clipboard_data", "local_hms", "format_elapsed",
+        "parse_elapsed", "utc_iso", "flag_word", "export_csv", "export_all_csv",
+        "export_all_html", "build_all_html",
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        importlib.reload(shim)
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    for name in old_names:
+        assert hasattr(shim, name), f"shim lost {name!r}"
+    assert shim.format_elapsed(372.483) == "6:12.48"
 
 
 if __name__ == "__main__":
