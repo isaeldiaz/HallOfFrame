@@ -77,6 +77,11 @@ hallofframe/
   tools/fake_camera.py  MJPEG server over a folder of JPEGs (`--folder --fps
                      --port [--loop] [--counter]`); lets a full race run with no
                      phone. `[transport] enabled = false` skips the USB tunnel.
+  tools/build_feed.py  Copies a gun-ordered subset of recorded regatta frames
+                     (from the event DB `frame` table) into a flat, self-contained
+                     folder for fake_camera. The full-resolution frames live
+                     OUTSIDE the repo; nothing is vendored (JPEGs don't zip).
+                     See TESTING.md §3 "Virtual feed".
   tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
                      near-complete DB, plays the final race, verifies integrity/
                      exports/latency/memory. Shared with tests/test_late_regatta.py.
@@ -188,6 +193,9 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 ```bash
 # run (installed deps in venv; typically under systemd-inhibit, see INSTALL.md §7)
 ~/regatta/venv/bin/python -m hallofframe   # or ./venv/bin/python -m hallofframe
+
+# fake-camera bench rig (no phone): camera + app in one command (TESTING.md §3)
+./hallofframe-fake.sh
 
 # tests — default run is the fast suite (slow tests are deselected)
 ./venv/bin/python -m pytest -m "not slow"

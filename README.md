@@ -227,6 +227,18 @@ Plex Mono SemiBold, set as `HallOf` + `Frame` with the second word in the finish
 ./venv/bin/python -m pytest -q
 ```
 
+### Bench rig (no phone)
+
+Run the whole app against recorded frames served by the fake MJPEG camera — one
+command starts the camera, launches the app, and stops the camera on exit:
+
+```bash
+./hallofframe-fake.sh          # add --counter to exercise the calibration dialog
+```
+
+The frame folder lives outside the repository; see TESTING.md §3 "Virtual feed"
+for how to build it.
+
 ## Documentation
 
 | File | Purpose |

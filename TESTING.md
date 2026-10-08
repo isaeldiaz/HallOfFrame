@@ -207,6 +207,76 @@ Must cover, with synthetic monotonically increasing `t_recv`:
 
 **Pass:** all tests green, including the concurrency case run at least 5 times.
 
+### Virtual feed — recorded frames, no phone
+
+**Proves:** the whole pipeline (ingest → buffer → deferred selection → review/web)
+against real footage with no iPhone attached. Not a pass/fail test; it is the
+bench rig used to exercise T6/T7/T9 and to eyeball the UI.
+
+The recorded frames live **outside the repository** (full resolution, ~3.4 GB for
+the Kjørbo event) and are never vendored or committed. `build_feed.py` copies a
+small, gun-ordered subset into a flat folder that `fake_camera` serves.
+
+1. Pick a race with many crossings from the event DB:
+
+```bash
+./venv/bin/python - <<'PY'
+import sqlite3
+c=sqlite3.connect("/home/isael/kjørbo-regatta-2026/Kjørbo_regatta_2026.db")
+for rid,rno,ht,name,caps,frames in c.execute(
+    "select r.id,r.race_no,r.heat_no,r.name,"
+    "(select count(*) from capture c where c.race_id=r.id),"
+    "(select count(*) from frame f where f.race_id=r.id) "
+    "from race r order by caps desc, frames desc limit 10"):
+    print(rid, rno, ht, caps, frames, name)
+PY
+```
+
+2. Build a self-contained feed (copy, not symlink). Keep it bounded — the camera
+   loads the whole folder into RAM:
+
+```bash
+./venv/bin/python -m hallofframe.tools.build_feed \
+  --db "/home/isael/kjørbo-regatta-2026/Kjørbo_regatta_2026.db" \
+  --race 28 --crossings 6 --max-frames 200 \
+  --out ~/regatta-virtual/feed
+```
+
+`--race` takes an id or `race_no`; `--crossings` keeps the first N contiguous
+runs; `--every` strides; `manifest.tsv` records `t_ms` → source. Use
+`--races-dir DIR` when there is no DB.
+
+3. Make a virtual data root (separate from the real event) whose `config.toml`
+   sets `[transport] enabled = false`, `[stream] url =
+   "http://127.0.0.1:8081/video"`, `assumed_fps = 30`, `grab_device = false`, and
+   copies the event's `calibration.json` (omit it for a timing-only run). A ready
+   example lives at `~/regatta-virtual/`.
+
+4. One command starts the camera, waits for it, runs the app, and stops the
+   camera when the app exits:
+
+```bash
+./hallofframe-fake.sh                 # add --counter for the calibration dialog
+```
+
+It builds the feed on first use if the folder is empty and
+`HALL_OF_FRAME_SOURCE_DB` points at a source event DB (read-only). Overridable
+via `HALL_OF_FRAME_CONFIG`, `HALL_OF_FRAME_FEED`, `HALL_OF_FRAME_SOURCE_DB`,
+`HALL_OF_FRAME_RACE`, `HALL_OF_FRAME_FPS`, `HALL_OF_FRAME_PORT`. The manual
+equivalent, if you prefer two terminals:
+
+```bash
+./venv/bin/python -m hallofframe.tools.fake_camera \
+  --folder ~/regatta-virtual/feed --fps 30 --port 8081 --loop &
+./venv/bin/python -m hallofframe ~/regatta-virtual/config.toml
+```
+
+`--counter` overlays a live millisecond counter so the calibration dialog can be
+exercised; `--launch` on `build_feed` starts the camera without the app.
+
+**Note:** the frames are JPEGs, so archiving them saves nothing (a 35 MB folder
+zips to 35 MB); keep them out of git and rebuild from the DB when needed.
+
 ### T6 — CaptureController + storage (headless)
 
 **Proves:** spec §6.5, §6.7, requirement N4. Drive it with a synthetic frame
