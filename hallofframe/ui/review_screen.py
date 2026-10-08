@@ -353,6 +353,16 @@ class ReviewScreen(QWidget):
             target = next((c["sequence"] for c in self._captures
                            if not c["deleted"]), self._captures[0]["sequence"])
             self._select(target)
+        else:
+            # A race with no crossings must not keep showing the previously
+            # reviewed race's selection and photo (the screen is reused).
+            self._selected_seq = None
+            self._current_capture = None
+            self.list.set_selected(None)
+            self.counter.setText("")
+            self.photo.set_frame(None, "no crossings")
+            self.scrubber.set_frames([], 0)
+            self.offset_lbl.setText("")
 
     def _select(self, sequence: int) -> None:
         self._selected_seq = sequence

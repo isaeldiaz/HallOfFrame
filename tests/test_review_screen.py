@@ -250,6 +250,18 @@ class TestReviewScreen(unittest.TestCase):
         self.assertIsInstance(self.app.focusWidget(), QLineEdit,
                               "navigation from a bow field must stay in a bow field")
 
+    def test_empty_race_clears_the_previous_selection(self):
+        screen = self.review()
+        self.assertIsNotNone(screen._selected_seq)
+        empty = self.storage.create_race(
+            "Empty", 0.0, time.time(), "direct", 0.0, 0.0, "screen",
+            window_before_ms=500, window_after_ms=500)
+        screen.race_id = empty
+        screen.load_captures()
+        self.assertIsNone(screen._selected_seq)
+        self.assertEqual(screen.counter.text(), "")
+        self.assertIn("no crossings", screen.photo.text())
+
     def test_up_moves_toward_faster_rows(self):
         # The list is fastest-first, so Up selects the row above (faster) and
         # Down the row below (slower).
