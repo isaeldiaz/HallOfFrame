@@ -94,12 +94,24 @@ def current_boot_id() -> str:
 
 
 class Storage:
-    def __init__(self, data_root: Path, event_name: str = "event"):
+    def __init__(self, data_root: Path, event_name: str = "event",
+                 read_only: bool = False):
         self.data_root = Path(data_root)
         self.event_name = event_name or "event"
+        self.read_only = read_only
         self.data_root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_root / f"{self.event_name}.db"
         self._lock = threading.Lock()
+        if read_only:
+            # The web results server (spec §8, §13.3) opens its OWN read-only
+            # connection: it never creates the schema, runs migrations, or
+            # writes, so it cannot contend with the app's single writer.
+            uri = self.db_path.resolve().as_uri() + "?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn.execute("PRAGMA busy_timeout=3000")
+            return
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -635,7 +647,8 @@ class Storage:
 
     def close(self) -> None:
         with self._lock:
-            self._conn.commit()
+            if not self.read_only:
+                self._conn.commit()
             self._conn.close()
 
 

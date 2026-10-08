@@ -36,6 +36,29 @@ def clock(monkeypatch):
     return c
 
 
+def test_read_only_connection_reads_but_never_writes(data_root):
+    writer = storage_mod.Storage(data_root, event_name="event")
+    rid = _make_race(writer)
+    writer.close()
+
+    ro = storage_mod.Storage(data_root, event_name="event", read_only=True)
+    try:
+        assert ro.get_race(rid)["name"] == "R"
+        with pytest.raises(sqlite3.OperationalError):
+            ro._conn.execute("INSERT INTO race (name, boot_id, t0_monotonic, "
+                             "t0_wall, start_mode, delta_used, viewing_mode, "
+                             "created_at) VALUES ('x','b',0,0,'direct',0,"
+                             "'screen','now')")
+    finally:
+        ro.close()
+
+
+def test_read_only_does_not_create_a_missing_database(data_root):
+    # The web process must not create the DB/schema; a missing file is an error.
+    with pytest.raises(sqlite3.OperationalError):
+        storage_mod.Storage(data_root, event_name="absent", read_only=True)
+
+
 def _make_race(storage, name="R", race_no="101", heat_no="1") -> int:
     return storage.create_race(
         name, t0_monotonic=1000.0, t0_wall=1000.0, start_mode="direct",

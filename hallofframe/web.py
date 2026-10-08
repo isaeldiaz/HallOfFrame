@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import sys
 import threading
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -364,11 +365,17 @@ def main(argv=None) -> int:
     web = config.section("web")
     if not bool(web.get("enabled", True)):
         print("web server disabled in config.toml ([web] enabled=false)",
-              file=__import__("sys").stderr)
+              file=sys.stderr)
         return 3
 
-    storage = Storage(config.data_root, event_name=config.event_name)
-    storage._conn.execute("PRAGMA busy_timeout=3000")  # read side, WAL-safe
+    try:
+        # Own read-only connection: never creates the schema or migrates, and
+        # cannot write, so it never contends with the app's writer (§8, §13.3).
+        storage = Storage(config.data_root, event_name=config.event_name,
+                          read_only=True)
+    except Exception as exc:  # missing/unreadable DB: nothing to serve yet
+        print(f"cannot open results database read-only: {exc}", file=sys.stderr)
+        return 1
 
     host = str(web.get("host", "127.0.0.1"))
     port = int(web.get("port", 8080))
