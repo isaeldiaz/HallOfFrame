@@ -1,6 +1,7 @@
 """Unit tests for trigger building, grab management, and arm/disarm lifecycle."""
 import time
 import unittest
+from unittest import mock
 
 import pytest
 
@@ -87,6 +88,33 @@ class TestArmDisarm(unittest.TestCase):
         self.win.on_evdev_end(1002.0, code=88)
         self.assertFalse(self.controller.running)
         self.assertEqual(self.win._last_state, AppState.RACE_OVER)
+
+    def test_calibrate_blocked_while_armed_and_recording(self):
+        # No full-screen/modal calibration UI while armed or recording (§7.5).
+        _seed_buffer(self.buffer)
+        self.win._recompute_state()
+        self.win._arm_start()
+        with mock.patch("hallofframe.ui.main_window.CalibrationDialog") as dlg:
+            self.win._calibrate()
+            dlg.assert_not_called()
+
+        self.win.on_evdev_start(1000.0)
+        self.assertEqual(self.win._last_state, AppState.RECORDING)
+        with mock.patch("hallofframe.ui.main_window.CalibrationDialog") as dlg:
+            self.win._calibrate()
+            dlg.assert_not_called()
+
+    def test_resume_is_refused_while_a_race_is_running(self):
+        _seed_buffer(self.buffer)
+        self.win._recompute_state()
+        self.win._arm_start()
+        self.win.on_evdev_start(1000.0)
+        self.assertEqual(self.win._last_state, AppState.RECORDING)
+        running_id = self.controller.race_id
+        # A lingering Resume banner must not hijack the race now on screen.
+        self.win._resume_race(running_id + 999)
+        self.assertEqual(self.controller.race_id, running_id)
+        self.assertEqual(self.win._last_state, AppState.RECORDING)
 
     def test_roster_banner_excludes_provisional_race(self):
         p = self.data_root / "races.csv"

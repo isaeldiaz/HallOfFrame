@@ -506,6 +506,8 @@ class MainWindow(QMainWindow):
             self.session.race_started(self.controller.race_id)
             self._last_capture = None
             self.recording.clear_captures()
+            # A new race supersedes the startup "un-ended race" offer.
+            self._clear_resume_banner()
         self._recompute_state()
 
     def on_evdev_crossing(self, t_press: float, code: int, suspect: bool = False) -> None:
@@ -693,6 +695,12 @@ class MainWindow(QMainWindow):
             self.about.setGeometry(self.centralWidget().rect())
 
     def _calibrate(self) -> None:
+        # The trigger keyboard is grabbed while armed or recording: a
+        # full-screen counter (and the modal message boxes it raises) must never
+        # cover the clock or block the trigger path mid-race (§7.5).
+        if self._last_state in (AppState.ARMED, AppState.RECORDING):
+            self._show_toast("Calibration is unavailable during a race — F12 ends it.")
+            return
         dlg = CalibrationDialog(self.buffer, self.config.data_root, self.config, self)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dlg.show()
@@ -778,6 +786,12 @@ class MainWindow(QMainWindow):
             self._resume_banner = None
 
     def _resume_race(self, race_id: int) -> None:
+        # The banner lingers until dismissed, so the operator can be well past
+        # startup when they click Resume. Never let it hijack a race already on
+        # screen (or leave the session in an illegal phase).
+        if self.controller.running or self.session.phase is not Phase.IDLE:
+            self._show_toast("Can't resume — a race is already on screen.")
+            return
         self._clear_resume_banner()
         self.controller.resume_race(race_id)
         self.session.arm()
