@@ -13,7 +13,7 @@ and neither Tab nor Enter moved to the next crossing:
 4. ``_commit_selected_frame`` wrote into a ``sqlite3.Row``, so the save that Tab
    and Enter perform raised TypeError and the advance never ran.
 
-Skips cleanly if PySide6 or evdev is unavailable (offscreen otherwise).
+Skips cleanly if PySide6 is unavailable (offscreen otherwise).
 """
 import time
 import unittest
@@ -29,18 +29,11 @@ from hallofframe.controller import CaptureController
 from hallofframe.session import Phase
 from hallofframe.ui.state import AppState
 
-try:  # main_window resolves trigger keycodes through evdev.ecodes
-    import evdev  # noqa: F401
-    _EVDEV = True
-except Exception:  # pragma: no cover
-    _EVDEV = False
-
 SCREEN_W = 1920  # the deployed panel (system-environment.md §2.4)
 SCREEN_H = 1080
 FRAMES = 30      # a +/-500 ms window at 30 fps
 
-pytestmark = [pytest.mark.qt,
-              pytest.mark.skipif(not _EVDEV, reason="evdev unavailable")]
+pytestmark = pytest.mark.qt
 
 
 @pytest.fixture

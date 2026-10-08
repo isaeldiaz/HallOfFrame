@@ -64,11 +64,17 @@ class _ExcelMimeData(QMimeData):
 
 
 def keycode_names(codes) -> str:
-    """Human-readable names for a list of Linux keycodes (e.g. [88] -> 'F12')."""
-    import evdev.ecodes as ec
+    """Human-readable names for a list of Linux keycodes (e.g. [88] -> 'F12').
+
+    Degrades to the raw codes when ``evdev`` is not installed (the Qt-fallback
+    setup and CI), so the window can be built without the evdev dependency."""
+    try:
+        import evdev.ecodes as ec
+    except ImportError:
+        ec = None
     names = []
     for c in codes:
-        name = ec.KEY.get(int(c), "")
+        name = ec.KEY.get(int(c), "") if ec is not None else ""
         names.append(name.removeprefix("KEY_") if name else str(c))
     return ", ".join(names) if names else str(codes)
 

@@ -42,7 +42,14 @@ class TriggerListener(threading.Thread):
         self.debounce_suspect_count = 0
         self.permission_error = False
 
-        import evdev
+        try:
+            import evdev
+        except ImportError as exc:
+            # No evdev (e.g. CI, or a laptop without it): build_trigger catches
+            # TriggerError and falls back to Qt key events (§6.4).
+            raise TriggerError(
+                "python-evdev is not installed; falling back to Qt key events"
+            ) from exc
         try:
             self._device = evdev.InputDevice(self.device_path)
         except PermissionError:
