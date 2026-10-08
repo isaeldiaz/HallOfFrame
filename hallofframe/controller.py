@@ -40,6 +40,7 @@ class Capture:
     delta_used: float
     image_flag: str | None
     debounce_suspect: bool = False
+    t0_reconstructed: bool = False
 
 
 class CaptureController:
@@ -62,6 +63,9 @@ class CaptureController:
         self.store: FrameStore | None = None
         self.delta = 0.0
         self.running = False
+        # N4: True once a resume reconstructed t0 from the wall clock; every
+        # capture recorded afterwards is flagged so export/UI can mark it.
+        self.t0_reconstructed = False
         self.ended_at_mono: float | None = None  # monotonic time of end_race()
         self.ended_capture_count = 0  # non-deleted ends at the moment of ending
         self.preview_fps = float(config.section("stream")["assumed_fps"])
@@ -116,7 +120,9 @@ class CaptureController:
         """Build the frozen UI dataclass from a storage ``capture`` row."""
         return Capture(row["id"], row["sequence"], row["t_press"], row["elapsed_s"],
                        row["delta_used"], row["image_flag"],
-                       bool(row["debounce_suspect"]))
+                       bool(row["debounce_suspect"]),
+                       bool(row["t0_reconstructed"])
+                       if "t0_reconstructed" in row.keys() else False)
 
     # --- race lifecycle ---------------------------------------------------
     def start_race(self, t_press: float, name: str = "Race",
@@ -170,6 +176,7 @@ class CaptureController:
             except CalibrationError as exc:
                 raise CalibrationError(f"race NOT started: {exc}") from exc
         self.running = True
+        self.t0_reconstructed = False
         self.ended_at_mono = None
         self.ended_capture_count = 0
 
@@ -207,6 +214,7 @@ class CaptureController:
         self.start_mode = row["start_mode"]
         self.radio_delay_ms = row["radio_delay_ms"]
         self.running = True
+        self.t0_reconstructed = row["boot_id"] != boot_id
         self.ended_at_mono = None
         self.ended_capture_count = 0
         if row["boot_id"] == boot_id:
@@ -292,6 +300,7 @@ class CaptureController:
             "target": target,
             "delta_used": self.delta,
             "debounce_suspect": debounce_suspect,
+            "t0_reconstructed": self.t0_reconstructed,
         }))
         # UI row appended off-thread once committed.
         return None
@@ -347,7 +356,8 @@ class CaptureController:
             race_id, sequence, t_press, time.time(), elapsed,
             payload["delta_used"], image_flag=image_flag,
             debounce_suspect=int(payload["debounce_suspect"]),
-            target_ms=round((target - t0) * 1000))
+            target_ms=round((target - t0) * 1000),
+            t0_reconstructed=int(payload["t0_reconstructed"]))
 
         cap = Capture(capture_id, sequence, t_press, elapsed,
                       payload["delta_used"], image_flag,

@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS capture (
     bow_source      TEXT,                          -- phase 8, unused
     target_ms       INTEGER,                       -- phase 5: selection target
     primary_frame_id INTEGER REFERENCES frame(id), -- phase 5
+    t0_reconstructed INTEGER NOT NULL DEFAULT 0,   -- N4: after a reconstructed resume
     UNIQUE (race_id, sequence),
     CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
 );
@@ -176,6 +177,10 @@ class Storage:
             self._conn.execute(
                 "ALTER TABLE capture ADD COLUMN primary_frame_id INTEGER "
                 "REFERENCES frame(id)")
+        if "t0_reconstructed" not in ccols:
+            self._conn.execute(
+                "ALTER TABLE capture ADD COLUMN t0_reconstructed INTEGER "
+                "NOT NULL DEFAULT 0")
 
         self._migrate_capture_frame()
 
@@ -448,15 +453,18 @@ class Storage:
 
     def insert_capture(self, race_id, sequence, t_press, t_press_wall, elapsed_s,
                        delta_used, image_flag=None, debounce_suspect=0,
-                       bow_number=None, notes=None, target_ms=None) -> int:
+                       bow_number=None, notes=None, target_ms=None,
+                       t0_reconstructed=0) -> int:
         with self._lock:
             now = _utcnow()
             cur = self._conn.execute(
                 "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
                 "elapsed_s, delta_used, image_flag, debounce_suspect, bow_number, "
-                "notes, updated_at, target_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "notes, updated_at, target_ms, t0_reconstructed) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (race_id, sequence, t_press, t_press_wall, elapsed_s, delta_used,
-                 image_flag, debounce_suspect, bow_number, notes, now, target_ms))
+                 image_flag, debounce_suspect, bow_number, notes, now, target_ms,
+                 int(t0_reconstructed)))
             self._touch(race_id)
             self._conn.commit()
             return cur.lastrowid

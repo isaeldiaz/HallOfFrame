@@ -79,6 +79,15 @@ class TestExport(unittest.TestCase):
         self.assertEqual(row[4], "'=1+1")
         self.assertEqual(row[10], "'@SUM(A1)")
 
+    def test_reconstructed_capture_elapsed_is_marked(self):
+        self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 3.0, 0.0,
+                                    t0_reconstructed=1)
+        out = self.data_root / "export.csv"
+        export_csv(self.storage, self.race_id, out)
+        with open(out, newline="", encoding="utf-8") as fh:
+            row = list(csv.reader(fh))[1]
+        self.assertTrue(row[6].startswith("~"), row[6])
+
     def test_utc_iso(self):
         self.assertRegex(utc_iso(0.0), r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 

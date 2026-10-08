@@ -466,6 +466,8 @@ def _card_html(capture, img_base: str = "") -> str:
     bow = capture["bow_number"] or ""
     notes = capture["notes"] or ""
     elapsed = format_elapsed(capture["elapsed_s"])
+    if _row_value(capture, "t0_reconstructed", 0):
+        elapsed = "~" + elapsed  # measured after a reconstructed resume (N4)
     elapsed_raw = "%.6f" % capture["elapsed_s"]
     seq = "#%03d" % capture["sequence"]
     search = " ".join(str(v) for v in (capture["sequence"], bow, elapsed, notes,

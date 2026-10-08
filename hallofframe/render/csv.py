@@ -33,6 +33,10 @@ def _data_rows(storage: Storage, race_id: int):
     yield list(_COLUMNS)
     captures = storage.captures_for_race(race_id, include_deleted=False)
     for c in captures:
+        # A "~" marks an elapsed time measured after a reconstructed resume (N4).
+        elapsed = format_elapsed(c["elapsed_s"])
+        if c["t0_reconstructed"]:
+            elapsed = "~" + elapsed
         yield [
             race_no,
             heat_no,
@@ -40,7 +44,7 @@ def _data_rows(storage: Storage, race_id: int):
             c["sequence"],
             c["bow_number"] or "",
             f"{c['elapsed_s']:.6f}",
-            format_elapsed(c["elapsed_s"]),
+            elapsed,
             utc_iso(c["t_press_wall"]),
             c["primary_image"] or "",
             c["image_flag"] or "",
@@ -90,11 +94,14 @@ def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
                                                             - len(base))])
                 continue
             for c in captures:
+                elapsed = format_elapsed(c["elapsed_s"])
+                if c["t0_reconstructed"]:
+                    elapsed = "~" + elapsed
                 writer.writerow([_safe(cell) for cell in base + [
                     c["sequence"],
                     c["bow_number"] or "",
                     f"{c['elapsed_s']:.6f}",
-                    format_elapsed(c["elapsed_s"]),
+                    elapsed,
                     utc_iso(c["t_press_wall"]),
                     c["primary_image"] or "",
                     c["image_flag"] or "",
