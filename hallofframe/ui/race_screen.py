@@ -1,9 +1,9 @@
 """Race screen (REDESIGN-PLAN §3, mockup state 1) — clock first.
 
 Left column: elapsed clock (big), crossing count, and the last-capture panel
-(the capture confirmation). Right column: newest-first crossing log. The
-last-capture panel's border flashes in the state accent on each press — the
-red banner is retired as a general-purpose channel.
+(the capture confirmation). Right column: fastest-first crossing list (spec
+§7.3, §13.2). The last-capture panel's border flashes in the state accent on
+each press — the red banner is retired as a general-purpose channel.
 """
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ..export import format_elapsed
 from . import styles
-from .crossing_list import CrossingLog
+from .crossing_list import CrossingList
+from .images import load_scaled
 
 
 def fmt_clock(secs: float) -> str:
@@ -81,18 +82,13 @@ class LastCapturePanel(QWidget):
         self._flash()
 
     def set_photo(self, path: str) -> None:
-        from PySide6.QtGui import QImageReader, QPixmap
-        reader = QImageReader(path)
-        img = reader.read()
-        if img.isNull():
-            return
-        pm = QPixmap.fromImage(img)
         # Fit into the available area, keeping aspect (mockup shows letterbox).
         area = self.photo.rect()
-        if area.width() and area.height():
-            pm = pm.scaled(area.size(), Qt.KeepAspectRatio,
-                           Qt.SmoothTransformation)
-        self.photo.setPixmap(pm)
+        if not (area.width() and area.height()):
+            return
+        pm = load_scaled(path, area.size(), fast=False)
+        if pm is not None:
+            self.photo.setPixmap(pm)
 
     def _flash(self) -> None:
         self.setStyleSheet(
@@ -178,7 +174,7 @@ class RaceScreen(QWidget):
         root.addWidget(left, 1)
 
         # --- right column ---
-        self.log = CrossingLog()
+        self.log = CrossingList(editable=False)
         self.log.setFixedWidth(660)
         root.addWidget(self.log)
 

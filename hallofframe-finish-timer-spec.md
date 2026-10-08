@@ -1263,9 +1263,9 @@ Requirement F3 — this is the primary deliverable of the whole system.
 
 - One row per capture: thumbnail (120 px wide), sequence number, elapsed time in
   `M:SS.mmm`, and an inline editable bow-number field.
-- Newest at top, or newest at bottom with auto-scroll — pick one and make it
-  configurable. Auto-scroll must not steal focus from the bow-number field the
-  operator is typing in.
+- Fastest at top, slowest at bottom, on every screen; not configurable (decided
+  2026-10-06, §13.2). Auto-scroll must not steal focus from the bow-number field
+  the operator is typing in.
 - Clicking a row opens a **frame review panel**: the full-size primary image
   plus a slider across the ±15 saved window frames, each labelled with its
   offset in milliseconds from the recorded time. The operator can promote any

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QScrollArea,
                                QVBoxLayout, QWidget)
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
 from .. import calibration as cal
 from ..framebuffer import FrameBuffer
 from . import styles
+from .images import load_scaled
 
 _SAMPLES = 40
 _MIN_READABLE = 8
@@ -243,9 +244,9 @@ class CalibrationDialog(QDialog):
         for i, path in enumerate(self.frame_paths, 1):
             lay_row = QHBoxLayout()
             img = QLabel()
-            pm = QPixmap(str(path))
-            img.setPixmap(pm.scaled(460, 346, Qt.KeepAspectRatio,
-                                    Qt.SmoothTransformation))
+            pm = load_scaled(str(path), QSize(460, 346), fast=False)
+            if pm is not None:
+                img.setPixmap(pm)
             img.setAlignment(Qt.AlignCenter)
             lay_row.addWidget(img, 1)
             right = QVBoxLayout()

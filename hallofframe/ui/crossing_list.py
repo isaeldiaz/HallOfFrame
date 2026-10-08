@@ -1,39 +1,37 @@
-"""Crossing list widget (REDESIGN-PLAN §3, §6).
+"""Crossing list widget (spec §7.3, §13.2).
 
-Newest at top — removes the auto-scroll-versus-focus problem entirely. One row
-per crossing: sequence, thumbnail, elapsed (mono), and a word flag column.
-``CrossingLog`` is the read-only race-screen variant; ``ReviewList`` adds an
-inline bow-number field and keyboard selection for the REVIEW state.
+One class for both the read-only race screen and the editable review screen.
+Rows are always ordered **fastest at top, slowest at bottom** (spec §7.3, decided
+2026-10-06, §13.2) — there is deliberately no ``order`` argument and no config
+key, so the configurable ordering that caused the confusion cannot come back.
+
+One row per crossing: sequence, thumbnail, elapsed (mono), a word flag column,
+and — only when ``editable`` — inline bow-number and elapsed-time fields.
 
 Flags use words, not punctuation: ``NO IMAGE`` (missing), ``APPROX``
 (approximate), ``DOUBLE?`` (debounce suspect).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QImageReader, QPixmap
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QScrollArea, QVBoxLayout, QWidget)
 
 from ..export import flag_word as flag_text, format_elapsed
 from . import styles
+from .images import load_scaled
+
+# Thumbnail box (w, h): the read-only race-screen list is a little larger than
+# the review list, which has two edit fields competing for the row width.
+THUMB_W, THUMB_H = 104, 66
+EDIT_THUMB_W, EDIT_THUMB_H = 92, 58
 
 
 def flag_word(image_flag: str | None, suspect: bool) -> tuple[str, str]:
     """(word, colour) for a capture's flag column."""
     word = flag_text(image_flag, suspect)
     return word, (styles.AMBER_TEXT if word else styles.TEXT_DIM)
-
-
-def _load_pixmap(path: str | None, w: int, h: int) -> QPixmap | None:
-    if not path:
-        return None
-    reader = QImageReader(path)
-    reader.setScaledSize(reader.size().scaled(w, h, Qt.KeepAspectRatio))
-    img = reader.read()
-    if img.isNull():
-        return None
-    return QPixmap.fromImage(img)
 
 
 class _Thumb(QWidget):
@@ -58,52 +56,6 @@ class _Thumb(QWidget):
             y = (self.height() - self._pm.height()) // 2
             p.drawPixmap(x, y, self._pm)
         p.end()
-
-
-class _RowBase(QWidget):
-    def __init__(self, data: dict, thumb_w: int, thumb_h: int, parent=None):
-        super().__init__(parent)
-        self.sequence = data["sequence"]
-        self._base_border = "transparent"
-        self.lay = QHBoxLayout(self)
-        self.lay.setContentsMargins(28, 12, 28, 12)
-        self.lay.setSpacing(20)
-
-        self.seq_lbl = QLabel(f"{self.sequence:03d}")
-        self.seq_lbl.setProperty("mono", True)
-        self.seq_lbl.setStyleSheet(
-            f"font-family:'{styles.FONT_MONO}'; font-size:26px;"
-            f" color:{styles.TEXT_DIM}; width:58px;")
-        self.lay.addWidget(self.seq_lbl)
-
-        self.thumb = _Thumb(thumb_w, thumb_h)
-        self.thumb.set_thumb(_load_pixmap(data.get("image_path"), thumb_w, thumb_h))
-        self.lay.addWidget(self.thumb)
-
-        self.time_lbl = QLabel(format_elapsed(data["elapsed_s"]))
-        self.time_lbl.setProperty("mono", True)
-        self.time_lbl.setStyleSheet(
-            f"font-family:'{styles.FONT_MONO}'; font-size:34px; font-weight:500;"
-            f" color:{styles.TEXT_PRIMARY};")
-        self.lay.addWidget(self.time_lbl)
-
-        self.lay.addStretch(1)
-
-        word, colour = flag_word(data.get("image_flag"), data.get("suspect"))
-        self.flag_lbl = QLabel(word)
-        self.flag_lbl.setProperty("mono", True)
-        self.flag_lbl.setStyleSheet(
-            f"font-family:'{styles.FONT_MONO}'; font-size:14px;"
-            f" letter-spacing:.08em; color:{colour};")
-        self.flag_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.lay.addWidget(self.flag_lbl)
-        self._data = data
-
-    def set_highlight(self, on: bool) -> None:
-        border = styles.BLUE if on else self._base_border
-        self.setStyleSheet(f"QWidget{{border-left:3px solid {border};"
-                           f" background:{styles.PANEL if on else 'transparent'};}}")
-        self.update()
 
 
 class _BowEdit(QLineEdit):
@@ -171,52 +123,118 @@ class _TimeEdit(_BowEdit):
         self.selectAll()
 
 
-class _ReviewRow(_RowBase):
-    """A crossing row with inline bow-number and elapsed-time QLineEdits."""
+class _Row(QWidget):
+    """One crossing row; bow and time fields appear only when *editable*."""
 
     bow_edited = Signal(int, str)
     time_edited = Signal(int, str)
 
-    def __init__(self, data: dict, thumb_w: int, thumb_h: int, parent=None):
-        super().__init__(data, thumb_w, thumb_h, parent)
-        self._base_border = "transparent"
-
-        # Replace the read-only time label with an editable field in place.
-        idx = self.lay.indexOf(self.time_lbl)
-        self.time_lbl.deleteLater()
-        self.time_edit = _TimeEdit(data["sequence"], format_elapsed(data["elapsed_s"]))
-        self.time_edit.setFixedWidth(120)
-        self.time_edit.setFixedHeight(46)
-        self.time_edit.setAlignment(Qt.AlignCenter)
-        self.time_edit.time_committed.connect(
-            lambda seq, raw: self.time_edited.emit(seq, raw))
-        self.time_edit.setStyleSheet(
-            f"QLineEdit{{background:#0b0f12; border:1px solid {styles.PANEL_BORDER};"
-            f" border-radius:2px; color:{styles.TEXT_PRIMARY};"
-            f" font-family:'{styles.FONT_MONO}'; font-size:26px; font-weight:500;"
-            " text-align:center; padding:4px;}")
-        self.lay.insertWidget(idx, self.time_edit)
-
-        self.bow_edit = _BowEdit(data["sequence"], data.get("bow") or "")
-        self.bow_edit.setPlaceholderText("bow")
-        self.bow_edit.setFixedWidth(84)
-        self.bow_edit.setFixedHeight(46)
-        self.bow_edit.setAlignment(Qt.AlignCenter)
-        self.bow_edit.editingFinished.connect(
-            lambda: self.bow_edited.emit(self.sequence, self.bow_edit.text()))
-        self.bow_edit.setStyleSheet(
-            f"QLineEdit{{background:#0b0f12; border:1px solid {styles.PANEL_BORDER};"
-            f" border-radius:2px; color:{styles.TEXT_PRIMARY};"
-            f" font-family:'{styles.FONT_MONO}'; font-size:24px;"
-            " text-align:center; padding:4px;}")
-        self.lay.addWidget(self.bow_edit)
-
-
-class CrossingLog(QWidget):
-    """Read-only newest-first list (race screen, RACE_OVER)."""
-
-    def __init__(self, parent=None):
+    def __init__(self, data: dict, thumb_w: int, thumb_h: int,
+                 editable: bool, parent=None):
         super().__init__(parent)
+        self.sequence = data["sequence"]
+        self.elapsed_s = data["elapsed_s"]
+        self.editable = editable
+        self._data = data
+        self._base_border = "transparent"
+        self.lay = QHBoxLayout(self)
+        self.lay.setContentsMargins(28, 12, 28, 12)
+        self.lay.setSpacing(20)
+
+        self.seq_lbl = QLabel(f"{self.sequence:03d}")
+        self.seq_lbl.setProperty("mono", True)
+        self.seq_lbl.setStyleSheet(
+            f"font-family:'{styles.FONT_MONO}'; font-size:26px;"
+            f" color:{styles.TEXT_DIM}; width:58px;")
+        self.lay.addWidget(self.seq_lbl)
+
+        self.thumb = _Thumb(thumb_w, thumb_h)
+        self.thumb.set_thumb(
+            load_scaled(data.get("image_path"), QSize(thumb_w, thumb_h)))
+        self.lay.addWidget(self.thumb)
+
+        if editable:
+            self.time_edit = _TimeEdit(self.sequence,
+                                       format_elapsed(self.elapsed_s))
+            self.time_edit.setFixedWidth(120)
+            self.time_edit.setFixedHeight(46)
+            self.time_edit.setAlignment(Qt.AlignCenter)
+            self.time_edit.time_committed.connect(
+                lambda seq, raw: self.time_edited.emit(seq, raw))
+            self.time_edit.setStyleSheet(
+                f"QLineEdit{{background:#0b0f12;"
+                f" border:1px solid {styles.PANEL_BORDER};"
+                f" border-radius:2px; color:{styles.TEXT_PRIMARY};"
+                f" font-family:'{styles.FONT_MONO}'; font-size:26px;"
+                f" font-weight:500; text-align:center; padding:4px;}}")
+            self.lay.addWidget(self.time_edit)
+        else:
+            self.time_lbl = QLabel(format_elapsed(self.elapsed_s))
+            self.time_lbl.setProperty("mono", True)
+            self.time_lbl.setStyleSheet(
+                f"font-family:'{styles.FONT_MONO}'; font-size:34px;"
+                f" font-weight:500; color:{styles.TEXT_PRIMARY};")
+            self.lay.addWidget(self.time_lbl)
+
+        self.lay.addStretch(1)
+
+        word, colour = flag_word(data.get("image_flag"), data.get("suspect"))
+        self.flag_lbl = QLabel(word)
+        self.flag_lbl.setProperty("mono", True)
+        self.flag_lbl.setStyleSheet(
+            f"font-family:'{styles.FONT_MONO}'; font-size:14px;"
+            f" letter-spacing:.08em; color:{colour};")
+        self.flag_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lay.addWidget(self.flag_lbl)
+
+        if editable:
+            self.bow_edit = _BowEdit(self.sequence, data.get("bow") or "")
+            self.bow_edit.setPlaceholderText("bow")
+            self.bow_edit.setFixedWidth(84)
+            self.bow_edit.setFixedHeight(46)
+            self.bow_edit.setAlignment(Qt.AlignCenter)
+            self.bow_edit.editingFinished.connect(
+                lambda: self.bow_edited.emit(self.sequence,
+                                             self.bow_edit.text()))
+            self.bow_edit.setStyleSheet(
+                f"QLineEdit{{background:#0b0f12;"
+                f" border:1px solid {styles.PANEL_BORDER};"
+                f" border-radius:2px; color:{styles.TEXT_PRIMARY};"
+                f" font-family:'{styles.FONT_MONO}'; font-size:24px;"
+                " text-align:center; padding:4px;}")
+            self.lay.addWidget(self.bow_edit)
+
+    def set_highlight(self, on: bool) -> None:
+        border = styles.BLUE if on else self._base_border
+        self.setStyleSheet(f"QWidget{{border-left:3px solid {border};"
+                           f" background:{styles.PANEL if on else 'transparent'};}}")
+        self.update()
+
+
+class CrossingList(QWidget):
+    """Fastest-first crossing list (spec §7.3, §13.2).
+
+    ``editable=True`` adds the inline bow and time fields (review screen);
+    ``editable=False`` is the read-only race-screen/RACE_OVER variant. Order is
+    fixed: :meth:`_rebuild` sorts by ``elapsed_s`` ascending, on every screen,
+    with no parameter to change it.
+    """
+
+    bow_edited = Signal(int, str)          # sequence, value
+    time_edited = Signal(int, str)         # sequence, raw elapsed text
+    delete_requested = Signal(int)         # sequence
+    selection_changed = Signal(int)        # sequence
+    advance_requested = Signal(int)        # sequence (Enter/Tab in a field)
+    step_frame = Signal(int)               # +1/-1 (Shift+←/→ in a field)
+    select_step = Signal(int)              # +1/-1 (↑/↓ in a field)
+
+    def __init__(self, *, editable: bool, parent=None):
+        super().__init__(parent)
+        self._editable = editable
+        self._rows: dict[int, _Row] = {}
+        self._edits: dict[int, QLineEdit] = {}
+        self._selected: int | None = None
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -228,7 +246,7 @@ class CrossingLog(QWidget):
             " text-transform:uppercase;")
         header.addWidget(cap)
         header.addStretch(1)
-        right = QLabel("newest first")
+        right = QLabel("fastest first")
         right.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:14px;")
         header.addWidget(right)
         hw = QWidget()
@@ -238,7 +256,6 @@ class CrossingLog(QWidget):
         hw.setFixedHeight(58)
         lay.addWidget(hw)
 
-        self._rows: dict[int, _RowBase] = {}
         self._host = QWidget()
         self._v = QVBoxLayout(self._host)
         self._v.setContentsMargins(0, 0, 0, 0)
@@ -252,8 +269,21 @@ class CrossingLog(QWidget):
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
         lay.addWidget(scroll, 1)
 
+    # --- public API -------------------------------------------------------
     def add(self, data: dict) -> None:
-        row = _RowBase(data, 104, 66)
+        if self._editable:
+            row = _Row(data, EDIT_THUMB_W, EDIT_THUMB_H, True)
+            row.bow_edited.connect(self.bow_edited)
+            row.time_edited.connect(self.time_edited)
+            row.bow_edit.advance.connect(self.advance_requested)
+            row.bow_edit.step_frame.connect(self.step_frame)
+            row.bow_edit.select_step.connect(self.select_step)
+            row.time_edit.advance.connect(self.advance_requested)
+            row.time_edit.step_frame.connect(self.step_frame)
+            row.time_edit.select_step.connect(self.select_step)
+            self._edits[data["sequence"]] = row.bow_edit
+        else:
+            row = _Row(data, THUMB_W, THUMB_H, False)
         self._rows[data["sequence"]] = row
         self._rebuild()
 
@@ -261,23 +291,48 @@ class CrossingLog(QWidget):
         """Populate a row's thumbnail once the deferred image is selected."""
         row = self._rows.get(sequence)
         if row is not None:
-            row.thumb.set_thumb(_load_pixmap(path, row.thumb.width(), row.thumb.height()))
+            row.thumb.set_thumb(load_scaled(
+                path, QSize(row.thumb.width(), row.thumb.height())))
 
     def remove(self, sequence: int) -> None:
-        """Drop a row from the log (used when a crossing is soft-deleted)."""
+        """Drop a row from the list (used when a crossing is soft-deleted)."""
+        self._edits.pop(sequence, None)
         if self._rows.pop(sequence, None) is not None:
             self._rebuild()
 
     def clear(self) -> None:
         self._rows.clear()
+        self._edits.clear()
         self._rebuild()
 
     def count(self) -> int:
         """Number of live rows (replaces callers poking ``_rows``)."""
         return len(self._rows)
 
+    def set_selected(self, sequence: int | None) -> None:
+        self._selected = sequence
+        for seq, row in self._rows.items():
+            row.set_highlight(seq == sequence)
+            if seq in self._edits:
+                self._edits[seq].setStyleSheet(self._input_style(seq == sequence))
+
+    def focus_bow(self, sequence: int) -> None:
+        edit = self._edits.get(sequence)
+        if edit is not None:
+            edit.setFocus()
+            edit.selectAll()
+
+    def refresh_time(self, sequence: int, elapsed_s: float) -> None:
+        """Reset a row's time field to the stored value (after commit/revert)."""
+        row = self._rows.get(sequence)
+        if row is None:
+            return
+        row.elapsed_s = elapsed_s
+        if self._editable and hasattr(row, "time_edit"):
+            row.time_edit.setText(format_elapsed(elapsed_s))
+
+    # --- internals --------------------------------------------------------
     def _rebuild(self) -> None:
-        live = set(self._rows)
         while self._v.count():
             item = self._v.takeAt(0)
             w = item.widget()
@@ -287,75 +342,13 @@ class CrossingLog(QWidget):
                 w.setParent(None)
             else:
                 w.deleteLater()
-        for seq in sorted(self._rows, reverse=True):
-            self._v.addWidget(self._rows[seq])
+        for row in sorted(self._rows.values(), key=lambda r: r.elapsed_s):
+            self._v.addWidget(row)
         self._v.addStretch(1)
 
     def _own(self, w: QWidget) -> bool:
         """True if the widget is one of our persistent rows."""
         return any(w is row for row in self._rows.values())
-
-
-class ReviewList(CrossingLog):
-    """Newest-first list with inline bow + time fields and selection."""
-
-    bow_edited = Signal(int, str)          # sequence, value
-    time_edited = Signal(int, str)         # sequence, raw elapsed text
-    delete_requested = Signal(int)         # sequence
-    selection_changed = Signal(int)        # sequence
-    advance_requested = Signal(int)        # sequence (Enter/Tab in a field)
-    step_frame = Signal(int)               # +1/-1 (Shift+←/→ in a field)
-    select_step = Signal(int)              # +1/-1 (↑/↓ in a field)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._selected: int | None = None
-        self._edits: dict[int, QLineEdit] = {}
-
-    def focus_bow(self, sequence: int) -> None:
-        edit = self._edits.get(sequence)
-        if edit is not None:
-            edit.setFocus()
-            edit.selectAll()
-
-    def remove(self, sequence: int) -> None:
-        """Drop a row and its inline edit field (soft-delete in review)."""
-        self._edits.pop(sequence, None)
-        super().remove(sequence)
-
-    def refresh_time(self, sequence: int, elapsed_s: float) -> None:
-        """Reset a row's time field to the stored value (after commit/revert)."""
-        row = self._rows.get(sequence)
-        if isinstance(row, _ReviewRow):
-            row.time_edit.setText(format_elapsed(elapsed_s))
-
-    def set_selected(self, sequence: int | None) -> None:
-        self._selected = sequence
-        for seq, row in self._rows.items():
-            row.set_highlight(seq == sequence)
-            if seq in self._edits:
-                self._edits[seq].setStyleSheet(
-                    self._input_style(seq == sequence))
-
-    def add(self, data: dict) -> None:
-        row = _ReviewRow(data, 92, 58, self)
-        row.bow_edited.connect(self._on_bow_edited)
-        row.time_edited.connect(self._on_time_edited)
-        row.bow_edit.advance.connect(self.advance_requested)
-        row.bow_edit.step_frame.connect(self.step_frame)
-        row.bow_edit.select_step.connect(self.select_step)
-        row.time_edit.advance.connect(self.advance_requested)
-        row.time_edit.step_frame.connect(self.step_frame)
-        row.time_edit.select_step.connect(self.select_step)
-        self._edits[data["sequence"]] = row.bow_edit
-        self._rows[data["sequence"]] = row
-        self._rebuild()
-
-    def _on_bow_edited(self, seq: int, value: str) -> None:
-        self.bow_edited.emit(seq, value)
-
-    def _on_time_edited(self, seq: int, value: str) -> None:
-        self.time_edited.emit(seq, value)
 
     def _input_style(self, selected: bool) -> str:
         border = styles.BLUE if selected else styles.PANEL_BORDER
