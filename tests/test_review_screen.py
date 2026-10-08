@@ -244,11 +244,25 @@ class TestReviewScreen(unittest.TestCase):
         after_tab = screen._selected_seq
         self.assertNotEqual(after_tab, first, "Tab in a bow field did not advance")
 
-        self.key(Qt.Key_Down)                      # move selection to previous
+        self.key(Qt.Key_Down)                      # change the selection
         self.assertNotEqual(screen._selected_seq, after_tab,
                             "Down in a bow field did not change the crossing")
         self.assertIsInstance(self.app.focusWidget(), QLineEdit,
                               "navigation from a bow field must stay in a bow field")
+
+    def test_up_moves_toward_faster_rows(self):
+        # The list is fastest-first, so Up selects the row above (faster) and
+        # Down the row below (slower).
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        screen._select(2)
+        self.key(Qt.Key_Up)
+        self.assertEqual(screen._selected_seq, 1)
+        self.key(Qt.Key_Down)
+        self.assertEqual(screen._selected_seq, 2)
+        self.key(Qt.Key_Down)
+        self.assertEqual(screen._selected_seq, 3)
 
     def test_save_shows_confirmation(self):
         screen = self.review()
@@ -269,7 +283,7 @@ class TestReviewScreen(unittest.TestCase):
         self.key(Qt.Key_Right, Qt.ShiftModifier)
         stepped = screen.scrubber.selected_frame()
         self.key(Qt.Key_Return)        # commit + advance to crossing 2
-        self.key(Qt.Key_Down)          # back to crossing 1
+        self.key(Qt.Key_Up)            # back to crossing 1 (faster, above)
         shown = screen.scrubber.selected_frame()
         self.assertEqual(shown["id"], stepped["id"],
                          "revisiting a crossing must show the committed frame")

@@ -550,11 +550,13 @@ class ReviewScreen(QWidget):
             return
         key = event.key()
         mods = event.modifiers()
+        # The list is fastest-first (top = smallest elapsed), so Up must move to
+        # the previous (faster) row and Down to the next (slower) one.
         if key == Qt.Key_Up:
-            self._move_selection(1)
+            self._move_selection(-1)
             return
         if key == Qt.Key_Down:
-            self._move_selection(-1)
+            self._move_selection(1)
             return
         if key == Qt.Key_Left and mods & Qt.ShiftModifier:
             self.scrubber.step(-1)

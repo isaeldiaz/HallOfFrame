@@ -95,11 +95,12 @@ class _BowEdit(QLineEdit):
             if key == Qt.Key_Right and mods & Qt.ShiftModifier:
                 self.step_frame.emit(1)
                 return True
+            # Fastest-first list: Up selects the previous (faster) row.
             if key == Qt.Key_Up:
-                self.select_step.emit(1)
+                self.select_step.emit(-1)
                 return True
             if key == Qt.Key_Down:
-                self.select_step.emit(-1)
+                self.select_step.emit(1)
                 return True
         return super().event(event)
 
@@ -384,13 +385,22 @@ class CrossingList(QWidget):
             edit.selectAll()
 
     def refresh_time(self, sequence: int, elapsed_s: float) -> None:
-        """Reset a row's time field to the stored value (after commit/revert)."""
+        """Reset a row's time field to the stored value (after commit/revert).
+
+        A corrected time can change the crossing's rank, so re-sort so the list
+        stays fastest-first (spec §7.3); focus in the edited field is preserved
+        across the rebuild."""
         row = self._rows.get(sequence)
         if row is None:
             return
+        had_focus = (self._editable and hasattr(row, "time_edit")
+                     and row.time_edit.hasFocus())
         row.elapsed_s = elapsed_s
         if self._editable and hasattr(row, "time_edit"):
             row.time_edit.setText(format_elapsed(elapsed_s))
+        self._rebuild()
+        if had_focus:
+            row.time_edit.setFocus()
 
     # --- internals --------------------------------------------------------
     def _rebuild(self) -> None:

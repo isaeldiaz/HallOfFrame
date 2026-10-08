@@ -45,6 +45,18 @@ def test_editable_rows_render_fastest_first(qapp):
     lst.deleteLater()
 
 
+def test_refresh_time_reorders_fastest_first(qapp):
+    # Correcting a time can change the crossing's rank; the list must re-sort so
+    # it stays fastest-first (spec §7.3).
+    lst = CrossingList(editable=True)
+    for seq, elapsed in [(1, 10.0), (2, 20.0), (3, 30.0)]:
+        lst.add(_data(seq, elapsed))
+    assert _display_order(lst) == [1, 2, 3]
+    lst.refresh_time(1, 99.0)  # crossing 1 is now the slowest
+    assert _display_order(lst) == [2, 3, 1]
+    lst.deleteLater()
+
+
 def test_remove_and_count_agree(qapp):
     lst = CrossingList(editable=True)
     for seq in (1, 2, 3):
