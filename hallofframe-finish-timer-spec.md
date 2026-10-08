@@ -97,7 +97,7 @@ holds. See §6.5.
 | F4 | The operator can annotate each capture with a bow/lane number after the fact. |
 | F5 | The operator can delete or correct an erroneous capture without disturbing the others. |
 | F6 | Results (times + image references) are exportable to CSV and as a whole-database HTML results page (photos included) via the `D` key. |
-| F7 | The full race is archived continuously so that a missed or mistimed press can be recovered after the fact. |
+| F7 | Frames around every crossing are saved once per race, named by time since the gun, so a crossing added or moved after the race can be matched to frames already on disk. |
 
 ### 2.2 Non-functional requirements
 
@@ -978,52 +978,44 @@ Three changes are required:
    v1.0's three. Three attempts and then permanent failure is how a recoverable
    cable jostle becomes a lost heat.
 
-### 6.6 `archive.py` — continuous recording
+### 6.6 `framestore.py` — gun-indexed frame store
 
-Requirement F7. Every frame received during a race is written to disk with its
-timestamp, so a fumbled or missed press can be recovered afterwards.
+Requirement F7. Frames are saved once per race, named by their time since the
+gun, so a crossing added or moved after the race can be matched to frames
+already on disk without duplicating them. Each race owns one `frames/`
+directory; a frame's filename is its `t_ms`, and the `frame` table (§6.7) maps
+that time back to a path.
 
 ```python
-class ArchiveWriter(threading.Thread):
-    def __init__(self, directory: Path, queue_maxsize: int = 300): ...
-    def submit(self, frame: Frame) -> None:
-        """Non-blocking. If the queue is full, drop the frame and increment
-        a dropped counter surfaced in the UI. Never block the reader thread."""
+class FrameStore:
+    def __init__(self, storage: Storage, race_id: int, race_dir: Path, t0: float): ...
+    def t_ms(self, frame: Frame) -> int
+    def save(self, frames: list[Frame]) -> list[sqlite3.Row]:
+        """Write each frame whose t_ms >= 0 and is not yet in the frame table;
+        insert rows in one transaction; return the frame rows for ALL given
+        frames (new and pre-existing), ordered by t_ms."""
+def nearest(rows, target_ms) -> sqlite3.Row | None   # pure helper, smallest |t_ms - target_ms|
 ```
 
-- Filename: `{seq:08d}_{t_recv_ms}.jpg` in `archive/{race_id}/`.
-- Write an `index.jsonl` with one line per frame:
-  `{"seq":…, "t_recv":…, "t_wall":…, "file":…}`. This lets a recovery tool find
-  a frame by timestamp without reading every filename.
-- Disk budget: 1080p JPEG ≈ 150–250 KB. At 30 fps that is ~4.5–7.5 MB/s, or
-  **16–27 GB/hour**.
+- `t_ms = round((frame.t_recv - race.t0_monotonic) * 1000)`; frames with
+  `t_ms < 0` are never saved.
+- File: `races/<id>_<name>/frames/{t_ms:08d}.jpg`, one file per `t_ms` per
+  race. `save` writes to a `.tmp` name then `os.replace`, so a crash leaves no
+  half-written JPEG.
+- The frames of a crossing are
+  `SELECT * FROM frame WHERE race_id=? AND t_ms BETWEEN target_ms - window_before_ms AND target_ms + window_after_ms ORDER BY t_ms`.
+  A frame can belong to several crossings; overlapping windows share one file.
 
-**A start-time check alone is not enough.** 20 GB free buys only **44–75
-minutes** of archiving, so a heat can pass the pre-flight check and then run the
-disk dry mid-race. (`system-environment.md` read the same numbers as "6–8
-hours"; that figure is the headroom from 156 GB, not from the 20 GB threshold.)
-A full regatta day of continuous archiving consumes 100–160 GB — essentially the
-whole disk — and no retention policy existed in any document.
+`save` is called only from the deferred-selection timer thread, exactly where
+`_select_images` wrote files before, so it never touches the evdev trigger path
+(§6.5).
 
-Required behaviour:
-
-| Free space | Action |
-|---|---|
-| Below `min_free_gb` at race start | Refuse to start, with an explicit override |
-| Below 10 GB during a race | Automatically switch to `every_nth_frame = 5`, banner in the UI |
-| Below 3 GB during a race | Stop archiving entirely; **captures and times continue** |
-
-- Set `min_free_gb` to cover a realistic session (60 GB), or compute it as
-  `expected_hours × measured_rate`.
-- Add an inter-heat retention policy: prompt to purge or offload the previous
-  heat's archive once its captures are exported.
-- **Reserve headroom the OS cannot lose.** The data root shares the single ext4
-  root filesystem with the OS (audit: `/dev/sda2` is the only filesystem), so
-  filling it does not merely stop the archive — SQLite commits fail, the JSONL
-  log fails, and the desktop session degrades. §11's "archive degrades
-  gracefully, captures continue" is not achievable on a filesystem that just
-  filled. Either put the data root on its own filesystem, or `fallocate` a 3 GB
-  ballast file at startup and delete it when space is exhausted.
+**Continuous archiving was removed on 2026-10-06.** The former `archive.py`
+writer recorded every frame of a race, but its disk budget (16–27 GB/hour) meant
+a full regatta day would consume the whole disk, and it was never wired up. It
+is replaced by this gun-indexed frame store (spec §13.3), which saves only the
+windows around crossings and recovers a missed or mistimed press from the same
+on-disk frames.
 
 ### 6.7 `storage.py` — persistence
 
@@ -1067,8 +1059,10 @@ CREATE TABLE capture (
     t_press_wall    REAL NOT NULL,      -- wall clock, record only
     elapsed_s       REAL NOT NULL,      -- t_press - race.t0_monotonic
     delta_used      REAL NOT NULL,      -- Δ at THIS capture, not just at t0
+    target_ms       INTEGER,            -- selection target in gun-ms, nullable
     bow_number      TEXT,               -- entered by operator, nullable
     primary_image   TEXT,               -- relative path, nullable
+    primary_frame_id INTEGER REFERENCES frame(id),  -- nullable
     image_flag      TEXT,               -- NULL | 'approximate' | 'missing'
     debounce_suspect INTEGER NOT NULL DEFAULT 0,  -- §6.4; recorded, never dropped
     deleted         INTEGER NOT NULL DEFAULT 0,
@@ -1077,21 +1071,17 @@ CREATE TABLE capture (
     CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
 );
 
-CREATE TABLE capture_frame (
+CREATE TABLE frame (
     id              INTEGER PRIMARY KEY,
-    capture_id      INTEGER NOT NULL REFERENCES capture(id),
+    race_id         INTEGER NOT NULL REFERENCES race(id),
+    t_ms            INTEGER NOT NULL,   -- round((t_recv - race.t0_monotonic) * 1000)
     t_recv          REAL NOT NULL,
-    offset_ms       REAL NOT NULL,      -- t_recv - target; negative = earlier
     path            TEXT NOT NULL,
-    is_primary      INTEGER NOT NULL DEFAULT 0
+    UNIQUE (race_id, t_ms)
 );
 
 CREATE INDEX idx_capture_race ON capture(race_id, sequence);
-CREATE INDEX idx_frame_capture ON capture_frame(capture_id, t_recv);
-
--- Exactly one primary frame per capture (§7.3 lets the operator promote one).
-CREATE UNIQUE INDEX idx_one_primary ON capture_frame(capture_id)
-    WHERE is_primary = 1;
+-- The UNIQUE (race_id, t_ms) constraint already indexes the window lookup.
 ```
 
 Deletion is **soft** (`deleted = 1`). Requirement F5 says corrections must not
@@ -1132,22 +1122,22 @@ source of truth for every runtime path in this document, in `INSTALL.md` and in
         <event_name>-<race_id>.jsonl
     races/
         2026-08-21_heat3/
-            captures/
-                001_primary.jpg
-                001_w-0167.jpg        # window frames, offset in MILLISECONDS
-                001_w+0100.jpg
-                002_primary.jpg
-            archive/
-                index.jsonl
-                00000001_1234567.jpg
+            frames/
+                00001667.jpg          # one file per t_ms since the gun
+                00005000.jpg
+                00005100.jpg
                 ...
             export.csv
 ```
 
-Two corrections to v1.0's tree: the archive lives under
-`races/<race>/archive/`, not the bare `archive/{race_id}/` that §6.6's filename
-rule implied; and window-frame filenames carry a **millisecond** offset, since
-§6.5 now specifies the window in milliseconds rather than frames.
+v1.0's per-crossing `captures/` directory and the never-wired `archive/` are
+both gone. A race keeps a single `frames/` directory: each file is named by its
+`t_ms` since the gun (`{t_ms:08d}.jpg`) and written once, so overlapping
+crossing windows share the same file instead of duplicating it. The `frame`
+table above maps `(race_id, t_ms)` to that path. On the `capture` row,
+`target_ms` is the selection target in gun-ms and `primary_frame_id` references
+the chosen `frame` row; `primary_image` is kept as a denormalised copy of that
+frame's `path` so export, web and the UI keep reading it unchanged (§6.6).
 
 **`config.toml` is hand-edited; `calibration.json` is machine-written.** v1.0
 listed both without saying which owns `Δ`, and §5.5 wrote the calibration result
@@ -2123,18 +2113,15 @@ implementation can be planned against the constraints already locked in here.
   This must not add writes on the app's `Storage` — the web process keeps its own
   read-only SQLite connection (§8).
 
-- **Single image-capture naming from gun start to race end.** Current behaviour
-  stores ±N frames around *each* crossing, which duplicates frames on disk when
-  crossings are close, and makes it impossible to associate an already-stored
-  frame with a crossing added after the race is over. One proposed direction is
-  to start a frame counter at the gun (`t0`), keep on disk the ±N frames around
-  each crossing as today, but name each stored frame by its time-from-gun-start
-  (not by which crossing it belongs to), so a crossing records the frame number
-  at which it was registered. A crossing that falls inside the window of an
-  earlier one then extends that window instead of duplicating frames. This is
-  recorded as **one of several options to explore**, not the endorsed design —
-  the implementer should weigh it against the existing window/framebuffer model
-  (§6.5, §6.3) and §5.4's proximity selection before committing.
+- **Single image-capture naming from gun start to race end.** *(Implemented
+  2026-10-06 — see §6.6, `framestore.py`.)* The old behaviour stored ±N frames
+  around *each* crossing, which duplicated frames on disk when crossings were
+  close and made it impossible to associate an already-stored frame with a
+  crossing added after the race was over. The adopted design starts the frame
+  naming at the gun (`t0`): each stored frame is named by its time from the gun
+  (not by which crossing it belongs to), so a crossing records the `t_ms` at
+  which it was registered and a crossing that falls inside the window of an
+  earlier one shares that frame instead of duplicating it.
 
 - **Fake camera feed from past regatta footage.** We have a large folder of
   images captured at the crossing of a past regatta. A synthetic camera feed

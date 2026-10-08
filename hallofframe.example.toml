@@ -81,14 +81,6 @@ grab_device = true
 # from [paths]. Default: <data_root>/<event_name>_races.csv
 csv_path = "{event_name}_races.csv"
 
-[archive]
-enabled = true
-every_nth_frame = 1
-min_free_gb = 60             # 20 GB buys only 44-75 minutes (§6.6)
-degrade_at_gb = 10           # switch to every_nth_frame = 5
-stop_at_gb = 3               # stop archiving; captures continue
-ballast_gb = 3               # fallocate reserve so the OS cannot be starved
-
 [ui]
 finish_line_x = 0.5          # normalised 0..1 position of the overlay
 preview_fps = 10

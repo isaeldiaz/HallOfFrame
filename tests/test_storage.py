@@ -10,6 +10,8 @@ is deterministic without sleeping.
 """
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from hallofframe import storage as storage_mod
@@ -55,8 +57,9 @@ def test_last_updated_without_race_id(storage, clock):
 
 def test_every_write_method_advances_updated_at(storage, clock):
     rid = _make_race(storage)
-    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 0.0, 0.0)
-    frame = storage.insert_frame(cap, 1000.0, 0.0, "races/r/a.jpg", is_primary=1)
+    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 0.0, 0.0, target_ms=0)
+    frames = storage.insert_frames([(rid, 0, 1000.0, "races/r/a.jpg")])
+    frame_id = frames[0]["id"]
     assert storage.last_updated(rid) == storage.last_updated()
 
     steps = [
@@ -71,9 +74,9 @@ def test_every_write_method_advances_updated_at(storage, clock):
          lambda: storage.insert_capture(rid, 2, 1000.0, 1000.0, 1.0, 0.0)),
         ("update_capture", lambda: storage.update_capture(cap, bow_number="07")),
         ("set_crossing_time", lambda: storage.set_crossing_time(cap, 2.0)),
-        ("insert_frame",
-         lambda: storage.insert_frame(cap, 1000.0, 1.0, "races/r/b.jpg")),
-        ("set_primary", lambda: storage.set_primary(cap, frame)),
+        ("insert_frames",
+         lambda: storage.insert_frames([(rid, 1, 1001.0, "races/r/b.jpg")])),
+        ("set_primary", lambda: storage.set_primary(cap, frame_id)),
         ("set_race_audio",
          lambda: storage.set_race_audio(rid, "races/r/audio.wav", 1.5)),
     ]
@@ -142,3 +145,131 @@ def test_all_bundles_yields_oldest_first(storage, clock):
     assert [race["id"] for race, _ in bundles] == [first, second]
     # recorded_keys shares the same identity rows (step 1.4f).
     assert recorded_keys(storage) == {("num", "101", "1"), ("num", "102", "1")}
+
+
+# The schema as it shipped before phase 5, kept here so the migration is tested
+# against a database created by the OLD code, not by the new SCHEMA string.
+OLD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS race (
+    id                INTEGER PRIMARY KEY,
+    name              TEXT NOT NULL,
+    race_no           TEXT,
+    heat_no           TEXT,
+    boot_id           TEXT NOT NULL,
+    t0_monotonic      REAL NOT NULL,
+    t0_wall           REAL NOT NULL,
+    t0_reconstructed  INTEGER NOT NULL DEFAULT 0,
+    start_mode        TEXT NOT NULL,
+    radio_delay_ms    REAL NOT NULL DEFAULT 0,
+    delta_used        REAL NOT NULL,
+    viewing_mode      TEXT NOT NULL,
+    fps_nominal       REAL,
+    notes             TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT,
+    ended_at          TEXT,
+    t_end_monotonic   REAL,
+    image_off         INTEGER NOT NULL DEFAULT 0,
+    reviewed          INTEGER NOT NULL DEFAULT 0,
+    audio_path        TEXT,
+    audio_t0_offset_s REAL,
+    CHECK (start_mode   IN ('direct','radio','external')),
+    CHECK (viewing_mode IN ('water','screen'))
+);
+
+CREATE TABLE IF NOT EXISTS capture (
+    id              INTEGER PRIMARY KEY,
+    race_id         INTEGER NOT NULL REFERENCES race(id),
+    sequence        INTEGER NOT NULL,
+    t_press         REAL NOT NULL,
+    t_press_wall    REAL NOT NULL,
+    elapsed_s       REAL NOT NULL,
+    delta_used      REAL NOT NULL,
+    bow_number      TEXT,
+    primary_image   TEXT,
+    image_flag      TEXT,
+    debounce_suspect INTEGER NOT NULL DEFAULT 0,
+    deleted         INTEGER NOT NULL DEFAULT 0,
+    notes           TEXT,
+    updated_at      TEXT,
+    bow_suggested   TEXT,
+    bow_source      TEXT,
+    UNIQUE (race_id, sequence),
+    CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
+);
+
+CREATE TABLE IF NOT EXISTS capture_frame (
+    id              INTEGER PRIMARY KEY,
+    capture_id      INTEGER NOT NULL REFERENCES capture(id),
+    t_recv          REAL NOT NULL,
+    offset_ms       REAL NOT NULL,
+    path            TEXT NOT NULL,
+    is_primary      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_capture_race ON capture(race_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_frame_capture ON capture_frame(capture_id, t_recv);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_primary ON capture_frame(capture_id)
+    WHERE is_primary = 1;
+"""
+
+
+def _tables(conn) -> set:
+    return {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def test_migration_from_old_schema(data_root):
+    db = data_root / "event.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(OLD_SCHEMA)
+    conn.execute(
+        "INSERT INTO race (name, boot_id, t0_monotonic, t0_wall, start_mode, "
+        "radio_delay_ms, delta_used, viewing_mode, created_at) "
+        "VALUES ('R','boot',1000.0,1000.0,'direct',0.0,0.05,'screen',"
+        "'2024-01-01T00:00:00+00:00')")
+    race_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    # t_press 1002.0, delta_used 0.05, t0 1000.0 => target_ms = 1950
+    conn.execute(
+        "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
+        "elapsed_s, delta_used) VALUES (?,1,1002.0,1002.0,2.0,0.05)", (race_id,))
+    cap_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO capture_frame (capture_id, t_recv, offset_ms, path, "
+        "is_primary) VALUES (?,?,?,?,?)",
+        (cap_id, 1001.9, -100.0, "races/r/captures/001_w-0100.jpg", 0))
+    conn.execute(
+        "INSERT INTO capture_frame (capture_id, t_recv, offset_ms, path, "
+        "is_primary) VALUES (?,?,?,?,?)",
+        (cap_id, 1002.0, 0.0, "races/r/captures/001_w+0000.jpg", 1))
+    conn.commit()
+    conn.close()
+
+    st = storage_mod.Storage(data_root)
+    try:
+        assert "frame" in _tables(st._conn)
+        assert "capture_frame" not in _tables(st._conn)
+
+        frames = st._conn.execute("SELECT * FROM frame ORDER BY t_ms").fetchall()
+        assert [f["t_ms"] for f in frames] == [1900, 2000]
+        assert frames[0]["path"] == "races/r/captures/001_w-0100.jpg"
+        assert frames[1]["path"] == "races/r/captures/001_w+0000.jpg"
+
+        cap = st.capture(cap_id)
+        assert cap["target_ms"] == 1950
+        assert cap["primary_frame_id"] == frames[1]["id"]
+
+        race = st.get_race(race_id)
+        assert race["window_before_ms"] == 500
+        assert race["window_after_ms"] == 500
+
+        # The new window query sees both migrated frames.
+        assert [f["t_ms"] for f in st.frames_for_capture(cap_id)] == [1900, 2000]
+    finally:
+        st.close()

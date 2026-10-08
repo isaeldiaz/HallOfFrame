@@ -20,6 +20,7 @@ from typing import Callable
 from . import storage as storage_mod
 from .calibration import CALIBRATION_FILENAME, Calibration, calibration_path
 from .framebuffer import FrameBuffer
+from .framestore import FrameStore, nearest
 from .mjpeg import Frame
 from .storage import Storage
 
@@ -56,6 +57,9 @@ class CaptureController:
         self.t0_wall: float | None = None
         self.race_id: int | None = None
         self.race_dir: Path | None = None
+        # Gun-indexed frame store for the current race (plan step 5.3). Created
+        # in start_race()/resume_race() once race_id, race_dir and t0 are known.
+        self.store: FrameStore | None = None
         self.delta = 0.0
         self.running = False
         self.ended_at_mono: float | None = None  # monotonic time of end_race()
@@ -162,13 +166,18 @@ class CaptureController:
             radio_delay_ms=self.radio_delay_ms if self.start_mode == "radio" else 0.0,
             delta_used=self.delta, viewing_mode=timing_viewing(self.config),
             fps_nominal=self.preview_fps, image_off=self.image_off,
-            race_no=race_no, heat_no=heat_no)
+            race_no=race_no, heat_no=heat_no,
+            window_before_ms=round(self.window_before_s * 1000),
+            window_after_ms=round(self.window_after_s * 1000))
         self.race_id = race_id
 
         # Race directory is keyed by the unique, never-reused race_id so two
         # races with the same display name (or two started in the same minute)
         # can never collide and overwrite each other's captures.
         self.race_dir = self._race_dir(race_id, name)
+        # The frame store writes one file per gun-time under this race's frames/
+        # directory (plan step 5.3). Built here, after t0 and race_dir are set.
+        self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
 
         self._emit("race_started", race_id=race_id)
         return race_id
@@ -196,6 +205,9 @@ class CaptureController:
             self._warn(f"race {race_id}: t0 reconstructed from wall clock "
                        "(boot_id mismatch); times flagged t0_reconstructed")
         self.race_dir = self._race_dir(race_id, row["name"])
+        # Recreate the frame store for the resumed race (plan step 5.3): it needs
+        # the race's t0 and directory, both now known.
+        self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
 
     def end_race(self, t_end: float | None = None) -> int | None:
         """Finish the current race (spec: an explicit End-Race so the operator
@@ -306,7 +318,8 @@ class CaptureController:
         capture_id = self.storage.insert_capture(
             race_id, sequence, t_press, time.time(), elapsed,
             payload["delta_used"], image_flag=image_flag,
-            debounce_suspect=int(payload["debounce_suspect"]))
+            debounce_suspect=int(payload["debounce_suspect"]),
+            target_ms=round((target - self.t0) * 1000))
 
         cap = Capture(capture_id, sequence, t_press, elapsed,
                       payload["delta_used"], image_flag,
@@ -345,38 +358,26 @@ class CaptureController:
 
     def _select_images(self, capture_id: int, sequence: int, target: float,
                        race_dir) -> None:
-        if race_dir is None:
+        """Deferred selection: persist the window frames and pick the primary.
+
+        The window is saved once per race through the gun-indexed frame store
+        (plan step 5.3): a frame is named by its ``t_ms`` since the gun and
+        shared by every crossing whose window covers it, so no per-crossing
+        ``captures/`` copies are written. The primary is the stored frame nearest
+        the selection target; ``image_flag`` keeps its existing meaning.
+        """
+        if race_dir is None or self.store is None:
             return
         frames = self.buffer.window(target, self.window_before_s, self.window_after_s)
-        captures_dir = race_dir / "captures"
-        captures_dir.mkdir(parents=True, exist_ok=True)
-
-        primary = self.buffer.nearest(target)
-        if primary is not None and primary not in frames:
-            frames.append(primary)
-
-        chosen_primary: Path | None = None
-        chosen_primary_id: int | None = None
-        chosen_offset = float("inf")
-        for f in sorted(frames, key=lambda f: f.t_recv):
-            offset_ms = (f.t_recv - target) * 1000.0
-            sign = "-" if offset_ms < 0 else "+"
-            fname = f"{sequence:03d}_w{sign}{abs(offset_ms):04.0f}.jpg"
-            fpath = captures_dir / fname
-            fpath.write_bytes(f.jpeg)
-            frame_id = self.storage.insert_frame(
-                capture_id, f.t_recv, offset_ms, str(fpath.relative_to(self.storage.data_root)))
-            # primary = the frame nearest target (N2), not the earliest window frame
-            if abs(offset_ms) < abs(chosen_offset):
-                chosen_offset = offset_ms
-                chosen_primary = fpath
-                chosen_primary_id = frame_id
+        rows = self.store.save(frames)
+        target_ms = round((target - self.t0) * 1000)
+        primary = nearest(rows, target_ms)
 
         # The insertion-time flag reflected the buffer state *before* the deferred
         # selection (latency made target appear newer than the newest frame).
         # Recompute it now from what was actually selected (§6.5): the flag
         # describes the attached image, not the transient state at the press.
-        if chosen_primary_id is None:
+        if primary is None:
             flag = "missing"
         else:
             span = self.buffer.span()
@@ -386,13 +387,21 @@ class CaptureController:
                 flag = None
         self.storage.update_capture(capture_id, image_flag=flag)
 
-        if chosen_primary_id is not None:
-            self.storage.set_primary(capture_id, chosen_primary_id)
+        if primary is not None:
+            self.storage.set_primary(capture_id, primary["id"])
             # Notify the UI so the last-capture panel / log thumbnails can show
             # the photo now that the deferred selection landed (§3). Emitted from
-            # the deferred-timer thread, never the trigger path.
-            self._emit("image_ready", sequence=sequence,
-                       path=str(chosen_primary.relative_to(self.storage.data_root)))
+            # the deferred-timer thread, never the trigger path. ``path`` is
+            # already relative to data_root (stored by FrameStore.save).
+            self._emit("image_ready", sequence=sequence, path=primary["path"])
+
+    def frames_for_capture(self, capture_id: int) -> list:
+        """The frames in a capture's selection window (plan step 5.3).
+
+        Passthrough to Storage for the review screen; the frame rows carry
+        ``t_ms``/``path`` and the capture row carries ``target_ms`` and
+        ``primary_frame_id``."""
+        return self.storage.frames_for_capture(capture_id)
 
     def set_bow_number(self, capture_id: int, value: str | None) -> None:
         self.storage.update_capture(capture_id, bow_number=value)

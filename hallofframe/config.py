@@ -65,14 +65,6 @@ DEFAULTS: dict[str, Any] = {
     "races": {
         "csv_path": "{event_name}_races.csv",
     },
-    "archive": {
-        "enabled": True,
-        "every_nth_frame": 1,
-        "min_free_gb": 60,
-        "degrade_at_gb": 10,
-        "stop_at_gb": 3,
-        "ballast_gb": 3,
-    },
     "ui": {
         "finish_line_x": 0.5,
         "preview_fps": 10,

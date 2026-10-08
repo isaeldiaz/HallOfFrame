@@ -67,9 +67,11 @@ class TestController(Base):
         row = rows[0]
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
         self.scheduler.advance(0.6)
-        frames = self.storage.frames_for_capture(row["id"])
-        self.assertTrue(any(f["offset_ms"] <= 0 for f in frames))
-        self.assertTrue(any(f["offset_ms"] >= 0 for f in frames))
+        cap = self.storage.capture(row["id"])
+        target_ms = cap["target_ms"]
+        frames = self.controller.frames_for_capture(row["id"])
+        self.assertTrue(any(f["t_ms"] <= target_ms for f in frames))
+        self.assertTrue(any(f["t_ms"] >= target_ms for f in frames))
 
     def test_deferred_window(self):
         self.seed_buffer(self.buffer)
@@ -83,6 +85,43 @@ class TestController(Base):
         self.assertEqual(self.storage.frames_for_capture(rows[0]["id"]), [])
         self.scheduler.advance(0.6)
         self.assertTrue(self.storage.frames_for_capture(rows[0]["id"]))
+
+    def test_two_crossings_share_one_frames_directory(self):
+        # Plan step 5.7: two crossings 200 ms apart with a +/-500 ms window must
+        # produce ONE frames/ directory (no per-crossing copies); its file count
+        # equals the number of distinct frames in the union, and both captures
+        # list their frames.
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)          # t0=1000, 6 s at 30 fps
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        t_press = 1000.0 + 3.0
+        self.controller.record_crossing(t_press)
+        self.controller.record_crossing(t_press + 0.2)
+        self.controller._queue.join()
+        self.scheduler.advance(0.6)
+
+        rows = self.storage.captures_for_race(race_id)
+        self.assertEqual(len(rows), 2)
+
+        race_dir = self.controller.race_dir
+        frames_dir = race_dir / "frames"
+        self.assertTrue(frames_dir.is_dir(), "no frames/ directory written")
+        self.assertFalse((race_dir / "captures").exists(),
+                         "the retired per-crossing captures/ directory appeared")
+
+        f0 = self.controller.frames_for_capture(rows[0]["id"])
+        f1 = self.controller.frames_for_capture(rows[1]["id"])
+        self.assertTrue(f0, "first capture listed no frames")
+        self.assertTrue(f1, "second capture listed no frames")
+
+        union = {f["id"] for f in f0} | {f["id"] for f in f1}
+        shared = {f["id"] for f in f0} & {f["id"] for f in f1}
+        self.assertTrue(shared, "200 ms apart windows must overlap")
+        self.assertEqual(len(list(frames_dir.glob("*.jpg"))), len(union),
+                         "file count must equal the distinct frames in the union")
+        self.assertGreater(len(union), len(f0),
+                           "the union must exceed one capture's window")
 
     def test_soft_delete_sequence_not_reused(self):
         self.seed_buffer(self.buffer)
@@ -147,23 +186,40 @@ class TestController(Base):
     def test_target_older_than_span(self):
         self.seed_buffer(self.buffer)  # oldest t=1000
         race_id = self.controller.start_race(1000.0, name="Race-T")
-        # delta negative so target is way before the buffer's oldest frame
-        self.controller.delta = -500.0
-        t_press = 1000.0 + 2.0
+        # delta positive so target is just before the buffer's oldest frame; the
+        # +/-50 ms window still catches the oldest frame, so a primary exists and
+        # the flag is "approximate" (plan 5.3: no buffer.nearest fallback).
+        self.controller.delta = 2.01
+        t_press = 1000.0 + 2.0  # target = 999.99, 10 ms before span[0]
         self.controller.record_crossing(t_press)
         self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(rows[0]["image_flag"], "approximate")
+        self.assertIsNotNone(rows[0]["primary_image"])
 
     def test_target_newer_than_newest(self):
-        self.seed_buffer(self.buffer)  # newest ~ t0+6
+        self.seed_buffer(self.buffer)  # newest ~ t0+5.9667
         race_id = self.controller.start_race(1000.0, name="Race-T")
-        self.controller.delta = -10.0  # target = t_press + 10
-        t_press = 1000.0 + 20.0  # target way past newest
+        # target just past the newest frame; the window still catches it, so the
+        # flag is "approximate" rather than "missing".
+        t_press = 1000.0 + 5.99  # target = 1005.99 > span[1] ~ 1005.9667
         self.controller.record_crossing(t_press)
         self.settle()
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(rows[0]["image_flag"], "approximate")
+        self.assertIsNotNone(rows[0]["primary_image"])
+
+    def test_target_far_outside_span_is_missing(self):
+        # With no buffer.nearest fallback, a target far outside the buffer has no
+        # frame in its window: the image is missing, not approximate.
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        self.controller.delta = -500.0  # target = t_press + 500, way past newest
+        self.controller.record_crossing(1000.0 + 2.0)
+        self.settle()
+        rows = self.storage.captures_for_race(race_id)
+        self.assertEqual(rows[0]["image_flag"], "missing")
+        self.assertIsNone(rows[0]["primary_image"])
 
     def test_bow_number_update(self):
         self.seed_buffer(self.buffer)

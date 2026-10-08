@@ -11,7 +11,8 @@ keys on the laptop to record boat crossing times.
   key events or `time.time()`.
 - Each crossing is attached to the saved photo nearest its recorded time for
   jury review.
-- Races persist to SQLite and continuous footage is archived for recovery.
+- Races persist to SQLite and the frames around each crossing are saved once per
+  race for recovery.
 - The trigger path never touches disk — nothing timing-critical blocks.
 
 ## Features
@@ -23,8 +24,7 @@ keys on the laptop to record boat crossing times.
 - Crossing lists are always **fastest first** (spec §13.2) on the Race and
   Review screens; the order is fixed, not configurable.
 - Latency calibration (water mode vs. screen mode).
-- CSV export, a whole-database HTML results page (`D`, photos included), and
-  per-race continuous archive.
+- CSV export, a whole-database HTML results page (`D`, photos included).
 - A separate-process live results **web server** with per-crossing frames and
   per-race "Copy as Excel" (see [Live results](#live-results-web-server)).
 - `F1` About / diagnostics screen: version, environment, paths, key reference,
@@ -92,8 +92,8 @@ straight copy runs unchanged. Highlights:
 Data lives in the data root — `<data_root>`, which defaults to `~/regatta-data`
 but is any directory set by `[paths] data_root` (e.g. `$HOME/regatta-data`):
 
-- `{event_name}.db` — SQLite (`race`, `capture`, `capture_frame`)
-- `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`
+- `{event_name}.db` — SQLite (`race`, `capture`, `frame`)
+- `races/<Race-YYYYmmdd-HHMM>/` — crossing frames (`frames/<t_ms>.jpg`)
 - `logs/{event_name}-app.jsonl` — structured log
 - `calibration.json` — latency result from Calibrate
 - `{event_name}_races.csv` — the race roster (one race per row: `race_no`,
@@ -136,7 +136,7 @@ Only **two files** must be created or edited by you — both live in `<data_root
 
 Every other file is **created automatically** under `<data_root>` once the app
 runs: `{event_name}.db`, `logs/{event_name}-app.jsonl`,
-`races/<Race-YYYYmmdd-HHMM>/` (capture images + archive) and `calibration.json`.
+`races/<Race-YYYYmmdd-HHMM>/` (crossing frames) and `calibration.json`.
 
 ### Step by step
 
@@ -252,7 +252,7 @@ hallofframe/
   mjpeg.py         MJPEG parse loop; emits timestamped Frame objects.
   framebuffer.py   Timestamped ring buffer.
   storage.py       SQLite persistence (WAL, foreign_keys ON).
-  archive.py       Per-race footage writer with disk-space handling.
+  framestore.py    Gun-indexed frame store (one file per crossing-window frame).
   export.py        CSV export; whole-database HTML results page (`D`).
   web.py           Separate-process HTTP results server (live race pages,
                    frames, "Copy as Excel").
