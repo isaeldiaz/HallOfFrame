@@ -111,6 +111,13 @@ class CaptureController:
     def _emit_capture(self, cap: Capture) -> None:
         self._emit("capture_added", capture=cap)
 
+    @staticmethod
+    def _capture_from_row(row) -> Capture:
+        """Build the frozen UI dataclass from a storage ``capture`` row."""
+        return Capture(row["id"], row["sequence"], row["t_press"], row["elapsed_s"],
+                       row["delta_used"], row["image_flag"],
+                       bool(row["debounce_suspect"]))
+
     # --- race lifecycle ---------------------------------------------------
     def start_race(self, t_press: float, name: str = "Race",
                    race_no: str | None = None,
@@ -407,8 +414,36 @@ class CaptureController:
         self.storage.update_capture(capture_id, bow_number=value)
 
     def update_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
-        """Rewrite a crossing's elapsed time (and derived press timestamps)."""
-        return self.storage.set_crossing_time(capture_id, elapsed_s)
+        """Rewrite a crossing's elapsed time and re-derive its frame target.
+
+        ``storage.set_crossing_time`` recomputes the press timestamps; here the
+        selection ``target_ms`` is recomputed too (plan step 7.1). If no frame
+        now falls in the window the image is flagged ``missing`` and the primary
+        cleared, so the review UI can offer "re-pick image". While the race is
+        still running and the live buffer holds frames for the new target,
+        selection is re-run so the photo follows the edited time."""
+        if not self.storage.set_crossing_time(capture_id, elapsed_s):
+            return False
+        row = self.storage.capture(capture_id)
+        if row is None:
+            return True
+        race_id = row["race_id"]
+        race = self.storage.get_race(race_id)
+        if race is None or race["t0_monotonic"] is None:
+            return True
+        target_ms = round(
+            (row["t_press"] - row["delta_used"] - race["t0_monotonic"]) * 1000)
+        self.storage.update_capture(capture_id, target_ms=target_ms)
+        if not self.storage.frames_for_capture(capture_id):
+            self.storage.update_capture(
+                capture_id, image_flag="missing",
+                primary_frame_id=None, primary_image=None)
+        target = row["t_press"] - self.delta
+        if (self.running and race_id == self.race_id
+                and self.buffer.window(target, self.window_before_s,
+                                       self.window_after_s)):
+            self._select_images(capture_id, row["sequence"], target, self.race_dir)
+        return True
 
     def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
         """Set the race's wall-clock start time (gun), shifting every crossing's
@@ -428,8 +463,41 @@ class CaptureController:
             self._emit("image_ready", sequence=cap["sequence"], path=path)
         return path
 
-    def soft_delete(self, capture_id: int) -> None:
+    def remove(self, capture_id: int) -> None:
+        """Soft-delete a crossing and announce it (plan step 7.1).
+
+        The row stays on disk with ``deleted=1`` (spec §6.7); the
+        ``capture_deleted`` event carries its ``sequence`` so the review UI can
+        strike it through rather than drop it."""
+        cap = self.storage.capture(capture_id)
         self.storage.update_capture(capture_id, deleted=1)
+        if cap is not None:
+            self._emit("capture_deleted", sequence=cap["sequence"])
+
+    def restore(self, capture_id: int) -> Capture | None:
+        """Undo a soft delete and announce the crossing as (re)added."""
+        self.storage.restore_capture(capture_id)
+        row = self.storage.capture(capture_id)
+        if row is None:
+            return None
+        cap = self._capture_from_row(row)
+        self._emit_capture(cap)
+        return cap
+
+    def clone(self, capture_id: int) -> Capture | None:
+        """Duplicate a crossing as a new row and announce it (plan step 7.1).
+
+        The clone shares the parent's frames through ``target_ms`` and gets a
+        fresh ``MAX(sequence)+1`` (spec §6.7)."""
+        new_id = self.storage.clone_capture(capture_id)
+        if new_id is None:
+            return None
+        row = self.storage.capture(new_id)
+        if row is None:
+            return None
+        cap = self._capture_from_row(row)
+        self._emit_capture(cap)
+        return cap
 
     def undo_last(self) -> None:
         if self.race_id is None:

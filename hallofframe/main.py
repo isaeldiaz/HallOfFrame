@@ -31,6 +31,35 @@ class _TriggerBridge(QObject):
     capture_deleted = Signal(int)   # (sequence)
 
 
+class _NullTransport:
+    """No-op stand-in for :class:`UsbTransport` when ``[transport] enabled`` is
+    false (plan step 7.4). Every lifecycle call is a no-op and the device check
+    passes, so ``main()`` and the transport monitor run unchanged while the
+    stream comes from somewhere other than the phone (e.g. the fake camera)."""
+
+    max_restarts_idle = 0
+    max_restarts_racing = 0
+
+    def check_device(self) -> None:
+        return None
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return True
+
+    def wait_until_ready(self, timeout: float = 10.0) -> bool:
+        return True
+
+    def ensure(self, racing: bool, max_restarts_idle: int = 3,
+               max_restarts_racing: int = 0) -> None:
+        return None
+
+
 def build_core(config):
     """Construct transport, reader, buffer, storage and controller.
     Returns a dict of the parts so headless tests can reuse it without Qt."""
@@ -44,13 +73,18 @@ def build_core(config):
     storage = Storage(config.data_root, event_name=config.event_name)
 
     transport_cfg = config.section("transport")
-    transport = UsbTransport(
-        int(transport_cfg["local_port"]),
-        int(transport_cfg["device_port"]),
-        udid=transport_cfg["udid"] or None,
-        iproxy_path=transport_cfg["iproxy_path"])
-    transport.max_restarts_idle = int(transport_cfg["max_restarts_idle"])
-    transport.max_restarts_racing = int(transport_cfg["max_restarts_racing"])
+    if bool(transport_cfg.get("enabled", True)):
+        transport = UsbTransport(
+            int(transport_cfg["local_port"]),
+            int(transport_cfg["device_port"]),
+            udid=transport_cfg["udid"] or None,
+            iproxy_path=transport_cfg["iproxy_path"])
+        transport.max_restarts_idle = int(transport_cfg["max_restarts_idle"])
+        transport.max_restarts_racing = int(transport_cfg["max_restarts_racing"])
+    else:
+        # The USB tunnel is disabled: no iproxy, no device check. The stream URL
+        # may point anywhere (fake camera, network camera). See plan step 7.4.
+        transport = _NullTransport()
     stream = config.section("stream")
     buffer = FrameBuffer(seconds=float(stream["buffer_seconds"]),
                          assumed_fps=int(stream["assumed_fps"]))

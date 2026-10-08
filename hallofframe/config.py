@@ -21,6 +21,10 @@ class ConfigError(Exception):
 DEFAULTS: dict[str, Any] = {
     "paths": {"data_root": "~/regatta-data", "event_name": "event"},
     "transport": {
+        # False skips UsbTransport entirely (no iproxy, no device check), so
+        # [stream] url can point at a network source such as the fake camera
+        # (plan step 7.4). True is the normal phone-over-USB path.
+        "enabled": True,
         "local_port": 8081,
         "device_port": 8081,
         "udid": "",
@@ -74,6 +78,19 @@ DEFAULTS: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8080,
         "copy_heading": True,  # include the Race ID/Heat/Category/Gun-start block when copying a race table
+    },
+    # Phase 8 (voice annotation) config format, added here so a laptop set up for
+    # the fake camera can later take a microphone without a config-format change
+    # (plan step 7.4/8.1). Unused until phase 8 lands.
+    "voice": {
+        "enabled": False,
+        "input": "default",  # PulseAudio/PipeWire source name
+        "play_before_s": 3.0,
+        "play_after_s": 5.0,
+        "transcribe": False,
+        "model": "base",
+        "transcribe_before_s": 1.0,
+        "transcribe_after_s": 4.0,
     },
 }
 

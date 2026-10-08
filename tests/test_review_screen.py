@@ -17,6 +17,7 @@ Skips cleanly if PySide6 or evdev is unavailable (offscreen otherwise).
 """
 import time
 import unittest
+from unittest import mock
 
 import pytest
 
@@ -330,6 +331,88 @@ class TestReviewScreen(unittest.TestCase):
         self.key(Qt.Key_Return)
         self.assertEqual(self.times()[seq], before,
                          "an invalid edit must not change the stored time")
+
+    # --- 6. remove / restore / clone (plan step 7.2) ---------------------
+    def test_delete_key_reaches_the_controller_and_strikes_the_row(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        capture_id = screen._current_capture["id"]
+        with mock.patch.object(self.controller, "remove") as rm:
+            self.key(Qt.Key_Delete)
+        rm.assert_called_once_with(capture_id)
+        row = screen.list._rows[seq]
+        self.assertTrue(row.deleted, "the row must stay, marked deleted")
+        self.assertTrue(row.seq_lbl.font().strikeOut(),
+                        "a deleted row must render struck through")
+
+    def test_restore_key_reaches_the_controller(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        capture_id = screen._current_capture["id"]
+        screen.remove_selected()             # soft-delete for real
+        self.assertTrue(screen.list._rows[seq].deleted)
+        with mock.patch.object(self.controller, "restore") as rs:
+            self.key(Qt.Key_U)
+        rs.assert_called_once_with(capture_id)
+        self.assertFalse(screen.list._rows[seq].deleted)
+        self.assertFalse(screen.list._rows[seq].seq_lbl.font().strikeOut())
+
+    def test_shift_delete_restores_the_controller_row(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        capture_id = screen._current_capture["id"]
+        screen.remove_selected()
+        with mock.patch.object(self.controller, "restore") as rs:
+            self.key(Qt.Key_Delete, Qt.ShiftModifier)
+        rs.assert_called_once_with(capture_id)
+        self.assertFalse(screen.list._rows[seq].deleted)
+
+    def test_insert_key_clones_the_controller_row(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        capture_id = screen._current_capture["id"]
+        with mock.patch.object(self.controller, "clone") as cl:
+            cl.return_value = None
+            self.key(Qt.Key_Insert)
+        cl.assert_called_once_with(capture_id)
+
+    def test_shift_d_clones_the_controller_row(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        capture_id = screen._current_capture["id"]
+        with mock.patch.object(self.controller, "clone") as cl:
+            cl.return_value = None
+            self.key(Qt.Key_D, Qt.ShiftModifier)
+        cl.assert_called_once_with(capture_id)
+
+    def test_deleted_rows_render_struck_through(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        self.key(Qt.Key_Delete)              # real soft delete
+        row = screen.list._rows[seq]
+        self.assertTrue(row.deleted)
+        for widget in (row.seq_lbl, row.flag_lbl, row.time_edit, row.bow_edit):
+            self.assertTrue(widget.font().strikeOut(),
+                            "every text widget on a deleted row is struck through")
+
+    def test_time_edit_to_no_frames_shows_the_no_frames_label(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        screen._time_edited(seq, "99.500")
+        self.assertEqual(screen._current_capture["image_flag"], "missing")
+        self.assertEqual(screen.photo.text(), "no frames at this time")
 
 
 if __name__ == "__main__":

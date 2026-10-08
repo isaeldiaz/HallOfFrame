@@ -24,6 +24,11 @@ data_root = "~/regatta-data"   # everything (§6.7) is relative to this; the
 event_name = "event"
 
 [transport]
+# enabled = false skips the USB tunnel entirely (no iproxy, no device check), so
+# [stream] url can point at any network source — e.g. the fake camera in
+# tools/fake_camera.py — and the app runs unchanged. True is the phone-over-USB
+# path. See plan step 7.4.
+enabled = true
 local_port = 8081
 device_port = 8081
 udid = ""                    # empty = first device found
@@ -93,3 +98,15 @@ preview_fps = 10
 enabled = true               # false = the server refuses to start
 host = "127.0.0.1"           # localhost only; "0.0.0.0" exposes it on the LAN
 port = 8080
+
+[voice]
+# Phase 8 (voice annotation) — optional, off by default. Present now so the
+# config format is stable; the keys are unused until phase 8 lands (plan 8.1).
+enabled = false
+input = "default"            # PulseAudio/PipeWire source name
+play_before_s = 3.0          # review playback window, seconds before the crossing
+play_after_s = 5.0           # ... and after
+transcribe = false           # stage 2: local speech-to-text bow suggestions
+model = "base"               # faster-whisper model name
+transcribe_before_s = 1.0    # transcription window, seconds before the crossing
+transcribe_after_s = 4.0     # ... and after

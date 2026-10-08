@@ -258,12 +258,20 @@ _RECORDING_KEYS = [
 ]
 
 # REVIEW keeps Enter/Space/Return for the focused bow field, so they are absent
-# here (the review screen owns them). The arrows / Tab / Del are informational
-# caps handled by the screen, not shortcuts.
+# here (the review screen owns them). The arrows / Tab / Del / Ins and the
+# restore/clone letters are informational caps handled by the screen, not
+# application-wide shortcuts — making them shortcuts would steal Del from a
+# focused bow field. Their action names still resolve to MainWindow forwarders
+# so a keybar click does the same thing as the key (plan step 7.2).
 _REVIEW_KEYS = [
     _k("↑/↓", "Select crossing", "_noop", hot=True, shortcut=False),
     _k("Tab", "Next bow field", "_noop", shortcut=False),
-    _k("Del", "Soft-delete", "_noop", shortcut=False),
+    _k("Del", "Remove crossing", "_review_remove", shortcut=False),
+    _k("Shift+Del", "Restore crossing", "_review_restore", show=False,
+       shortcut=False),
+    _k("U", "Restore crossing", "_review_restore", shortcut=False),
+    _k("Ins", "Clone crossing", "_review_clone", shortcut=False),
+    _k("Shift+D", "Clone crossing", "_review_clone", show=False, shortcut=False),
     _k("E", "Edit race", "_on_e", typable=True),
     _k("Esc", "Back to Ready", "_esc"),
     _k("Ctrl+Q", "Quit", "_quit", show=False),
