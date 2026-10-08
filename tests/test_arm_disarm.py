@@ -7,6 +7,8 @@ import pytest
 
 pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
 
+from PySide6.QtWidgets import QLabel
+
 from hallofframe.controller import CaptureController
 from hallofframe.framebuffer import FrameBuffer, Frame
 from hallofframe.main import build_trigger
@@ -155,6 +157,50 @@ class TestArmDisarm(unittest.TestCase):
             # "recorded, not in roster" banner.
             win.roster_view.render_banner(win.roster.result, recorded_keys(storage))
             self.assertEqual(win.banner_host.lay.count(), 1)  # amber dup only
+        finally:
+            ctl.stop()
+            storage.close()
+            win.close()
+
+    def test_cp1252_roster_loads_and_warns(self):
+        # A Windows-1252 export must not stop the window from constructing; the
+        # row loads and the Ready-screen banner reports the encoding problem.
+        p = self.data_root / "races.csv"
+        p.write_bytes("race_no,heat_no,name\n101,1,Mæn østå\n".encode("cp1252"))
+        cfg = self.config_factory(races={"csv_path": str(p)})
+        storage = Storage(self.data_root)
+        ctl = CaptureController(cfg, storage, self.buffer)
+        win = MainWindow(cfg, ctl, self.buffer)
+        try:
+            self.assertTrue(win.roster.result.ok)
+            self.assertEqual([r.name for r in win.roster.races], ["Mæn østå"])
+            self.assertEqual(win.ready.current_race().name, "Mæn østå")
+            texts = []
+            for i in range(win.banner_host.lay.count()):
+                w = win.banner_host.lay.itemAt(i).widget()
+                texts.extend(lbl.text() for lbl in w.findChildren(QLabel))
+            self.assertTrue(any("Windows-1252" in t for t in texts))
+        finally:
+            ctl.stop()
+            storage.close()
+            win.close()
+
+    def test_roster_problem_banner_format(self):
+        # A successful load with a skipped line shows exactly one amber banner
+        # with the documented headline.
+        p = self.data_root / "races.csv"
+        p.write_bytes(b"race_no,heat_no,name\n101,1,Final A\n2\n102,1,Final B\n")
+        cfg = self.config_factory(races={"csv_path": str(p)})
+        storage = Storage(self.data_root)
+        ctl = CaptureController(cfg, storage, self.buffer)
+        win = MainWindow(cfg, ctl, self.buffer)
+        try:
+            self.assertEqual(win.banner_host.lay.count(), 1)
+            banner = win.banner_host.lay.itemAt(0).widget()
+            heads = [lbl.text() for lbl in banner.findChildren(QLabel)]
+            self.assertTrue(any(
+                t == "Roster loaded: 2 races · 1 line skipped (lines 3)"
+                for t in heads), heads)
         finally:
             ctl.stop()
             storage.close()

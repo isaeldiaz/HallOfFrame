@@ -171,13 +171,20 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
     race roster, one race per row with three columns: `race_no`, `heat_no`,
     `name`. The Ready screen shows a single combined string (`race_no-Hheat -
     name`) in the dropdown but stores/exports the three fields separately. It
-    passes the selected race's fields to `start_race`. A one-column (legacy)
-    CSV or a missing file degrades gracefully (the UI falls back to a timestamp
-    name; `write_example` writes a starter file). The Qt-free `Roster` class in
-    `hallofframe/roster.py` owns the file and the race-day edits: skip/unskip,
-    `move` up/down, `add` after the selected row, `rename`; display order is
-    always file order (no sorting). The old Merge/repoint and near-miss
-    suggestion flows were removed (phase 2).
+    passes the selected race's fields to `start_race`. **Loading never raises and
+    never stops a race (keep-good-rows):** a missing file degrades to a
+    timestamp name (`write_example` writes a starter file), while a bad export —
+    an `.xlsx` picked by mistake, a directory, a >1 MB field — is reported in
+    the Ready-screen banner (`file_error`) and the operator can still race
+    without a roster. Windows-1252 and UTF-16 exports are decoded and load
+    (cp1252 with a warning). A malformed row is reported (`errors`) and skipped,
+    but the good rows still load; a one-column legacy CSV still loads.
+    Semicolon-delimited files are detected and kept semicolon-delimited on
+    write-back, and a non-standard header (`Race,Heat,Name`) is recognised with
+    a warning. The Qt-free `Roster` class in `hallofframe/roster.py` owns the
+    file and the race-day edits: skip/unskip, `move` up/down, `add` after the
+    selected row, `rename`; display order is always file order (no sorting). The
+    old Merge/repoint and near-miss suggestion flows were removed (phase 2).
 - **Race selector (Ready screen).** Keys already stored in `{event_name}.db`
   (`roster.recorded_keys(storage)`, distinct across all `race` rows) are
   **grayed out** in the dropdown but stay selectable, so a completed race can be

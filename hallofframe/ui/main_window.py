@@ -169,7 +169,13 @@ class MainWindow(QMainWindow):
                                      or self.controller.race_id),
             recompute=self._recompute_state)
 
-        self.roster_view.load()
+        try:
+            self.roster_view.load()
+        except Exception as exc:  # never let a bad CSV stop the window
+            if self._logger is not None:
+                self._logger.error("roster", "load failed", error=str(exc))
+            self.roster.result.file_error = str(exc)
+            self.roster_view.render()
         self.ready.race_selected.connect(self._on_race_selected)
         self.ready.add_race_clicked.connect(self.roster_view.open_add_race)
         self.ready.skip_clicked.connect(self.roster_view.toggle_skip)

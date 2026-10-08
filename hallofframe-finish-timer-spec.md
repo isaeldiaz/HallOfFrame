@@ -1418,6 +1418,18 @@ The stream URL path (`/live`) and ports are **app- and version-dependent**.
 The setup runbook (§9) must have the operator verify them in the iOS app's own
 UI rather than assuming.
 
+**Roster CSV loading never raises (keep-good-rows).** The race list is a CSV
+exported from Excel; the parser accepts what it can and reports the rest in the
+Ready-screen banner. A missing file, or a non-CSV export (an `.xlsx` picked by
+mistake, a directory, a field over the reader's limit), yields no roster and is
+reported (`file_error`) — the operator can still run races. Windows-1252 and
+UTF-16 exports are decoded and load (cp1252 with a warning). A malformed row is
+reported (`errors`) and skipped, but the good rows still load; a one-column
+legacy roster still loads. Semicolon-delimited exports (Excel with a Norwegian
+locale) are detected and kept semicolon-delimited on write-back, and a
+non-standard header (`Race,Heat,Name`) is recognised with a warning. Timing
+never depends on the roster parsing cleanly.
+
 **This file is never written by the application.** v1.0 had §5.5 write the
 calibration result back into `[timing]`, which would have required a TOML writer
 (stdlib `tomllib` is read-only). Resolved in §6.7: `config.toml` is

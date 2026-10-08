@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-from ..roster import Roster, RosterWriteError, recorded_keys
+from ..roster import Roster, recorded_keys
 from . import styles
 from .ready_screen import choose_roster_file, roster_path
 from .state import AppState
@@ -106,17 +106,23 @@ class RosterView:
                     result.file_error,
                     [("Reload", self.reload),
                      ("Load another roster…", self.load_dialog)]))
-            elif result.errors:
-                line = result.errors[0][0]
-                self.banner_host.add_banner(Banner(
-                    styles.RED,
-                    f"Roster failed to parse · {os.path.basename(result.path)}"
-                    f" line {line}",
-                    "Expected race_no, heat_no, name. No roster is loaded.",
-                    [("Reload", self.reload),
-                     ("Load another roster…", self.load_dialog)]))
             return
-        # A roster is loaded: duplicates and/or dropped recorded races.
+        # A roster is loaded, but some lines may have been skipped and/or the
+        # file may have been read non-natively. Report it; good rows still load.
+        if result.errors or result.warnings:
+            parts = [f"Roster loaded: {len(result.races)} races"]
+            if result.errors:
+                lines = ", ".join(str(ln) for ln, _ in result.errors)
+                n = len(result.errors)
+                parts.append(
+                    f"{n} line{'s' if n != 1 else ''} skipped (lines {lines})")
+            if result.warnings:
+                parts.append(" · ".join(result.warnings))
+            self.banner_host.add_banner(Banner(
+                styles.AMBER, " · ".join(parts),
+                "Good rows still loaded. Racing without a full roster is allowed.",
+                [("Reload", self.reload),
+                 ("Load another roster…", self.load_dialog)]))
         loaded_keys = {r.key for r in result.races}
         # Only numbered races count as "dropped"; provisional/unlisted races key
         # on a timestamp name ("name", ...) that can never be in the roster.
@@ -172,7 +178,7 @@ class RosterView:
             return
         try:
             self.roster.move(key, delta)
-        except RosterWriteError as exc:
+        except Exception as exc:
             self._toast(f"Could not move race: {exc}")
             return
         self.render()

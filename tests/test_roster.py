@@ -83,7 +83,9 @@ def test_twocolumn_race_heat_no_name_is_malformed_not_rekeyed(tmp_path):
         csv.writer(fh).writerows([["race_no", "heat_no", "name"], ["101", "2", ""]])
     r = load_races(p)
     assert r.errors == [(2, "expected race_no, heat_no, name")]
-    assert not r.ok
+    assert r.races == []
+    # A malformed row is reported but is not a file-level failure (BEHAVIOUR §4).
+    assert r.ok
 
 
 def test_legacy_one_column_roster(tmp_path):
@@ -103,7 +105,7 @@ def test_missing_file_reports_missing(tmp_path):
     assert not (tmp_path / "nope.csv").exists()
 
 
-def test_malformed_row_reports_line_no_no_roster(tmp_path):
+def test_malformed_row_reports_line_no_and_keeps_good_rows(tmp_path):
     p = tmp_path / "races.csv"
     with open(p, "w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows([
@@ -114,9 +116,9 @@ def test_malformed_row_reports_line_no_no_roster(tmp_path):
         ])
     r = load_races(p)
     assert r.errors == [(3, "expected race_no, heat_no, name")]
-    assert not r.ok
-    # no roster loads at all on a malformed row (BEHAVIOUR §4)
-    assert r.races == []
+    # The good rows still load; a malformed row is not a file-level failure.
+    assert r.ok
+    assert [x.display for x in r.races] == ["101-H1 - Final A", "102-H1 - Final B"]
 
 
 def test_duplicate_normalised_keys_reported_first_wins(tmp_path):
