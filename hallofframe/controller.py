@@ -78,6 +78,10 @@ class CaptureController:
         # a dead stream at start). Set in start_race(); fixed for the race.
         self.image_off = self.image_mode == "off"
 
+        # Unbounded on purpose: bounding it would let `record_crossing` drop the
+        # primary datum under disk pressure. A human press rate cannot outrun the
+        # writer, and `_writer_loop` now survives a failed commit, so the queue
+        # only grows if the writer is genuinely stuck (logged as a warning).
         self._queue: queue.Queue = queue.Queue()
         self._writer_thread = threading.Thread(target=self._writer_loop,
                                                daemon=True, name="persist-writer")
