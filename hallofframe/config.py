@@ -103,7 +103,8 @@ class Config:
     @property
     def data_root(self) -> Path:
         raw = self.data.get("paths", {}).get("data_root", "~/regatta-data")
-        return Path(os.path.expanduser(raw)).resolve()
+        # Expand both `~` and `$HOME`/`$VAR` (README documents `$HOME/...`).
+        return Path(os.path.expanduser(os.path.expandvars(raw))).resolve()
 
     @property
     def event_name(self) -> str:
