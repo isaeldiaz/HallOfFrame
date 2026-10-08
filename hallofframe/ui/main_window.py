@@ -635,6 +635,10 @@ class MainWindow(QMainWindow):
         if self._review_screen is not None:
             self._review_screen.restore_selected()
 
+    def _review_undo(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.undo_delete()
+
     def _review_clone(self) -> None:
         if self._review_screen is not None:
             self._review_screen.clone_selected()

@@ -6,9 +6,12 @@ list with an inline bow field per row on the right. ``↑/↓`` select a crossin
 ``Shift+←/→`` step frames, ``Tab`` saves the selected frame as the crossing's
 primary photo and focuses its bow field so the bow can be typed in the same
 view, then ``Enter``/``Tab`` in the field commits the bow and moves to the next
-crossing. ``Del`` soft-deletes the selected row, ``Shift+Del`` or ``U`` restores
-it, and ``Ins`` or ``Shift+D`` clones it (the clone lands beside its parent
-because both sort by ``elapsed_s``); ``Esc`` returns to READY. Deleted rows are
+crossing. ``Del`` soft-deletes the selected row, ``Shift+Del`` restores the
+selected row, and ``U`` undoes deletions newest-first (the whole history, one
+press each). ``Ins`` or ``Shift+D`` clones the selected crossing (the clone
+lands beside its parent because both sort by ``elapsed_s``); ``Esc`` inside a
+bow/time field releases the field so ``Del``/``Ins`` work again, and ``Esc`` on
+the screen returns to READY. Deleted rows are
 not hidden here — they stay in the list struck through and dimmed so they can be
 restored (plan step 7.2). Navigation keys keep working from a focused bow field:
 ``Shift+←/→`` step that crossing's frames and ``↑/↓`` jump to the adjacent
@@ -218,6 +221,10 @@ class ReviewScreen(QWidget):
         self._frame_paths: dict[int, list] = {}  # capture_id -> [frame dicts]
         self.panel: QWidget | None = None
         self._t0_wall: float | None = None
+        # Deletion history, oldest first, so ``U`` can undo more than the last
+        # removal (capture ids; reset when a different race is loaded).
+        self._undo_stack: list[int] = []
+        self._stack_race_id: int | None = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -244,7 +251,7 @@ class ReviewScreen(QWidget):
         self.edit_btn.clicked.connect(self.edit_race_requested)
         header.addWidget(self.edit_btn)
         header.addStretch(1)
-        step_hint = QLabel("Shift+←/→ to step frames · ±500 ms")
+        step_hint = QLabel("Shift+←/→ to step frames · ±500 ms · Esc leaves a field")
         step_hint.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:15px;")
         header.addWidget(step_hint)
         lv.addLayout(header)
@@ -310,6 +317,7 @@ class ReviewScreen(QWidget):
         self.list.advance_requested.connect(self._advance)
         self.list.step_frame.connect(self._step_frame)
         self.list.select_step.connect(self._select_step)
+        self.list.escape_pressed.connect(self._leave_field)
         rlay = QVBoxLayout(right)
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
@@ -320,6 +328,9 @@ class ReviewScreen(QWidget):
 
     # --- public API -------------------------------------------------------
     def load_captures(self) -> None:
+        if self._stack_race_id != self.race_id:
+            self._undo_stack = []
+            self._stack_race_id = self.race_id
         # dict(), not the sqlite3.Row it came from: _commit_selected_frame()
         # writes the new primary_image back into these rows, and a Row is
         # read-only (it raised TypeError on every Tab/Enter save).
@@ -501,13 +512,40 @@ class ReviewScreen(QWidget):
             self._delete(self._selected_seq)
 
     def restore_selected(self) -> None:
-        """Undo the soft delete on the selected row (``Shift+Del`` / ``U``)."""
+        """Restore the selected crossing if it is struck through (``Shift+Del``)."""
         cap = self._selected_capture()
         if cap is None or not cap.get("deleted"):
             return
+        self._restore(cap)
+
+    def undo_delete(self) -> None:
+        """Undo deletions newest-first (``U``), walking the whole history.
+
+        Each press restores the most recently soft-deleted crossing and selects
+        it, so a run of deletions can be undone one press at a time. Restoring a
+        specific struck-through row is still possible with ``Shift+Del`` after
+        selecting it.
+        """
+        cap = self._pop_deleted_from_history()
+        if cap is not None:
+            self._restore(cap)
+
+    def _restore(self, cap: dict) -> None:
         self.controller.restore(cap["id"])
         cap["deleted"] = 0
+        if cap["id"] in self._undo_stack:
+            self._undo_stack.remove(cap["id"])
         self.list.set_deleted(cap["sequence"], False)
+        self._select(cap["sequence"])
+
+    def _pop_deleted_from_history(self) -> dict | None:
+        """Newest still-deleted crossing from the history, discarding stale ids."""
+        while self._undo_stack:
+            capture_id = self._undo_stack.pop()
+            cap = next((c for c in self._captures if c["id"] == capture_id), None)
+            if cap is not None and cap.get("deleted"):
+                return cap
+        return None
 
     def clone_selected(self) -> None:
         """Duplicate the selected crossing (``Ins`` / ``Shift+D``).
@@ -530,6 +568,7 @@ class ReviewScreen(QWidget):
         self.controller.remove(cap["id"])
         cap["deleted"] = 1
         self.list.set_deleted(sequence, True)
+        self._undo_stack.append(cap["id"])
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
@@ -596,7 +635,7 @@ class ReviewScreen(QWidget):
             return
         if key == Qt.Key_U and not (mods & (Qt.ShiftModifier | Qt.ControlModifier
                                             | Qt.AltModifier | Qt.MetaModifier)):
-            self.restore_selected()
+            self.undo_delete()
             return
         if key == Qt.Key_D and mods & Qt.ShiftModifier:
             self.clone_selected()
@@ -631,6 +670,15 @@ class ReviewScreen(QWidget):
         seq = self._captures[(idx + delta) % len(self._captures)]["sequence"]
         self._select(seq)
         self.list.focus_bow(seq)
+
+    def _leave_field(self) -> None:
+        """Esc inside a bow/time field: return the keyboard to the screen.
+
+        Committing happens via editingFinished when focus moves. With focus back
+        on the screen, ``Del``/``Ins``/``U`` and the arrows work again; a second
+        Esc then closes REVIEW (the application-wide Esc shortcut).
+        """
+        self.setFocus()
 
     def _save_and_focus_bow(self) -> None:
         """Promote the selected frame, then focus the current crossing's bow."""

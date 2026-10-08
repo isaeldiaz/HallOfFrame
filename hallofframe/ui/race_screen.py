@@ -72,12 +72,14 @@ class LastCapturePanel(QWidget):
         self._flash_timer.setSingleShot(True)
         self._flash_timer.timeout.connect(self._end_flash)
         self._flash_active = False
+        self._sequence: int | None = None
 
     def set_accent(self, accent: str) -> None:
         self.accent = accent
 
-    def set_capture(self, sequence: int, elapsed_s: float) -> None:
-        self.heading.setText(f"#{sequence:03d} · {format_elapsed(elapsed_s)}")
+    def set_capture(self, sequence: int, position: int, elapsed_s: float) -> None:
+        self._sequence = sequence
+        self.heading.setText(f"#{position:03d} · {format_elapsed(elapsed_s)}")
         self.offset.setText("+0 ms · nearest frame")
         self._flash()
 
@@ -133,7 +135,7 @@ class RaceScreen(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(40, 34, 40, 22)
         header.setAlignment(Qt.AlignBottom)
-        self.clock = QLabel("00:00.000")
+        self.clock = QLabel("00:00.00")
         self.clock.setProperty("mono", True)
         self.clock.setStyleSheet(
             f"font-family:'{styles.FONT_MONO}'; font-size:186px; font-weight:600;"
@@ -208,11 +210,14 @@ class RaceScreen(QWidget):
     def add_capture(self, data: dict) -> None:
         self.log.add(data)
         self.set_count(self.log.count())
-        self.last_capture.set_capture(data["sequence"], data["elapsed_s"])
+        position = self.log.position_of(data["sequence"])
+        if position is not None:
+            self.last_capture.set_capture(data["sequence"], position,
+                                          data["elapsed_s"])
 
     def update_image(self, sequence: int, path: str) -> None:
         self.log.update_thumb(sequence, path)
-        if self.last_capture.heading.text().startswith(f"#{sequence:03d}"):
+        if self.last_capture._sequence == sequence:
             self.last_capture.set_photo(path)
 
     def remove_capture(self, sequence: int) -> None:

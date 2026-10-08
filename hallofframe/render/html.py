@@ -460,7 +460,7 @@ def _meta_cell(label: str, value: str) -> str:
             f'<span class="meta-value">{_esc(value)}</span></span>')
 
 
-def _card_html(capture, img_base: str = "") -> str:
+def _card_html(capture, position: int, img_base: str = "") -> str:
     word = flag_word(capture["image_flag"],
                      _row_value(capture, "debounce_suspect", 0))
     bow = capture["bow_number"] or ""
@@ -468,8 +468,8 @@ def _card_html(capture, img_base: str = "") -> str:
     elapsed = format_elapsed(capture["elapsed_s"])
     if _row_value(capture, "t0_reconstructed", 0):
         elapsed = "~" + elapsed  # measured after a reconstructed resume (N4)
-    elapsed_raw = "%.6f" % capture["elapsed_s"]
-    seq = "#%03d" % capture["sequence"]
+    elapsed_raw = "%.2f" % capture["elapsed_s"]
+    seq = "#%03d" % position
     search = " ".join(str(v) for v in (capture["sequence"], bow, elapsed, notes,
                                        word) if v)
     note_line = ""
@@ -518,7 +518,10 @@ def _race_html(race, captures, img_base: str = "", excel_id: int | None = None) 
                 "restart — elapsed times for this race are approximate.</div>")
     search = " ".join(str(v) for v in (race["race_no"] or "", race["heat_no"] or "",
                                        race["name"] or "", label) if v)
-    body = ("".join(_card_html(c, img_base) for c in captures) if captures else
+    ordered = sorted(captures, key=lambda c: (c["elapsed_s"], c["sequence"]))
+    body = ("".join(_card_html(c, pos, img_base)
+                    for pos, c in enumerate(ordered, start=1))
+            if ordered else
             '<div class="empty">No crossings recorded.</div>')
     metas = "".join(
         f'<span class="race-meta-label">{h}</span>'

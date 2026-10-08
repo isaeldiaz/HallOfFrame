@@ -1,5 +1,5 @@
-race_id,race_no,heat_no,name,gun_start,sequence,bow_number,elapsed_seconds,elapsed_formatted,wall_clock_utc,captured_frame_link,image_flag,notes
-1,101,1,"Men under 18, single, final",22:13:20,1,07,6.120000,0:06.120,2023-11-14T22:13:26.120Z,races/Race-20231114-2213/frames/00006120.jpg,,photo finish
-1,101,1,"Men under 18, single, final",22:13:20,2,04,7.450000,0:07.450,2023-11-14T22:13:27.450Z,,approximate,
-1,101,1,"Men under 18, single, final",22:13:20,3,12,8.010000,0:08.010,2023-11-14T22:13:28.010Z,,missing,lane 3
-2,102,2,"Women open, double, heat",22:23:20,1,03,9.990000,0:09.990,2023-11-14T22:23:29.990Z,races/Race-20231114-2213/frames/00009990.jpg,,
+race_id,race_no,heat_no,name,gun_start,position,bow_number,elapsed_seconds,elapsed_formatted,wall_clock_utc,captured_frame_link,image_flag,notes
+1,101,1,"Men under 18, single, final",22:13:20,1,07,6.12,0:06.12,2023-11-14T22:13:26.12Z,races/Race-20231114-2213/frames/00006120.jpg,,photo finish
+1,101,1,"Men under 18, single, final",22:13:20,2,04,7.45,0:07.45,2023-11-14T22:13:27.45Z,,approximate,
+1,101,1,"Men under 18, single, final",22:13:20,3,12,8.01,0:08.01,2023-11-14T22:13:28.01Z,,missing,lane 3
+2,102,2,"Women open, double, heat",22:23:20,1,03,9.99,0:09.99,2023-11-14T22:23:29.99Z,races/Race-20231114-2213/frames/00009990.jpg,,

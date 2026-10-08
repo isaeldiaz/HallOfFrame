@@ -9,7 +9,7 @@ from . import format_elapsed, local_hms, utc_iso
 from .html import _all_race_blocks
 
 
-_COLUMNS = ["race_no", "heat_no", "name", "sequence", "bow_number",
+_COLUMNS = ["race_no", "heat_no", "name", "position", "bow_number",
             "elapsed_seconds", "elapsed_formatted", "wall_clock_utc",
             "image_file", "image_flag", "notes"]
 
@@ -32,7 +32,8 @@ def _data_rows(storage: Storage, race_id: int):
     name = (race["name"] or "") if race else ""
     yield list(_COLUMNS)
     captures = storage.captures_for_race(race_id, include_deleted=False)
-    for c in captures:
+    captures = sorted(captures, key=lambda c: (c["elapsed_s"], c["sequence"]))
+    for position, c in enumerate(captures, start=1):
         # A "~" marks an elapsed time measured after a reconstructed resume (N4).
         elapsed = format_elapsed(c["elapsed_s"])
         if c["t0_reconstructed"]:
@@ -41,9 +42,9 @@ def _data_rows(storage: Storage, race_id: int):
             race_no,
             heat_no,
             name,
-            c["sequence"],
+            position,
             c["bow_number"] or "",
-            f"{c['elapsed_s']:.6f}",
+            f"{c['elapsed_s']:.2f}",
             elapsed,
             utc_iso(c["t_press_wall"]),
             c["primary_image"] or "",
@@ -62,7 +63,7 @@ def export_csv(storage: Storage, race_id: int, out_path: str | Path) -> Path:
 
 
 _ALL_COLUMNS = ["race_id", "race_no", "heat_no", "name", "gun_start",
-                "sequence", "bow_number", "elapsed_seconds",
+                "position", "bow_number", "elapsed_seconds",
                 "elapsed_formatted", "wall_clock_utc", "captured_frame_link",
                 "image_flag", "notes"]
 
@@ -93,14 +94,16 @@ def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
                                  for cell in base + [""] * (len(_ALL_COLUMNS)
                                                             - len(base))])
                 continue
-            for c in captures:
+            for position, c in enumerate(
+                    sorted(captures,
+                           key=lambda c: (c["elapsed_s"], c["sequence"])), start=1):
                 elapsed = format_elapsed(c["elapsed_s"])
                 if c["t0_reconstructed"]:
                     elapsed = "~" + elapsed
                 writer.writerow([_safe(cell) for cell in base + [
-                    c["sequence"],
+                    position,
                     c["bow_number"] or "",
-                    f"{c['elapsed_s']:.6f}",
+                    f"{c['elapsed_s']:.2f}",
                     elapsed,
                     utc_iso(c["t_press_wall"]),
                     c["primary_image"] or "",

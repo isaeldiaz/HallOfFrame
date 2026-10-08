@@ -7,6 +7,8 @@ screen, with no parameter to change it. These tests pin that down plus the
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.ui.crossing_list import CrossingList
@@ -83,4 +85,45 @@ def test_editable_list_shows_bow_and_time_fields(qapp):
     lst = CrossingList(editable=True)
     lst.add(_data(1, 5.0, bow="7"))
     assert len(lst.findChildren(QLineEdit)) == 2  # a time and a bow field
+    lst.deleteLater()
+
+
+def test_row_numbers_are_time_ordered_positions_not_sequences(qapp):
+    # The operator sees finishing position, not the database sequence: a row's
+    # number is its fastest-first rank.
+    lst = CrossingList(editable=False)
+    for seq, elapsed in [(1, 30.0), (2, 10.0), (3, 20.0)]:
+        lst.add(_data(seq, elapsed))
+    assert lst.position_of(2) == 1
+    assert lst.position_of(3) == 2
+    assert lst.position_of(1) == 3
+    assert lst._rows[2].seq_lbl.text() == "001"
+    assert lst._rows[1].seq_lbl.text() == "003"
+    lst.deleteLater()
+
+
+def test_a_clone_sharing_its_parent_time_lands_right_after_it(qapp):
+    # A clone copies its parent's time; ties fall back to sequence so the clone
+    # takes the next position.
+    lst = CrossingList(editable=False)
+    lst.add(_data(1, 5.0))
+    lst.add(_data(2, 5.0))  # clone of 1
+    assert lst.position_of(1) == 1
+    assert lst.position_of(2) == 2
+    lst.deleteLater()
+
+
+def test_bow_field_claims_escape_and_emits_escape(qapp):
+    # Esc inside a field must release the field, not reach the application-wide
+    # "back to Ready" shortcut.
+    lst = CrossingList(editable=True)
+    lst.add(_data(1, 5.0))
+    bow = lst._rows[1].bow_edit
+    got = []
+    lst.escape_pressed.connect(lambda: got.append(True))
+    override = QKeyEvent(QEvent.ShortcutOverride, Qt.Key_Escape, Qt.NoModifier)
+    qapp.sendEvent(bow, override)
+    assert override.isAccepted(), "Esc must be claimed from the shortcut map"
+    qapp.sendEvent(bow, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    assert got == [True]
     lst.deleteLater()

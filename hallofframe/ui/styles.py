@@ -95,6 +95,12 @@ STYLESHEET = f"""
 QMainWindow, QWidget#Root {{
     background-color: {BG};
 }}
+/* The app-wide stylesheet sets light text on every widget, but QDialog and
+   QMessageBox keep the platform's light window background unless told
+   otherwise, leaving white-on-light text. Give them the app background. */
+QDialog, QMessageBox {{
+    background-color: {BG};
+}}
 QLabel {{
     background: transparent;
 }}

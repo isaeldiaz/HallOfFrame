@@ -269,7 +269,7 @@ _REVIEW_KEYS = [
     _k("Del", "Remove crossing", "_review_remove", shortcut=False),
     _k("Shift+Del", "Restore crossing", "_review_restore", show=False,
        shortcut=False),
-    _k("U", "Restore crossing", "_review_restore", shortcut=False),
+    _k("U", "Undo delete", "_review_undo", shortcut=False),
     _k("Ins", "Clone crossing", "_review_clone", shortcut=False),
     _k("Shift+D", "Clone crossing", "_review_clone", show=False, shortcut=False),
     _k("E", "Edit race", "_on_e", typable=True),

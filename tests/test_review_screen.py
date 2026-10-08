@@ -392,6 +392,44 @@ class TestReviewScreen(unittest.TestCase):
         rs.assert_called_once_with(capture_id)
         self.assertFalse(screen.list._rows[seq].deleted)
 
+    def test_u_undoes_deletions_newest_first(self):
+        # A longer history than one: repeated U walks back through the deletions
+        # in reverse order.
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seqs = [c["sequence"] for c in screen._captures]
+        for seq in seqs:
+            screen._delete(seq)
+        self.assertTrue(all(screen.list._rows[s].deleted for s in seqs))
+        for expected in reversed(seqs):
+            self.key(Qt.Key_U)
+            self.assertFalse(screen.list._rows[expected].deleted,
+                             f"U must restore sequence {expected} next")
+        self.assertEqual(screen._undo_stack, [])
+
+    def test_escape_in_a_bow_field_releases_focus_without_leaving_review(self):
+        # The operator types a bow, then needs Del/Ins again: Esc must drop the
+        # field (and the app-wide Esc shortcut must not fire).
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        bow = screen.list._rows[seq].bow_edit
+        bow.setFocus()
+        self.app.processEvents()
+        self.assertTrue(bow.hasFocus())
+        self.app.sendEvent(bow, QKeyEvent(
+            QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+        self.app.processEvents()
+        self.assertFalse(bow.hasFocus(), "Esc must release the field")
+        self.assertEqual(self.win.session.phase, Phase.REVIEW,
+                         "Esc in a field must not close REVIEW")
+        capture_id = screen._current_capture["id"]
+        with mock.patch.object(self.controller, "remove") as rm:
+            self.key(Qt.Key_Delete)
+        rm.assert_called_once_with(capture_id)
+
     def test_insert_key_clones_the_controller_row(self):
         screen = self.review()
         screen.setFocus()

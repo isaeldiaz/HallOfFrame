@@ -24,9 +24,9 @@ def export_env(request, data_root, storage):
 @pytest.mark.usefixtures("export_env")
 class TestExport(unittest.TestCase):
     def test_format_elapsed(self):
-        self.assertEqual(format_elapsed(0.0), "0:00.000")
-        self.assertEqual(format_elapsed(372.483), "6:12.483")
-        self.assertEqual(format_elapsed(60.0), "1:00.000")
+        self.assertEqual(format_elapsed(0.0), "0:00.00")
+        self.assertEqual(format_elapsed(372.483), "6:12.48")
+        self.assertEqual(format_elapsed(60.0), "1:00.00")
 
     def test_parse_elapsed(self):
         self.assertAlmostEqual(parse_elapsed("6:12.483"), 372.483, places=3)
@@ -46,7 +46,7 @@ class TestExport(unittest.TestCase):
         export_csv(self.storage, self.race_id, out)
         with open(out, newline="", encoding="utf-8") as fh:
             reader = list(csv.reader(fh))
-        self.assertEqual(reader[0], ["race_no", "heat_no", "name", "sequence",
+        self.assertEqual(reader[0], ["race_no", "heat_no", "name", "position",
                                      "bow_number", "elapsed_seconds",
                                      "elapsed_formatted", "wall_clock_utc",
                                      "image_file", "image_flag", "notes"])
@@ -57,7 +57,7 @@ class TestExport(unittest.TestCase):
         # bow number 07 not mangled as a number
         self.assertEqual(reader[1][4], "07")
         self.assertEqual(reader[1][3], "1")
-        self.assertEqual(reader[1][6], "0:01.000")
+        self.assertEqual(reader[1][6], "0:01.00")
 
     def test_soft_deleted_excluded(self):
         cap = self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 1000.0, 0.0)
@@ -67,7 +67,7 @@ class TestExport(unittest.TestCase):
         export_csv(self.storage, self.race_id, out)
         with open(out, newline="", encoding="utf-8") as fh:
             rows = list(csv.reader(fh))[1:]
-        self.assertEqual([r[3] for r in rows], ["2"])
+        self.assertEqual([r[3] for r in rows], ["1"])
 
     def test_csv_neutralizes_formula_injection(self):
         self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 3.0, 0.0,
@@ -89,7 +89,7 @@ class TestExport(unittest.TestCase):
         self.assertTrue(row[6].startswith("~"), row[6])
 
     def test_utc_iso(self):
-        self.assertRegex(utc_iso(0.0), r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+        self.assertRegex(utc_iso(0.0), r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{2}Z")
 
     def test_export_all_csv(self):
         # Race 1: two crossings (2nd press fastest), one soft-deleted.
@@ -155,7 +155,7 @@ class TestExport(unittest.TestCase):
         lines = tsv.strip("\r\n").split("\r\n")
         # only crossing values, no metadata and no column header
         self.assertEqual(len(lines), 1)
-        self.assertEqual(lines[0], "1\t0:03.000\t04\t")
+        self.assertEqual(lines[0], "1\t0:03.00\t04\t")
         self.assertNotIn("Race ID", tsv)
         self.assertNotIn("Gun start", tsv)
         self.assertNotIn("Position", tsv)
@@ -187,7 +187,7 @@ class TestExport(unittest.TestCase):
         self.assertIn('src="races/101%20H1/c.jpg"', markup)
         self.assertNotIn(str(self.data_root), markup)
         # fastest first: bow 04's card precedes bow 09's
-        self.assertLess(markup.index("0:03.000"), markup.index("0:10.000"))
+        self.assertLess(markup.index("0:03.00"), markup.index("0:10.00"))
 
     def test_html_lists_race_without_crossings(self):
         r2 = self.storage.create_race("Heat", 5000.0, 5000.0, "direct", 0.0,
@@ -202,7 +202,7 @@ class TestExport(unittest.TestCase):
                                            99.0, 0.0, bow_number="77")
         self.storage.update_capture(gone, deleted=1)
         markup = self._write_html()
-        self.assertNotIn("1:39.000", markup)
+        self.assertNotIn("1:39.00", markup)
         self.assertNotIn(">77<", markup)
 
     def test_html_escapes_and_flags(self):
@@ -242,7 +242,7 @@ def test_export_shim_reexports_and_warns():
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
     for name in old_names:
         assert hasattr(shim, name), f"shim lost {name!r}"
-    assert shim.format_elapsed(372.483) == "6:12.483"
+    assert shim.format_elapsed(372.483) == "6:12.48"
 
 
 if __name__ == "__main__":

@@ -5,8 +5,9 @@ Rows are always ordered **fastest at top, slowest at bottom** (spec §7.3, decid
 2026-10-06, §13.2) — there is deliberately no ``order`` argument and no config
 key, so the configurable ordering that caused the confusion cannot come back.
 
-One row per crossing: sequence, thumbnail, elapsed (mono), a word flag column,
-and — only when ``editable`` — inline bow-number and elapsed-time fields.
+One row per crossing: position (fastest-first rank, not the DB ``sequence``),
+thumbnail, elapsed (mono), a word flag column, and — only when ``editable`` —
+inline bow-number and elapsed-time fields.
 
 Flags use words, not punctuation: ``NO IMAGE`` (missing), ``APPROX``
 (approximate), ``DOUBLE?`` (debounce suspect).
@@ -72,6 +73,7 @@ class _BowEdit(QLineEdit):
     advance = Signal(int)     # sequence (Enter/Tab)
     step_frame = Signal(int)  # +1/-1 (Shift+←/→)
     select_step = Signal(int)  # +1/-1 (↑/↓)
+    escape = Signal()          # Esc: release the field, keep the screen
 
     def __init__(self, sequence, *a, **k):
         super().__init__(*a, **k)
@@ -83,9 +85,17 @@ class _BowEdit(QLineEdit):
         # navigation before keyPressEvent() is ever called, so a Tab branch there
         # never runs (it moved focus to the list's scroll area instead of
         # advancing). Leaving the field emits editingFinished, which persists it.
+        if event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_Escape:
+            # Claim Esc before the application-wide "back to Ready" shortcut:
+            # inside a field it must release the field, not leave REVIEW.
+            event.accept()
+            return True
         if event.type() == QEvent.KeyPress:
             key = event.key()
             mods = event.modifiers()
+            if key == Qt.Key_Escape:
+                self.escape.emit()
+                return True
             if key in (Qt.Key_Tab, Qt.Key_Backtab):
                 self.advance.emit(self._seq)
                 return True
@@ -106,7 +116,7 @@ class _BowEdit(QLineEdit):
 
 
 class _TimeEdit(_BowEdit):
-    """Editable elapsed-time field (``M:SS.mmm``); commits on editingFinished.
+    """Editable elapsed-time field (``M:SS.cc``); commits on editingFinished.
 
     Reuses ``_BowEdit`` so Tab/Enter advance and Shift+←/→/↑/↓ keep working
     while the field has focus. The raw text is emitted; the screen owns parsing
@@ -273,6 +283,7 @@ class CrossingList(QWidget):
     advance_requested = Signal(int)        # sequence (Enter/Tab in a field)
     step_frame = Signal(int)               # +1/-1 (Shift+←/→ in a field)
     select_step = Signal(int)              # +1/-1 (↑/↓ in a field)
+    escape_pressed = Signal()              # Esc in a field: release focus
 
     def __init__(self, *, editable: bool, parent=None):
         super().__init__(parent)
@@ -280,6 +291,7 @@ class CrossingList(QWidget):
         self._rows: dict[int, _Row] = {}
         self._edits: dict[int, QLineEdit] = {}
         self._selected: int | None = None
+        self._positions: dict[int, int] = {}  # sequence -> fastest-first rank
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -324,9 +336,11 @@ class CrossingList(QWidget):
             row.bow_edit.advance.connect(self.advance_requested)
             row.bow_edit.step_frame.connect(self.step_frame)
             row.bow_edit.select_step.connect(self.select_step)
+            row.bow_edit.escape.connect(self.escape_pressed)
             row.time_edit.advance.connect(self.advance_requested)
             row.time_edit.step_frame.connect(self.step_frame)
             row.time_edit.select_step.connect(self.select_step)
+            row.time_edit.escape.connect(self.escape_pressed)
             self._edits[data["sequence"]] = row.bow_edit
         else:
             row = _Row(data, THUMB_W, THUMB_H, False)
@@ -384,6 +398,15 @@ class CrossingList(QWidget):
             edit.setFocus()
             edit.selectAll()
 
+    def position_of(self, sequence: int) -> int | None:
+        """Fastest-first rank (1-based) for a crossing, or None if not shown.
+
+        The number on a row is this position, not the database ``sequence``: the
+        operator cares where a crossing finished relative to the others, and a
+        clone shares its parent's time so it lands beside it (spec §7.3).
+        """
+        return self._positions.get(sequence)
+
     def refresh_time(self, sequence: int, elapsed_s: float) -> None:
         """Reset a row's time field to the stored value (after commit/revert).
 
@@ -413,7 +436,15 @@ class CrossingList(QWidget):
                 w.setParent(None)
             else:
                 w.deleteLater()
-        for row in sorted(self._rows.values(), key=lambda r: r.elapsed_s):
+        # Fastest first; ties (a clone shares its parent's time) fall back to the
+        # database sequence so the order — and therefore the position number — is
+        # stable rather than depending on insertion order.
+        ordered = sorted(self._rows.values(),
+                         key=lambda r: (r.elapsed_s, r.sequence))
+        self._positions = {}
+        for pos, row in enumerate(ordered, start=1):
+            self._positions[row.sequence] = pos
+            row.seq_lbl.setText(f"{pos:03d}")
             self._v.addWidget(row)
         self._v.addStretch(1)
 

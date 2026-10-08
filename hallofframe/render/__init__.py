@@ -11,14 +11,15 @@ import datetime
 
 
 def format_elapsed(elapsed_s: float) -> str:
-    """M:SS.mmm e.g. 6:12.483 (spec §6.8: three decimal places throughout).
+    """M:SS.cc e.g. 6:12.48 (centiseconds — the resolution the operator needs).
 
-    The tolerance is 100 ms, but truncating to 0.1 s would make ties appear
-    where none exist, so the display keeps milliseconds."""
-    ms = round(elapsed_s * 1000.0)
-    minutes, rem = divmod(ms, 60000)
-    seconds, millis = divmod(rem, 1000)
-    return f"{minutes}:{seconds:02d}.{millis:03d}"
+    Stored times keep full precision; only the displayed/exported string is
+    rounded to two decimal places of a second (100 ms tolerance, 10 ms
+    resolution)."""
+    cs = round(elapsed_s * 100.0)
+    minutes, rem = divmod(cs, 6000)
+    seconds, centis = divmod(rem, 100)
+    return f"{minutes}:{seconds:02d}.{centis:02d}"
 
 
 def parse_elapsed(text: str) -> float | None:
@@ -52,8 +53,9 @@ def parse_elapsed(text: str) -> float | None:
 
 
 def utc_iso(wall_ts: float) -> str:
+    """UTC timestamp, centisecond resolution (``...T22:13:26.12Z``)."""
     dt = datetime.datetime.fromtimestamp(wall_ts, datetime.timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
 
 
 def local_hms(wall_ts: float) -> str:

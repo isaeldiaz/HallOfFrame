@@ -224,8 +224,9 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   answers `304` on a matching `If-None-Match`; `/img/` is immutable-cached and
   race-page images are `loading="lazy"`.
 - **Review editing (phase 7).** In REVIEW, `Del` soft-deletes the selected
-  crossing (row stays, struck through, `U`/`Shift+Del` restores), and
-  `Ins`/`Shift+D` clones it (`sequence = MAX+1`, same `target_ms` so frames are
+  crossing (row stays, struck through). `U` undoes deletions newest-first
+  (multi-level, one press each); `Shift+Del` restores the selected row. `Ins`/
+  `Shift+D` clones it (`sequence = MAX+1`, same `target_ms` so frames are
   shared). A time edit that lands where no frames exist flags `missing` and
   clears the primary. Export excludes deleted rows; clones are ordinary rows.
 - **Fake camera (phase 7).** `python -m hallofframe.tools.fake_camera --folder
@@ -250,7 +251,13 @@ If the **same** keycode is listed in both `crossing_keycodes` and
 - **N4 per-capture flag.** A resume that reconstructs `t0` (boot_id mismatch)
   sets `capture.t0_reconstructed` on every crossing recorded after it; CSV and
   HTML render those elapsed times with a `~` prefix.
-- **Elapsed format is `M:SS.mmm`** (`render.format_elapsed`), per spec §6.8.
+- **Elapsed format is `M:SS.cc`** (`render.format_elapsed`), per spec §6.8 —
+  centiseconds, the resolution the operator needs. Stored times keep full
+  precision; only the displayed/exported string is rounded to 2 decimals.
+- **Crossing rows show their time-ordered position, not the DB `sequence`**
+  (`crossing_list.py` numbers each row by fastest-first rank, tie-broken by
+  sequence; `render/html.py` and the flat CSVs do the same). The clone copies
+  its parent's time, so it lands beside it with the next position.
 - Version in `hallofframe/__init__.py` (`__version__`).
 - **Finish horn is hardware-driven — §13.2 must-have closed (2026-10-06).** The
   deployed crossing button is a **double-pole switch**: pole 1 is the USB HID

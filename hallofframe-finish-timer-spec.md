@@ -1188,11 +1188,11 @@ application computes `Δ` from that plus `reaction_offset_ms` out of
 ### 6.8 `export.py`
 
 CSV columns:
-`sequence, bow_number, elapsed_seconds, elapsed_formatted, wall_clock_utc, image_file, image_flag, notes`
+`position, bow_number, elapsed_seconds, elapsed_formatted, wall_clock_utc, image_file, image_flag, notes`
 
-`elapsed_formatted` as `M:SS.mmm` (e.g. `6:12.483`). Three decimal places
-throughout — the tolerance is 100 ms, but truncating to 0.1 s would make ties
-appear where none exist.
+`elapsed_formatted` as `M:SS.cc` (e.g. `6:12.48`). Two decimal places
+throughout (10 ms resolution) — the tolerance is 100 ms, and the operator does
+not need finer resolution than centiseconds.
 
 `D` writes the whole database as one HTML results page (`export_<stamp>.html`),
 a card per crossing with the captured frame shown, grouped by race and
@@ -1246,13 +1246,13 @@ platform plugin.
 ├──────────────────────────────────────┬─────────────────────────┤
 │                                      │  CAPTURES               │
 │                                      │  ┌───────────────────┐  │
-│                                      │  │ ▣  1   0:00.000   │  │
+│                                      │  │ ▣  1   0:00.00    │  │
 │         LIVE PREVIEW                 │  │    START          │  │
 │         (letterboxed)                │  ├───────────────────┤  │
-│                                      │  │ ▣  2   6:12.483   │  │
+│                                      │  │ ▣  2   6:12.48    │  │
 │         ┊ finish line overlay ┊      │  │    bow: [ 14 ]    │  │
 │                                      │  ├───────────────────┤  │
-│                                      │  │ ▣  3   6:14.902   │  │
+│                                      │  │ ▣  3   6:14.90    │  │
 │                                      │  │    bow: [    ]    │  │
 │                                      │  └───────────────────┘  │
 │                                      │                         │
@@ -1289,8 +1289,9 @@ platform plugin.
 
 Requirement F3 — this is the primary deliverable of the whole system.
 
-- One row per capture: thumbnail (120 px wide), sequence number, elapsed time in
-  `M:SS.mmm`, and an inline editable bow-number field.
+- One row per capture: thumbnail (120 px wide), position (fastest-first rank),
+  elapsed time in `M:SS.cc`, and an inline editable bow-number field. The
+  database `sequence` is an internal id and is not shown.
 - Fastest at top, slowest at bottom, on every screen; not configurable (decided
   2026-10-06, §13.2). Auto-scroll must not steal focus from the bow-number field
   the operator is typing in.
