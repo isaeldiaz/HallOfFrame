@@ -80,7 +80,7 @@ class PreviewWidget(QWidget):
         if self._pm is not None:
             x = (self.width() - self._pm.width()) // 2
             y = (self.height() - self._pm.height()) // 2
-            p.drawImage(x, y, self._pm)
+            p.drawPixmap(x, y, self._pm)
         # finish-line overlay
         fx = int(self.finish_line_x * self.width())
         pen = QPen(QColor(255, 60, 60), 2)

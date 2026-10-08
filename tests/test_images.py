@@ -10,7 +10,9 @@ import pytest
 from PIL import Image
 from PySide6.QtCore import QSize
 
+from hallofframe.framebuffer import FrameBuffer
 from hallofframe.ui.images import load_scaled
+from hallofframe.ui.preview_widget import PreviewWidget
 
 pytestmark = pytest.mark.qt
 
@@ -38,6 +40,19 @@ def test_load_scaled_accepts_jpeg_bytes(tmp_path, qapp):
 def test_load_scaled_missing_source_is_none(tmp_path, qapp):
     assert load_scaled(str(tmp_path / "nope.jpg"), QSize(32, 18)) is None
     assert load_scaled(b"", QSize(32, 18)) is None
+
+
+def test_preview_paints_a_decoded_pixmap(tmp_path, qapp):
+    # Regression: load_scaled returns a QPixmap, and the preview used to hand it
+    # to QPainter.drawImage (QPixmap-only drawPixmap). That raised a TypeError in
+    # paintEvent on every frame, so the live preview never painted.
+    path = _solid_jpeg(tmp_path / "solid.jpg")
+    pm = load_scaled(path, QSize(32, 18))
+    widget = PreviewWidget(FrameBuffer(assumed_fps=30))
+    widget.resize(120, 80)
+    widget._pm = pm
+    rendered = widget.grab()  # forces paintEvent; would raise on the old code
+    assert not rendered.isNull()
 
 
 def test_roi_crops_to_the_expected_colour(tmp_path, qapp):
