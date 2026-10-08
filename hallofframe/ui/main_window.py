@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
 from ..calibration import Calibration
 from ..controller import (CalibrationError, CaptureController, RaceStateError,
                           calibration_status)
-from ..export import clipboard_data, export_all_html, local_hms
+from ..render import local_hms
+from ..render.clipboard import clipboard_data
+from ..render.html import export_all_html
 from ..framebuffer import FrameBuffer
 from ..roster import Roster, format_display, race_key, recorded_keys
 from ..session import (KEYBAR_NOTE, KEYMAP, Phase, Session, SessionError,

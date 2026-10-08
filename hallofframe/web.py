@@ -8,7 +8,7 @@ cannot perturb the evdev-triggered timing thread. Launch it explicitly::
     python -m hallofframe.web --config /path/to/config.toml
 
 Routes:
-  GET /                  race index (compact list)
+  GET /                  race index (compact list; no images)
   GET /race/<id>         one race, a card per crossing with its captured frame
   GET /excel/<id>        JSON payload for the "Copy as Excel" buttons: the race
                          as {tsv, html} — the same tab-separated + HTML-table
@@ -18,6 +18,12 @@ Routes:
                          (HTML table; fallback for browsers/users that prefer a
                          file over the clipboard copy)
   GET /img/<relpath>     a captured frame by its stored relative path
+
+Conditional requests (step 6.4): HTML is ``Cache-Control: no-cache`` and carries
+an ``ETag``/``Last-Modified`` derived from the relevant ``updated_at``; a
+matching ``If-None-Match``/``If-Modified-Since`` gets ``304 Not Modified`` with
+no body. ``/img/`` files never change once written, so they are served
+``immutable`` with a year-long max-age.
 
 The app's ``Storage`` uses a single locked connection; this server NEVER touches
 it. It builds its own ``Storage`` (a second, read-only connection) so reads never
@@ -30,76 +36,37 @@ import argparse
 import datetime
 import json
 import threading
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-from . import __version__
-from .buildinfo import build_stamp
 from .config import load_config
-from .export import (_C, _MONO, _SANS, _esc, clipboard_data, local_hms,
-                     _race_html)
+from .render import local_hms
+from .render.clipboard import clipboard_data
+from .render.html import (_about_footer, _esc, _race_html, _row_value,
+                          _updated_hms, page)
 from .storage import Storage
-
-# Version + commit/date, read once at import. About the code serving this page.
-_APP_VERSION = __version__
-_BUILD_STAMP = build_stamp()
 
 _IMG_TYPES = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
     ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
 }
 
-_REPOSITORY = "https://github.com/isaeldiaz/HallOfFrame"
 
-# Wires every [data-excel] button to copy that race to the clipboard as the
-# TSV + HTML-table pair (the same payload the review window copies), so pasting
-# into Excel keeps the column layout. Prefers the async Clipboard API (secure
-# contexts, e.g. localhost) which can write both formats; falls back to copying
-# the TSV via execCommand on plain HTTP where ClipboardItem is unavailable.
-_COPY_JS = r"""
-(function () {
-  function fallbackCopy(text) {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.top = '0';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    try { document.execCommand('copy'); } catch (e) {}
-    document.body.removeChild(ta);
-  }
-  function flash(btn) {
-    var old = btn.textContent;
-    btn.textContent = 'Copied';
-    setTimeout(function () { btn.textContent = old; }, 1500);
-  }
-  var btns = document.querySelectorAll('[data-excel]');
-  for (var i = 0; i < btns.length; i++) {
-    btns[i].addEventListener('click', function () {
-      var id = this.getAttribute('data-excel');
-      var btn = this;
-      fetch('/excel/' + id)
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (navigator.clipboard && window.ClipboardItem) {
-            navigator.clipboard.write([new ClipboardItem({
-              'text/html': new Blob([data.html], { type: 'text/html' }),
-              'text/plain': new Blob([data.tsv], { type: 'text/plain' })
-            })]).then(function () { flash(btn); },
-                     function () { fallbackCopy(data.tsv); flash(btn); });
-          } else {
-            fallbackCopy(data.tsv);
-            flash(btn);
-          }
-        })
-        .catch(function () { btn.textContent = 'Copy failed'; });
-    });
-  }
-})();
-"""
+def _parse_iso(iso: str) -> datetime.datetime | None:
+    try:
+        dt = datetime.datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
+def _http_date(iso: str) -> str | None:
+    dt = _parse_iso(iso)
+    return formatdate(dt.timestamp(), usegmt=True) if dt else None
 
 
 def _excel_filename(storage: Storage, race_id: int) -> str:
@@ -123,21 +90,12 @@ def resolve_image_file(data_root: Path, rel: str) -> Path | None:
     return target
 
 
-def _about_footer() -> str:
-    """Small About line for page footers: version + the commit/date that built
-    the code serving the page."""
-    return (
-        f'<span style="font-family:{_MONO}">HallOfFrame v{_esc(_APP_VERSION)}'
-        f" · {_esc(_BUILD_STAMP)}</span>"
-        f' · <a href="{_esc(_REPOSITORY)}" style="color:{_C["blue"]};'
-        'text-decoration:none">github.com/isaeldiaz/HallOfFrame</a>'
-    )
-
-
 def build_index(storage: Storage) -> str:
     """Compact race list: newest first, one row per race with links to the race
-    page and its Excel copy. Only reviewed races are published (spec §6.8)."""
+    page and its Excel copy. Only reviewed races are published (spec §6.8).
+    No images — photos live on each race page (step 6.4a)."""
     races = storage.list_races(reviewed_only=True)  # id DESC (newest first)
+    updated = _updated_hms(storage.last_updated())
     rows = []
     for r in races:
         race, captures = storage.race_bundle(r["id"])  # step 1.4e
@@ -147,69 +105,51 @@ def build_index(storage: Storage) -> str:
         label = " · ".join(p for p in (
             f"RACE {race['race_no']}" if race["race_no"] else "UNLISTED",
             f"HEAT {race['heat_no']}" if race["heat_no"] else "") if p) or "UNLISTED"
+        row_updated = _updated_hms(_row_value(race, "updated_at"))
         rows.append(
-            f'<tr style="border-bottom:1px solid {_C["divider"]}">'
-            f'<td style="padding:14px 8px;font-family:{_MONO};font-size:14px;'
-            f'color:{_C["blue"]}">{_esc(label)}</td>'
-            f'<td style="padding:14px 8px;font-size:15px;color:{_C["text"]}">'
-            f'{_esc(race["name"] or "")}</td>'
-            f'<td style="padding:14px 8px;font-family:{_MONO};font-size:14px;'
-            f'color:{_C["text2"]}">{_esc(gun)}</td>'
-            f'<td style="padding:14px 8px;text-align:right;font-family:{_MONO};'
-            f'font-size:14px;color:{_C["dim"]}">{n}</td>'
-            f'<td style="padding:14px 8px;text-align:right;white-space:nowrap">'
-            f'<a href="/race/{r["id"]}" style="color:{_C["blue"]};'
-            'text-decoration:none;font-size:14px;margin-right:14px">View</a>'
-            f'<button type="button" data-excel="{r["id"]}"'
-            f' style="font-family:{_MONO};font-size:14px;font-weight:600;'
-            f'color:{_C["blue"]};background:transparent;border:none;'
-            'padding:0;cursor:pointer">Copy table</button></td></tr>')
+            '<tr class="row">'
+            f'<td class="td-label">{_esc(label)}'
+            f'<div class="row-updated">Updated {_esc(row_updated)}</div></td>'
+            f'<td class="td-cat">{_esc(race["name"] or "")}</td>'
+            f'<td class="td-gun">{_esc(gun)}</td>'
+            f'<td class="td-n">{n}</td>'
+            '<td class="td-actions">'
+            f'<a href="/race/{r["id"]}" class="link link-view">View</a>'
+            f'<button type="button" data-excel="{r["id"]}" class="excel-inline">'
+            'Copy table</button></td></tr>')
 
     body_rows = "".join(rows) or (
-        f'<tr><td colspan="5" style="padding:40px;text-align:center;'
-        f'color:{_C["faint"]};font-size:15px">No races recorded yet.</td></tr>')
+        '<tr><td colspan="5" class="empty-row">No races recorded yet.</td></tr>')
 
     event = storage.event_name or ""
-    return (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        '<meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{_esc(event)} — HallOfFrame results</title></head>"
-        f'<body style="margin:0;background:{_C["bg"]};font-family:{_SANS};'
-        f'color:{_C["text"]};-webkit-font-smoothing:antialiased">'
-        '<div style="max-width:960px;margin:0 auto">'
-        f'<header style="padding:34px 40px 26px;border-bottom:1px solid '
-        f'{_C["panel_border"]};background:{_C["panel"]}">'
-        '<div style="display:flex;align-items:flex-end;justify-content:'
-        'space-between;gap:24px;flex-wrap:wrap">'
-        '<div style="display:flex;flex-direction:column;gap:4px">'
-        f'<div style="font-family:{_MONO};font-size:14px;font-weight:600;'
-        f'letter-spacing:.08em;color:{_C["blue"]}">{_esc(event)}</div>'
-        f'<div style="font-family:{_MONO};font-size:24px;font-weight:600">'
-        f'HallOf<span style="color:{_C["red"]}">Frame</span></div>'
-        f'<div style="font-size:14px;color:{_C["dim"]}">Finish-line results'
-        " · races</div></div>"
-        f'<div style="font-size:13px;color:{_C["faint"]}">'
-        f'{len(races)} race{"s" if len(races) != 1 else ""}</div></div></header>'
-        '<main style="padding:10px 40px 24px">'
-        '<table style="width:100%;border-collapse:collapse">'
-        '<thead><tr style="text-align:left;font-family:'
-        f'{_MONO};font-size:12px;letter-spacing:.1em;color:{_C["faint"]}">'
-        "<th style=\"padding:14px 8px 6px\">RACE</th>"
-        '<th style="padding:14px 8px 6px">CATEGORY</th>'
-        '<th style="padding:14px 8px 6px">GUN</th>'
-        '<th style="padding:14px 8px 6px;text-align:right">#</th>'
-        '<th style="padding:14px 8px 6px;text-align:right"></th></tr></thead>'
-        f"<tbody>{body_rows}</tbody></table></main>"
-        f'<footer style="padding:18px 40px 26px;border-top:1px solid '
-        f'{_C["panel_border"]};background:{_C["panel"]};font-size:12px;'
-        f'color:{_C["faint"]}">Copy table copies a race to the clipboard — paste '
-        "it into a spreadsheet to keep the column layout."
-        f" · {_about_footer()}</footer>"
-        "</div>"
-        f"<script>{_COPY_JS}</script>"
-        "</body>\n</html>\n"
+    header = (
+        '<header class="index-head">'
+        '<div class="index-head-row">'
+        '<div class="index-brand-col">'
+        f'<div class="event">{_esc(event)}</div>'
+        '<div class="brand-lg">HallOf<span class="brand-red">Frame</span></div>'
+        '<div class="index-sub">Finish-line results · races</div>'
+        f'<div class="index-updated">Results updated {_esc(updated)}</div></div>'
+        f'<div class="counts">{len(races)} race'
+        f'{"s" if len(races) != 1 else ""}</div></div>'
+        '<div class="index-note">Photos are on each race page.</div></header>'
     )
+    main = (
+        '<main class="main-index">'
+        '<table class="index-table">'
+        '<thead><tr class="index-thead">'
+        '<th class="th">RACE</th><th class="th">CATEGORY</th>'
+        '<th class="th">GUN</th><th class="th-right">#</th>'
+        '<th class="th-right"></th></tr></thead>'
+        f"<tbody>{body_rows}</tbody></table></main>"
+    )
+    footer = (
+        '<footer class="index-footer">Copy table copies a race to the clipboard '
+        "— paste it into a spreadsheet to keep the column layout."
+        f" · {_about_footer()}</footer>"
+    )
+    return page(f"{event} — HallOfFrame results", header + main,
+                width_px=960, footer=footer)
 
 
 def build_race_page(storage: Storage, race_id: int) -> str | None:
@@ -222,32 +162,18 @@ def build_race_page(storage: Storage, race_id: int) -> str | None:
     captures = sorted(captures, key=lambda c: c["elapsed_s"])
     body = _race_html(race, captures, img_base="/img/", excel_id=race_id)
     event = storage.event_name or ""
-    return (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">"
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{_esc(event)} — Race {_esc(race['race_no'] or race['name'] or race_id)}"
-        " — HallOfFrame</title></head>"
-        f'<body style="margin:0;background:{_C["bg"]};font-family:{_SANS};'
-        f'color:{_C["text"]};-webkit-font-smoothing:antialiased">'
-        '<div style="max-width:1120px;margin:0 auto">'
-        f'<header style="padding:16px 48px;border-bottom:1px solid '
-        f'{_C["panel_border"]};background:{_C["panel"]};display:flex;'
-        'align-items:center;justify-content:space-between;gap:24px;'
-        'flex-wrap:wrap">'
-        '<a href="/" style="color:#8fa0ab;text-decoration:none;font-size:14px">'
-        "&larr; All races</a>"
-        f'<span style="font-family:{_MONO};font-size:13px;font-weight:600;'
-        f'letter-spacing:.08em;color:{_C["blue"]}">{_esc(event)}</span>'
-        "</header>"
-        '<main style="padding:0 48px 20px">'
-        f"{body}</main>"
-        f'<footer style="padding:18px 48px 26px;border-top:1px solid '
-        f'{_C["panel_border"]};background:{_C["panel"]};font-size:12px;'
-        f'color:{_C["faint"]}">{_about_footer()}</footer>'
-        "</div>"
-        f"<script>{_COPY_JS}</script>"
-        "</body>\n</html>\n"
+    updated = _updated_hms(storage.last_updated(race_id))
+    header = (
+        '<header class="racepage-head">'
+        '<a href="/" class="back-link">&larr; All races</a>'
+        f'<span class="event">{_esc(event)}</span>'
+        f'<span class="counts">Results updated {_esc(updated)}</span></header>'
     )
+    footer = f'<footer class="race-footer">{_about_footer()}</footer>'
+    title = (f"{event} — Race "
+             f"{race['race_no'] or race['name'] or race_id} — HallOfFrame")
+    return page(title, header + f'<main class="main-race">{body}</main>',
+                width_px=1120, footer=footer)
 
 
 class WebServer(ThreadingHTTPServer):
@@ -276,8 +202,34 @@ class WebHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _html(self, code: int, body: str) -> None:
-        self._send(code, body.encode("utf-8"), "text/html; charset=utf-8")
+    def _html(self, code: int, body: str,
+              extra: dict[str, str] | None = None) -> None:
+        self._send(code, body.encode("utf-8"), "text/html; charset=utf-8", extra)
+
+    def _cache(self, updated_iso: str | None = None, mtime: float | None = None,
+               immutable: bool = False) -> tuple[dict[str, str], bool]:
+        """Build ETag/Last-Modified/Cache-Control and decide on a 304.
+
+        ``updated_iso`` is the relevant ``updated_at`` (DB-wide or per race);
+        ``mtime`` is used for image files (which never change once written)."""
+        if updated_iso is not None:
+            etag = f'"{updated_iso}"'
+            last_modified = _http_date(updated_iso)
+        elif mtime is not None:
+            etag = f'"{int(mtime)}"'
+            last_modified = formatdate(mtime, usegmt=True)
+        else:
+            return {}, False
+        headers = {"ETag": etag}
+        if last_modified:
+            headers["Last-Modified"] = last_modified
+        headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable" if immutable else "no-cache")
+        inm = self.headers.get("If-None-Match")
+        ims = self.headers.get("If-Modified-Since")
+        if (inm and inm == etag) or (ims and last_modified and ims == last_modified):
+            return headers, True
+        return headers, False
 
     # --- routes ----------------------------------------------------------
     def do_GET(self):
@@ -285,7 +237,10 @@ class WebHandler(BaseHTTPRequestHandler):
         storage = self.server.storage
 
         if path == "/" or path == "/index.html":
-            self._html(200, build_index(storage))
+            headers, not_modified = self._cache(
+                updated_iso=storage.last_updated())
+            self._html(304 if not_modified else 200,
+                       "" if not_modified else build_index(storage), headers)
             return
         if path == "/favicon.ico":
             self._send(204, b"", "image/x-icon")
@@ -308,11 +263,19 @@ class WebHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
-        page = build_race_page(storage, race_id)
-        if page is None:
+        if storage.get_race(race_id) is None:
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
-        self._html(200, page)
+        headers, not_modified = self._cache(
+            updated_iso=storage.last_updated(race_id))
+        if not_modified:
+            self._html(304, "", headers)
+            return
+        page_html = build_race_page(storage, race_id)
+        if page_html is None:
+            self._html(404, "<h1>404</h1><p>Unknown race.</p>")
+            return
+        self._html(200, page_html, headers)
 
     def _excel(self, storage: Storage, path: str) -> None:
         rest = path[len("/excel/"):]
@@ -327,16 +290,24 @@ class WebHandler(BaseHTTPRequestHandler):
         if storage.get_race(race_id) is None:
             self._html(404, "<h1>404</h1><p>Unknown race.</p>")
             return
+        headers, not_modified = self._cache(
+            updated_iso=storage.last_updated(race_id))
+        if download:
+            ctype = "application/vnd.ms-excel; charset=utf-8"
+        else:
+            ctype = "application/json; charset=utf-8"
+        if not_modified:
+            self._send(304, b"", ctype, headers)
+            return
         tsv, markup = clipboard_data(storage, race_id,
                                      self.server.copy_heading)
         if download:
-            self._send(200, markup.encode("utf-8"),
-                       "application/vnd.ms-excel; charset=utf-8",
-                       {"Content-Disposition":
-                        f"attachment; filename=\"{_excel_filename(storage, race_id)}\""})
+            self._send(200, markup.encode("utf-8"), ctype,
+                       dict(headers, **{"Content-Disposition":
+                            f"attachment; filename=\"{_excel_filename(storage, race_id)}\""}))
         else:
             payload = json.dumps({"tsv": tsv, "html": markup}).encode("utf-8")
-            self._send(200, payload, "application/json; charset=utf-8")
+            self._send(200, payload, ctype, headers)
 
     def _img(self, path: str) -> None:
         rel = unquote(path[len("/img/"):])
@@ -345,7 +316,12 @@ class WebHandler(BaseHTTPRequestHandler):
         if target is None:
             self._send(404, b"", ctype)
             return
-        self._send(200, target.read_bytes(), ctype)
+        headers, not_modified = self._cache(
+            mtime=target.stat().st_mtime, immutable=True)
+        if not_modified:
+            self._send(304, b"", ctype, headers)
+            return
+        self._send(200, target.read_bytes(), ctype, headers)
 
     def log_message(self, fmt, *args):  # keep console quiet during a race
         return

@@ -52,11 +52,14 @@ hallofframe/
   framestore.py      Gun-indexed frame files: `frames/{t_ms:08d}.jpg`, one per
                      t_ms per race; `FrameStore.save`/`nearest`. Replaces the old
                      per-crossing `captures/` writer and `archive.py` (removed).
-  export.py          CSV + whole-database HTML export; format_elapsed(); flag_word().
+  render/            `csv.py`, `clipboard.py`, `html.py` split out of `export.py`;
+                     one `page()` HTML skeleton + shared `CSS`. `export.py` is a
+                     deprecation shim that re-exports the old names.
   web.py             SEPARATE-PROCESS HTTP results server (own read-only SQLite
                      connection; never touches the app's locked Storage). Live
                      race pages with per-crossing frames + per-race "Copy as
-                     Excel" (.xls). Run: python -m hallofframe.web --config PATH.
+                     Excel" (.xls); "Results updated" times, ETag/304 and lazy
+                     images. Run: python -m hallofframe.web --config PATH.
   config.py          config.toml load + defaults (never writes the file).
   log.py             Structured JSONL logging.
   calibration.py     Latency calibration helpers plus the single `Calibration`
@@ -212,6 +215,11 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   missing.
 - **Resume after restart (N4).** On startup, if `storage.open_race()` finds a
   race with no `ended_at`, `main.py` shows a non-modal Resume/Discard banner.
+- **Live results freshness (phase 6).** The web index and each race page show a
+  "Results updated HH:MM:SS" line derived from `storage.last_updated()`
+  (`meta.db_updated_at` / per-race `updated_at`). HTML carries an `ETag` and
+  answers `304` on a matching `If-None-Match`; `/img/` is immutable-cached and
+  race-page images are `loading="lazy"`.
 - **Refactor note (phase 3).** The plan's target of `ui/main_window.py` under
   350 lines was not reached (it is ~766). Roster rendering was extracted to
   `ui/roster_view.py`; the remaining bulk is the evdev/session orchestration and

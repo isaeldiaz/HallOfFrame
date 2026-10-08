@@ -10,7 +10,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ..export import format_elapsed
+from ..render import format_elapsed
 from . import styles
 from .crossing_list import CrossingList
 from .images import load_scaled

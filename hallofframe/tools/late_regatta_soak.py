@@ -32,7 +32,8 @@ from pathlib import Path
 
 from ..config import Config
 from ..controller import CaptureController
-from ..export import export_all_csv, export_all_html
+from ..render.csv import export_all_csv
+from ..render.html import export_all_html
 from ..framebuffer import FrameBuffer
 from ..framestore import FrameStore, nearest
 from ..mjpeg import Frame
@@ -401,7 +402,7 @@ def verify_end_of_day(storage, data_root, seed_stats, final_stats):
         "no absolute paths or URLs in the page")
     add("html_race_sections", text.count("<section data-race=") == n_races,
         f"{text.count('<section data-race=')} sections == {n_races} races")
-    n_cards = text.count("<div data-search=")
+    n_cards = text.count('data-search="')
     add("html_cards", n_cards == live, f"{n_cards} cards == {live} live")
     refs = [urllib.parse.unquote(s) for s in re.findall(r'src="([^"]+)"', text)]
     missing_src = [s for s in refs

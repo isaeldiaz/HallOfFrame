@@ -18,7 +18,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from ..export import flag_word as flag_text, format_elapsed
+from ..render import flag_word as flag_text, format_elapsed
 from . import styles
 from .images import load_scaled
 

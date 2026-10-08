@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 from . import styles
 from .crossing_list import CrossingList
 from .images import load_scaled
-from ..export import local_hms, parse_elapsed
+from ..render import local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
 # flag, bow field), but resizeEvent() keeps it under a share of the screen: a
