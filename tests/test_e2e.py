@@ -42,6 +42,23 @@ def _make_jpegs(folder: Path, n: int = 90) -> None:
         (folder / f"frame_{i:04d}.jpg").write_bytes(out.getvalue())
 
 
+def test_build_core_prefers_the_calibrated_fps(data_root, config):
+    import json
+
+    (data_root / "calibration.json").write_text(json.dumps({
+        "latency_median_ms": 94.0, "resolution": "1440x1080", "fps": 25}))
+    cfg = config(transport={"enabled": False},
+                 stream={"url": "http://127.0.0.1:1/video",
+                         "assumed_fps": 30})
+    core = build_core(cfg)
+    try:
+        assert core["buffer"].assumed_fps == 25
+        assert core["controller"].preview_fps == 25
+    finally:
+        core["controller"].stop()
+        core["storage"].close()
+
+
 @pytest.mark.slow
 def test_fake_camera_end_to_end(data_root, config):
     frames_src = data_root / "camera"
@@ -141,6 +158,16 @@ def test_fake_camera_end_to_end(data_root, config):
 
         page = build_race_page(storage, race_id)
         assert page.count('data-search="') == 3
+
+        # --- one scrub step: the published time follows the frame -----------
+        frames = storage.frames_for_capture(rows[0]["id"])
+        primary = storage.capture(rows[0]["id"])["primary_frame_id"]
+        idx = next(i for i, f in enumerate(frames) if f["id"] == primary)
+        controller.set_primary(rows[0]["id"], frames[idx + 1]["id"])
+        scrubbed = storage.capture(rows[0]["id"])
+        assert scrubbed["elapsed_source"] == "frame"
+        page = build_race_page(storage, race_id)
+        assert '<span class="meta-value">frame</span>' in page
     finally:
         reader.stop()
         camera.stop()

@@ -329,9 +329,9 @@ nothing about N4.
 
 **Proves:** F6, spec §6.8.
 **Pass:** CSV has exactly the columns listed in §6.8, in that order;
-`elapsed_formatted` renders as `M:SS.mmm` with three decimals; soft-deleted rows
-are excluded; the file opens in a spreadsheet with no quoting damage to a
-bow number like `07`.
+`elapsed_formatted` renders as `M:SS.cc` with two decimals; `elapsed_source` is
+one of `press`/`frame`/`manual`; soft-deleted rows are excluded; the file opens
+in a spreadsheet with no quoting damage to a bow number like `07`.
 
 The `D` HTML export passes when the generated page (written into the data root)
 shows one card per crossing with the captured frame, grouped by race and ordered

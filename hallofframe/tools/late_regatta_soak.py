@@ -140,7 +140,8 @@ def seed_regatta(storage, *, races=150, min_captures=4, max_captures=8,
             rows = store.save(window)
             primary = nearest(rows, target_ms)
             if primary is not None:
-                storage.set_primary(cap_id, primary["id"])
+                # Automatic pick: attach the photo without moving the time.
+                storage.set_primary(cap_id, primary["id"], bind_time=False)
             stats["captures"] += 1
             stats["frames"] += len(rows)
             stats["files_written"] += len(rows)

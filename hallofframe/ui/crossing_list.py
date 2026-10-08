@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
-from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout,
-                               QLabel, QLineEdit, QScrollArea, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect,
+                               QHBoxLayout, QLabel, QLineEdit, QScrollArea,
+                               QVBoxLayout, QWidget)
 
 from ..render import flag_word as flag_text, format_elapsed
 from . import styles
@@ -34,6 +34,25 @@ def flag_word(image_flag: str | None, suspect: bool) -> tuple[str, str]:
     """(word, colour) for a capture's flag column."""
     word = flag_text(image_flag, suspect)
     return word, (styles.AMBER_TEXT if word else styles.TEXT_DIM)
+
+
+# Which datum produced a crossing's published time, shown as a small suffix
+# after the time: nothing for a frame-bound time, ·p for a raw press time, ·m
+# for a typed one. The tooltip spells the suffix out (spec §6.5, §7.3).
+SOURCE_SUFFIX = {"press": "·p", "manual": "·m", "frame": ""}
+SOURCE_TIP = {
+    "press": "Time from the button press — not yet frame-bound.",
+    "manual": "Time typed in review.",
+    "frame": "Time follows the selected frame.",
+}
+
+
+def source_suffix(source: str | None) -> str:
+    return SOURCE_SUFFIX.get(source or "press", "")
+
+
+def source_tip(source: str | None) -> str:
+    return SOURCE_TIP.get(source or "press", "")
 
 
 class _Thumb(QWidget):
@@ -189,6 +208,14 @@ class _Row(QWidget):
                 f" font-weight:500; color:{styles.TEXT_PRIMARY};")
             self.lay.addWidget(self.time_lbl)
 
+        self.src_lbl = QLabel("")
+        self.src_lbl.setProperty("mono", True)
+        self.src_lbl.setStyleSheet(
+            f"font-family:'{styles.FONT_MONO}'; font-size:14px;"
+            f" color:{styles.TEXT_FAINT};")
+        self.lay.addWidget(self.src_lbl)
+        self.set_source(data.get("elapsed_source"))
+
         self.lay.addStretch(1)
 
         word, colour = flag_word(data.get("image_flag"), data.get("suspect"))
@@ -222,7 +249,7 @@ class _Row(QWidget):
     # --- soft-delete presentation ----------------------------------------
     def _strike_widgets(self) -> list:
         """The row's text widgets, which get a strike-through font when deleted."""
-        ws = [self.seq_lbl, self.flag_lbl]
+        ws = [self.seq_lbl, self.flag_lbl, self.src_lbl]
         if hasattr(self, "time_edit"):
             ws.append(self.time_edit)
         elif hasattr(self, "time_lbl"):
@@ -259,6 +286,11 @@ class _Row(QWidget):
         self.flag_lbl.setStyleSheet(
             f"font-family:'{styles.FONT_MONO}'; font-size:14px;"
             f" letter-spacing:.08em; color:{colour};")
+
+    def set_source(self, source: str | None) -> None:
+        """Mark which datum produced the row's time (press / frame / manual)."""
+        self.src_lbl.setText(source_suffix(source))
+        self.src_lbl.setToolTip(source_tip(source))
 
     def set_highlight(self, on: bool) -> None:
         border = styles.BLUE if on else self._base_border
@@ -407,23 +439,41 @@ class CrossingList(QWidget):
         """
         return self._positions.get(sequence)
 
-    def refresh_time(self, sequence: int, elapsed_s: float) -> None:
+    def refresh_time(self, sequence: int, elapsed_s: float,
+                     source: str | None = None) -> None:
         """Reset a row's time field to the stored value (after commit/revert).
 
         A corrected time can change the crossing's rank, so re-sort so the list
         stays fastest-first (spec §7.3); focus in the edited field is preserved
-        across the rebuild."""
+        across the rebuild. *source* (when given) also refreshes the ·p/·m marker
+        and its tooltip."""
         row = self._rows.get(sequence)
         if row is None:
             return
-        had_focus = (self._editable and hasattr(row, "time_edit")
-                     and row.time_edit.hasFocus())
+        # _rebuild() reparents every row, which drops the keyboard focus. Keep
+        # whatever widget currently has it (e.g. the next crossing's bow field
+        # after Enter/Tab advanced, or the edited field) so a time edit does not
+        # silently dump the operator's typing into the START field.
+        focus_widget = QApplication.focusWidget()
+        focus_edit = None
+        if focus_widget is None and self._editable:
+            for name in ("time_edit", "bow_edit"):
+                edit = getattr(row, name, None)
+                if edit is not None and edit.hasFocus():
+                    focus_edit = edit
+                    break
         row.elapsed_s = elapsed_s
+        if source is not None:
+            row.set_source(source)
         if self._editable and hasattr(row, "time_edit"):
             row.time_edit.setText(format_elapsed(elapsed_s))
         self._rebuild()
-        if had_focus:
-            row.time_edit.setFocus()
+        restore = focus_widget if focus_widget is not None else focus_edit
+        if restore is not None:
+            try:
+                restore.setFocus()
+            except RuntimeError:
+                pass  # the widget was destroyed by the rebuild
 
     # --- internals --------------------------------------------------------
     def _rebuild(self) -> None:

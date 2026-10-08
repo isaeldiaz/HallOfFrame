@@ -265,7 +265,8 @@ This is the heart of the system. Implement it exactly.
   It must never be used to compute a duration. An NTP correction mid-race would
   silently corrupt every subsequent result.
 - One monotonic reference `t0` is captured when the race start is triggered.
-  Every crossing's elapsed time is `t_press - t0`.
+  A crossing's initial elapsed time is `t_press - t0`; once the operator scrubs
+  the review screen it follows the primary frame, or it is typed (§6.5).
 
 ### 5.2 Definitions
 
@@ -279,9 +280,11 @@ This is the heart of the system. Implement it exactly.
 | `Δ` | Calibration constant used to select the image (see §5.4) |
 | `t0` | Monotonic time of the race start event |
 
-### 5.3 The recorded time is the key press
+### 5.3 The recorded time starts as the key press
 
-`elapsed = t_press - t0`
+`elapsed = t_press - t0` initially. The press is the raw event and is never
+rewritten; the published time may later be re-bound to the primary review frame
+or typed (§6.5).
 
 Rationale: the operator's reaction time `R` is a systematic offset that appears
 in both `t0` and `t_press` and therefore largely cancels in the difference. This
@@ -743,6 +746,9 @@ editing the config silently halves the buffer's time span to 7.5 s — which mak
 §6.5's "target older than buffer span" edge case start firing during a heat.
 `MJPEGReader` publishes measured fps; `FrameBuffer` must resize (or at minimum
 warn loudly) when the measurement diverges from `assumed_fps` by more than 20%.
+When a calibration file is present, `build_core` sizes the buffer from its
+measured `fps` rather than the operator-maintained `[stream] assumed_fps`, which
+falls back to the config value only when no calibration exists.
 
 ### 6.4 `trigger.py` — key press capture via evdev
 
@@ -924,7 +930,7 @@ Edge cases that must be handled explicitly:
 | Case | Behaviour |
 |---|---|
 | No race started yet | Reject the trigger, flash a UI warning. Do not record. |
-| Buffer empty (stream down) | Record the time anyway with `image_id = NULL`. **The time is the primary datum; never discard a time because the camera failed.** Mark the row visually as "no image". |
+| Buffer empty (stream down) | Record the time anyway with `image_id = NULL`. **Never discard a time because the camera failed.** The press locates the selection window; the primary frame carries the time once the operator scrubs to it (below, §13.3). Mark the row visually as "no image". |
 | `image_mode = "off"` (timing-only) | Calibration is not required and `Δ = 0`; races start with the stream down. `record_crossing` still writes every time; deferred image selection is skipped entirely, so captures carry `image_flag = "missing"` and no capture files/dirs are created. |
 | `target` older than buffer span | Record the time; attach the oldest available frame; flag the row as "image approximate". |
 | `target` newer than newest frame | Record the time; attach the newest frame; flag as "image approximate". |
@@ -933,6 +939,20 @@ That second row is the most important behaviour in this table. A regatta result
 with a missing photo is recoverable. A missing time is not. §6.4's debounce
 handling follows the same rule: a suspected double-press is recorded and
 flagged, never dropped.
+
+**The press locates the window; the frame carries the time once scrubbed.**
+`t_press` is the raw button event and is never rewritten. A crossing starts with
+`elapsed_s = t_press − t0` and `elapsed_source = 'press'`; the automatic nearest
+frame is only a photo and does not move the time. When the operator scrubs the
+review screen from frame A to frame B, `elapsed_s` shifts by
+`(B.t_ms − A.t_ms) / 1000` and `elapsed_source` becomes `'frame'`, so the
+published time follows the frame the operator settled on. A typed time sets
+`elapsed_source = 'manual'`, and "time from press" restores the press value.
+
+Measured on the 2026-08 regatta database, frame-arrival jitter is ~2 ms (p95
+4 ms) against a 33 ms frame interval, while a button press is wrong by 100 ms or
+more in a close finish. The frame the operator settles on is therefore the best
+evidence of the crossing instant, and the published time should follow it.
 
 **Timing-only mode (`image_mode = "off"`).** A config switch for running the
 system as a plain stopwatch with no camera. It does not change the timing model
@@ -1086,7 +1106,8 @@ CREATE TABLE capture (
     sequence        INTEGER NOT NULL,   -- 1, 2, 3 … order of crossing
     t_press         REAL NOT NULL,      -- monotonic
     t_press_wall    REAL NOT NULL,      -- wall clock, record only
-    elapsed_s       REAL NOT NULL,      -- t_press - race.t0_monotonic
+    elapsed_s       REAL NOT NULL,      -- published; starts t_press - race.t0_monotonic
+    elapsed_source  TEXT NOT NULL DEFAULT 'press',  -- press | frame | manual (§6.5)
     delta_used      REAL NOT NULL,      -- Δ at THIS capture, not just at t0
     target_ms       INTEGER,            -- selection target in gun-ms, nullable
     bow_number      TEXT,               -- entered by operator, nullable
@@ -1188,7 +1209,7 @@ application computes `Δ` from that plus `reaction_offset_ms` out of
 ### 6.8 `export.py`
 
 CSV columns:
-`position, bow_number, elapsed_seconds, elapsed_formatted, wall_clock_utc, image_file, image_flag, notes`
+`position, bow_number, elapsed_seconds, elapsed_formatted, elapsed_source, wall_clock_utc, image_file, image_flag, notes`
 
 `elapsed_formatted` as `M:SS.cc` (e.g. `6:12.48`). Two decimal places
 throughout (10 ms resolution) — the tolerance is 100 ms, and the operator does
@@ -1298,7 +1319,9 @@ Requirement F3 — this is the primary deliverable of the whole system.
 - Clicking a row opens a **frame review panel**: the full-size primary image
   plus a slider across the ±15 saved window frames, each labelled with its
   offset in milliseconds from the recorded time. The operator can promote any
-  window frame to primary. This is how a jury resolves a close finish.
+  window frame to primary; doing so re-binds the published elapsed time to that
+  frame (`elapsed_source = 'frame'`, §6.5), and `0` restores the raw press time.
+  This is how a jury resolves a close finish.
 - Right-click → delete (soft), add note.
 
 ### 7.4 Keyboard and trigger bindings
@@ -2102,6 +2125,12 @@ implementation can be planned against the constraints already locked in here.
     detail a soft lens never resolved.
 
 ### 13.3 Nice-to-have (from field feedback)
+
+- **Frame-bound crossing times (implemented 2026-10-08).** The press only
+  locates the selection window; scrubbing the review screen to a frame moves the
+  published time by the frame delta (`elapsed_source = 'frame'`), because frame
+  arrival is far more precise than a human press (see §6.5). `t_press` stays the
+  raw event; "time from press" (`0` in review) restores it.
 
 - **Zoom square / area of interest.** When the app is in the Ready state (no
   armed race), let the operator draw a square on the live preview to define an

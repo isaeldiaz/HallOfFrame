@@ -581,6 +581,7 @@ class MainWindow(QMainWindow):
         self.recording.add_capture({
             "sequence": cap.sequence,
             "elapsed_s": cap.elapsed_s,
+            "elapsed_source": getattr(cap, "elapsed_source", "press"),
             "image_path": str(self.config.data_root / primary) if primary else None,
             "image_flag": cap.image_flag,
             "suspect": cap.debounce_suspect,
@@ -609,6 +610,7 @@ class MainWindow(QMainWindow):
                                                race_id=race_id)
             self.center.addWidget(self._review_screen)
             self._review_screen.edit_race_requested.connect(self.roster_view.edit_race)
+            self._review_screen.notify.connect(self._show_toast)
         elif self._review_screen.race_id != race_id:
             self._review_screen.race_id = race_id
         self._review_screen.load_captures()
@@ -648,6 +650,10 @@ class MainWindow(QMainWindow):
     def _review_clone(self) -> None:
         if self._review_screen is not None:
             self._review_screen.clone_selected()
+
+    def _review_time_from_press(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.reset_selected_time()
 
     # ---------------------------------------------------------------- actions
     def _on_race_selected(self, row) -> None:

@@ -69,8 +69,10 @@ def review_screen_env(request, data_root, config, storage, buffer, qapp):
                                             window_after_ms=500)
     for seq in (1, 2, 3):
         target_ms = seq * 1000
+        # t0 = 0, so a consistent press/elapsed time is `seq`; the frame scrub
+        # delta then maps to a real number of 33 ms frames.
         cap = inst.storage.insert_capture(inst.race_id, seq, float(seq),
-                                          time.time(), float(seq) * 10, 0.0,
+                                          time.time(), float(seq), 0.0,
                                           target_ms=target_ms)
         t_ms = [target_ms + round(-500.0 + i * (1000.0 / (FRAMES - 1)))
                 for i in range(FRAMES)]
@@ -302,9 +304,11 @@ class TestReviewScreen(unittest.TestCase):
         shown = screen.scrubber.selected_frame()
         self.assertEqual(shown["id"], stepped["id"],
                          "revisiting a crossing must show the committed frame")
-        self.assertEqual(screen.offset_lbl.text(),
-                         f"{stepped['offset_ms']:+.0f} ms",
-                         "photo pane must reflect the committed frame")
+        caption = screen.offset_lbl.text()
+        self.assertIn("frame +2", caption,
+                      "two steps from the press frame must read +2")
+        self.assertIn("(press ", caption,
+                      "the caption must show the raw press time")
 
     # --- 4. the rows the save writes into -------------------------------
     def test_captures_are_writable_rows(self):
@@ -499,6 +503,96 @@ class TestReviewScreen(unittest.TestCase):
         screen._time_edited(seq, "99.500")
         self.assertEqual(screen._current_capture["image_flag"], "missing")
         self.assertEqual(screen.photo.text(), "no frames at this time")
+
+    # --- 7. scrubbing binds the time to the frame ------------------------
+    def test_shift_right_binds_time_and_keeps_row_selected(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        cap_id = screen._current_capture["id"]
+        before = screen._current_capture["elapsed_s"]
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        self.assertEqual(screen._selected_seq, seq,
+                         "the row must stay selected after the re-sort")
+        row = self.storage.capture(cap_id)
+        self.assertGreater(row["elapsed_s"], before,
+                           "stepping must move the published time")
+        self.assertEqual(row["elapsed_source"], "frame")
+        self.assertEqual(screen.list._rows[seq].elapsed_s, row["elapsed_s"])
+        self.assertEqual(screen.list._rows[seq].time_edit.text(),
+                         format_elapsed(row["elapsed_s"]))
+        self.assertEqual(screen.list._rows[seq].src_lbl.text(), "",
+                         "a frame-bound row carries no ·p/·m suffix")
+
+    def test_zero_restores_press_time(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        cap_id = screen._current_capture["id"]
+        original = screen._current_capture["elapsed_s"]
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        self.assertNotEqual(self.storage.capture(cap_id)["elapsed_s"], original)
+        screen.setFocus()
+        self.app.processEvents()
+        self.key(Qt.Key_0)
+        row = self.storage.capture(cap_id)
+        self.assertAlmostEqual(row["elapsed_s"], original, places=6)
+        self.assertEqual(row["elapsed_source"], "press")
+        self.assertEqual(screen._selected_seq, seq)
+        self.assertEqual(screen.list._rows[seq].src_lbl.text(), "·p")
+
+    def test_caption_shows_the_frame_delta(self):
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        self.assertIn("frame +0", screen.offset_lbl.text())
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        self.assertIn("frame +1", screen.offset_lbl.text(),
+                      "one step off the press frame must read +1")
+        self.assertIn("(press ", screen.offset_lbl.text())
+
+    def test_time_edit_then_enter_keeps_focus_in_the_next_bow(self):
+        # A real time edit triggers refresh_time -> _rebuild, which must not drop
+        # the focus the advance just placed in the next crossing's bow field
+        # (otherwise the operator's bow typing lands in the START field).
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        seq = screen._selected_seq
+        te = screen.list._rows[seq].time_edit
+        te.setFocus()
+        te.clear()
+        for ch in "1.500":
+            key = Qt.Key_Period if ch == "." else getattr(Qt, f"Key_{ch}")
+            self.app.sendEvent(te, QKeyEvent(
+                QEvent.KeyPress, key, Qt.NoModifier, ch))
+        self.app.processEvents()
+        self.key(Qt.Key_Return)
+        focused = self.app.focusWidget()
+        self.assertIsInstance(focused, QLineEdit)
+        self.assertIsNot(focused, screen.start_edit,
+                         "the bow field, not the START field, must keep focus")
+        self.assertAlmostEqual(self.times()[seq], 1.5, places=3)
+
+    def test_scrub_missing_toasts_and_is_a_noop(self):
+        cap_id = self.storage.insert_capture(
+            self.race_id, 9, 50.0, time.time(), 50.0, 0.0,
+            image_flag="missing", target_ms=50000)
+        screen = self.review()
+        screen.setFocus()
+        self.app.processEvents()
+        screen._select(9)
+        self.app.processEvents()
+        before = dict(self.storage.capture(cap_id))
+        notes = []
+        screen.notify.connect(notes.append)
+        self.key(Qt.Key_Right, Qt.ShiftModifier)
+        after = dict(self.storage.capture(cap_id))
+        self.assertEqual(after["elapsed_s"], before["elapsed_s"])
+        self.assertEqual(notes, ["no frames for this crossing"])
 
 
 if __name__ == "__main__":

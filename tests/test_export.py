@@ -48,8 +48,9 @@ class TestExport(unittest.TestCase):
             reader = list(csv.reader(fh))
         self.assertEqual(reader[0], ["race_no", "heat_no", "name", "position",
                                      "bow_number", "elapsed_seconds",
-                                     "elapsed_formatted", "wall_clock_utc",
-                                     "image_file", "image_flag", "notes"])
+                                     "elapsed_formatted", "elapsed_source",
+                                     "wall_clock_utc", "image_file",
+                                     "image_flag", "notes"])
         # race fields are stored separately
         self.assertEqual(reader[1][0], "101")
         self.assertEqual(reader[1][1], "1")
@@ -58,6 +59,7 @@ class TestExport(unittest.TestCase):
         self.assertEqual(reader[1][4], "07")
         self.assertEqual(reader[1][3], "1")
         self.assertEqual(reader[1][6], "0:01.00")
+        self.assertEqual(reader[1][7], "press")
 
     def test_soft_deleted_excluded(self):
         cap = self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 1000.0, 0.0)
@@ -77,7 +79,7 @@ class TestExport(unittest.TestCase):
         with open(out, newline="", encoding="utf-8") as fh:
             row = list(csv.reader(fh))[1]
         self.assertEqual(row[4], "'=1+1")
-        self.assertEqual(row[10], "'@SUM(A1)")
+        self.assertEqual(row[11], "'@SUM(A1)")
 
     def test_reconstructed_capture_elapsed_is_marked(self):
         self.storage.insert_capture(self.race_id, 1, 2000.0, 2000.0, 3.0, 0.0,
@@ -111,6 +113,7 @@ class TestExport(unittest.TestCase):
             reader = list(csv.reader(fh))
 
         self.assertEqual(reader[0][0], "race_id")
+        self.assertEqual(reader[0][9], "elapsed_source")
         # every race listed even with zero crossings
         self.assertEqual(len(reader), 4)  # header + 2 race-1 rows + 1 empty race-2
         # fastest-first within race 1: bow 04 (3s) before 09 (10s)
@@ -138,12 +141,13 @@ class TestExport(unittest.TestCase):
         self.assertEqual(lines[2], "Category\tMen under 18, single, final")
         self.assertRegex(lines[3], r"^Gun start\t\d{2}:\d{2}:\d{2}$")
         self.assertEqual(lines[4],
-                         "Position\tElapsed Time\tBow number\tnotes")
+                         "Position\tElapsed Time\tSource\tBow number\tnotes")
         # data rows sorted fastest -> slowest by elapsed, with position 1..n
         self.assertEqual(lines[5].split("\t")[0], "1")
-        self.assertEqual(lines[5].split("\t")[2], "04")
+        self.assertEqual(lines[5].split("\t")[2], "press")
+        self.assertEqual(lines[5].split("\t")[3], "04")
         self.assertEqual(lines[6].split("\t")[0], "2")
-        self.assertEqual(lines[6].split("\t")[2], "09")
+        self.assertEqual(lines[6].split("\t")[3], "09")
         # html form also produced
         self.assertIn("<table>", markup)
 
@@ -155,7 +159,7 @@ class TestExport(unittest.TestCase):
         lines = tsv.strip("\r\n").split("\r\n")
         # only crossing values, no metadata and no column header
         self.assertEqual(len(lines), 1)
-        self.assertEqual(lines[0], "1\t0:03.00\t04\t")
+        self.assertEqual(lines[0], "1\t0:03.00\tpress\t04\t")
         self.assertNotIn("Race ID", tsv)
         self.assertNotIn("Gun start", tsv)
         self.assertNotIn("Position", tsv)
@@ -168,7 +172,7 @@ class TestExport(unittest.TestCase):
         tsv, _ = clipboard_data(self.storage, self.race_id)
         lines = tsv.strip("\r\n").split("\r\n")
         data_row = lines[5]  # five heading lines precede the crossings
-        self.assertEqual(len(data_row.split("\t")), 4)
+        self.assertEqual(len(data_row.split("\t")), 5)
         self.assertIn("a b c", data_row)
 
     def _write_html(self):

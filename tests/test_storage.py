@@ -146,6 +146,68 @@ def test_race_bundle_orders_by_elapsed_and_excludes_deleted(storage, clock):
     assert storage.race_bundle(999) == (None, [])
 
 
+def test_set_primary_bind_time_shifts_elapsed_and_leaves_press(storage, clock):
+    rid = _make_race(storage)
+    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 5.0, 0.0,
+                                 target_ms=5000)
+    rows = storage.insert_frames([
+        (rid, 4900, 1004.9, "races/r/a.jpg"),
+        (rid, 4966, 1004.966, "races/r/b.jpg"),
+    ])
+    a, b = rows
+    # The automatic/revert path only moves the primary.
+    assert storage.set_primary(cap, a["id"], bind_time=False) == 5.0
+    # The operator path shifts elapsed_s by exactly the frame delta.
+    new = storage.set_primary(cap, b["id"])
+    assert new == pytest.approx(5.0 + (b["t_ms"] - a["t_ms"]) / 1000.0)
+    row = storage.capture(cap)
+    assert row["elapsed_s"] == pytest.approx(5.066)
+    assert row["elapsed_source"] == "frame"
+    assert row["t_press"] == 1000.0          # never rewritten
+    assert row["t_press_wall"] == 1000.0
+    # Re-affirming the same frame does not move the time.
+    assert storage.set_primary(cap, b["id"]) == pytest.approx(5.066)
+
+
+def test_set_crossing_time_marks_manual_and_leaves_press(storage, clock):
+    rid = _make_race(storage)
+    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 5.0, 0.0)
+    assert storage.set_crossing_time(cap, 12.345) is True
+    row = storage.capture(cap)
+    assert row["elapsed_s"] == pytest.approx(12.345)
+    assert row["elapsed_source"] == "manual"
+    assert row["t_press"] == 1000.0
+    assert row["t_press_wall"] == 1000.0
+
+
+def test_read_only_export_tolerates_a_pre_migration_database(data_root):
+    # The web process opens read-only and never migrates (spec §8), so a DB
+    # written before `elapsed_source` existed must still export without raising.
+    st = storage_mod.Storage(data_root)
+    rid = _make_race(st)
+    st.insert_capture(rid, 1, 1000.0, 1000.0, 3.0, 0.0)
+    st.close()
+    conn = sqlite3.connect(str(data_root / "event.db"))
+    conn.execute("ALTER TABLE capture DROP COLUMN elapsed_source")
+    conn.commit()
+    conn.close()
+
+    from hallofframe.render.clipboard import clipboard_data
+    from hallofframe.render.csv import export_csv
+
+    ro = storage_mod.Storage(data_root, event_name="event", read_only=True)
+    try:
+        tsv, markup = clipboard_data(ro, rid)
+        assert "press" in tsv
+        out = data_root / "export.csv"
+        export_csv(ro, rid, out)
+        text = out.read_text(encoding="utf-8")
+        assert "elapsed_source" in text.splitlines()[0]
+        assert ",press," in text
+    finally:
+        ro.close()
+
+
 def test_open_race_returns_newest_unended(storage, clock):
     # No race at all.
     assert storage.open_race() is None
@@ -308,6 +370,7 @@ def test_migration_from_old_schema(data_root):
 
         cap = st.capture(cap_id)
         assert cap["target_ms"] == 1950
+        assert cap["elapsed_source"] == "press"  # migration backfill
         assert cap["primary_frame_id"] == frames[1]["id"]
         # primary_image is the denormalised copy of the chosen frame's path (§6.7)
         assert cap["primary_image"] == frames[1]["path"]

@@ -238,21 +238,22 @@ class TestController(Base):
         # nothing else touched
         self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
 
-    def test_update_crossing_time_recomputes_press_timestamps(self):
+    def test_update_crossing_time_marks_manual_and_leaves_press(self):
         self.seed_buffer(self.buffer)
         t0 = 1000.0
         race_id = self.controller.start_race(t0, name="Race-T")
         self.controller.record_crossing(t0 + 5.0)
         self.settle()
         cap_id = self.storage.captures_for_race(race_id)[0]["id"]
-        t0_wall = self.storage.get_race(race_id)["t0_wall"]
+        before = self.storage.capture(cap_id)
 
         self.assertTrue(self.controller.update_crossing_time(cap_id, 12.345))
         row = self.storage.capture(cap_id)
         self.assertAlmostEqual(row["elapsed_s"], 12.345, places=3)
-        # derived timestamps stay consistent with the race's origin
-        self.assertAlmostEqual(row["t_press"], t0 + 12.345, places=3)
-        self.assertAlmostEqual(row["t_press_wall"], t0_wall + 12.345, places=3)
+        # A typed time is 'manual' and never rewrites the raw button event.
+        self.assertEqual(row["elapsed_source"], "manual")
+        self.assertEqual(row["t_press"], before["t_press"])
+        self.assertEqual(row["t_press_wall"], before["t_press_wall"])
 
     # --- plan step 7.1: remove / restore / clone / time-edit re-target -----
     def test_clone_copies_fields_and_uses_max_sequence_including_deleted(self):
@@ -316,8 +317,146 @@ class TestController(Base):
         self.assertIsNone(row["primary_image"])
         self.assertEqual(
             row["target_ms"],
-            round((row["t_press"] - row["delta_used"] - t0) * 1000))
+            round((row["elapsed_s"] - row["delta_used"]) * 1000))
         self.assertEqual(self.storage.frames_for_capture(cap_id), [])
+
+    def test_scrub_then_reset_restores_the_press_time(self):
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        cap = self.storage.capture(cap_id)
+        press_elapsed = cap["t_press"] - t0
+        frames = self.controller.frames_for_capture(cap_id)
+        idx = next(i for i, f in enumerate(frames)
+                   if f["id"] == cap["primary_frame_id"])
+        a, c = frames[idx], frames[idx + 2]
+
+        # Two scrub steps: each moves the time with the frame (bind_time=True).
+        self.controller.set_primary(cap_id, frames[idx + 1]["id"])
+        self.controller.set_primary(cap_id, c["id"])
+        scrubbed = self.storage.capture(cap_id)
+        self.assertAlmostEqual(
+            scrubbed["elapsed_s"],
+            press_elapsed + (c["t_ms"] - a["t_ms"]) / 1000.0, places=6)
+        self.assertEqual(scrubbed["elapsed_source"], "frame")
+
+        # "Time from press" restores the original elapsed and the press source.
+        self.controller.reset_time_to_press(cap_id)
+        reset = self.storage.capture(cap_id)
+        self.assertAlmostEqual(reset["elapsed_s"], press_elapsed, places=6)
+        self.assertEqual(reset["elapsed_source"], "press")
+        self.assertEqual(reset["t_press"], cap["t_press"])
+        self.assertEqual(reset["primary_frame_id"], a["id"])
+
+    def test_scrubbing_a_clone_moves_only_the_clone(self):
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        self.settle()
+        parent = self.storage.captures_for_race(race_id)[0]
+        clone = self.controller.clone(parent["id"])
+        frames = self.controller.frames_for_capture(parent["id"])
+        idx = next(i for i, f in enumerate(frames)
+                   if f["id"] == parent["primary_frame_id"])
+        other = frames[idx + 1]
+
+        self.controller.set_primary(clone.id, other["id"])
+        p_after = self.storage.capture(parent["id"])
+        c_after = self.storage.capture(clone.id)
+        self.assertEqual(p_after["elapsed_s"], parent["elapsed_s"])
+        self.assertEqual(p_after["primary_frame_id"], parent["primary_frame_id"])
+        self.assertEqual(c_after["elapsed_source"], "frame")
+        self.assertNotEqual(c_after["elapsed_s"], parent["elapsed_s"])
+
+    def test_reset_on_missing_capture_keeps_it_missing(self):
+        # No stream: the crossing has no frames, so the source can only be press
+        # or manual; reset restores the press time and leaves the image missing.
+        race_id = self.controller.start_race(1000.0, name="Race-Down")
+        self.controller.record_crossing(1005.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        self.assertEqual(self.storage.capture(cap_id)["image_flag"], "missing")
+        self.controller.reset_time_to_press(cap_id)
+        row = self.storage.capture(cap_id)
+        self.assertEqual(row["image_flag"], "missing")
+        self.assertIsNone(row["primary_frame_id"])
+        self.assertEqual(row["elapsed_source"], "press")
+
+    def test_update_crossing_time_back_onto_frames_clears_missing(self):
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        self.controller.update_crossing_time(cap_id, 120.0)   # no frames
+        self.assertEqual(self.storage.capture(cap_id)["image_flag"], "missing")
+        self.controller.update_crossing_time(cap_id, 5.05)    # frames again
+        row = self.storage.capture(cap_id)
+        self.assertIsNotNone(row["primary_frame_id"])
+        self.assertIsNone(row["image_flag"])
+
+    def test_reset_after_a_missing_edit_restores_primary_and_clears_flag(self):
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        self.controller.update_crossing_time(cap_id, 120.0)   # missing
+        self.assertEqual(self.storage.capture(cap_id)["image_flag"], "missing")
+        self.controller.reset_time_to_press(cap_id)
+        row = self.storage.capture(cap_id)
+        self.assertIsNotNone(row["primary_frame_id"])
+        self.assertIsNone(row["image_flag"])
+
+    def test_reset_on_reconstructed_race_uses_wall_clock(self):
+        # N4: mark_race_reconstructed moves t0_monotonic to the new boot's clock;
+        # the press must be derived from the boot-independent wall pair instead.
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        t0_wall = self.storage.get_race(race_id)["t0_wall"]
+        cap_id = self.storage.insert_capture(
+            race_id, 1, 1005.0, t0_wall + 5.0, 5.0, 0.0, target_ms=5000)
+        self.storage.mark_race_reconstructed(race_id, 9000.0)
+        self.controller.reset_time_to_press(cap_id)
+        row = self.storage.capture(cap_id)
+        self.assertAlmostEqual(row["elapsed_s"], 5.0, places=6)
+        self.assertEqual(row["elapsed_source"], "press")
+
+    def test_set_primary_emits_time_changed(self):
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="R")
+        self.controller.record_crossing(1005.0)
+        self.settle()
+        cap = self.storage.captures_for_race(race_id)[0]
+        frames = self.controller.frames_for_capture(cap["id"])
+        idx = next(i for i, f in enumerate(frames)
+                   if f["id"] == cap["primary_frame_id"])
+        events = []
+        self.controller.events = lambda kind, payload: events.append(
+            (kind, payload))
+        self.controller.set_primary(cap["id"], frames[idx + 1]["id"])
+        changed = [p for k, p in events if k == "time_changed"]
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(changed[0]["capture_id"], cap["id"])
+        self.assertEqual(changed[0]["sequence"], cap["sequence"])
+        self.assertEqual(changed[0]["source"], "frame")
+        self.assertGreater(changed[0]["elapsed_s"], cap["elapsed_s"])
 
     def test_unlisted_race_creates_provisional_key(self):
         # WP7: an unlisted race is created with a timestamp name and null

@@ -5,13 +5,13 @@ import csv
 from pathlib import Path
 
 from ..storage import Storage
-from . import format_elapsed, local_hms, utc_iso
+from . import format_elapsed, local_hms, row_value, utc_iso
 from .html import _all_race_blocks
 
 
 _COLUMNS = ["race_no", "heat_no", "name", "position", "bow_number",
-            "elapsed_seconds", "elapsed_formatted", "wall_clock_utc",
-            "image_file", "image_flag", "notes"]
+            "elapsed_seconds", "elapsed_formatted", "elapsed_source",
+            "wall_clock_utc", "image_file", "image_flag", "notes"]
 
 
 def _safe(value) -> str:
@@ -46,6 +46,7 @@ def _data_rows(storage: Storage, race_id: int):
             c["bow_number"] or "",
             f"{c['elapsed_s']:.2f}",
             elapsed,
+            row_value(c, "elapsed_source", "press"),
             utc_iso(c["t_press_wall"]),
             c["primary_image"] or "",
             c["image_flag"] or "",
@@ -64,8 +65,8 @@ def export_csv(storage: Storage, race_id: int, out_path: str | Path) -> Path:
 
 _ALL_COLUMNS = ["race_id", "race_no", "heat_no", "name", "gun_start",
                 "position", "bow_number", "elapsed_seconds",
-                "elapsed_formatted", "wall_clock_utc", "captured_frame_link",
-                "image_flag", "notes"]
+                "elapsed_formatted", "elapsed_source", "wall_clock_utc",
+                "captured_frame_link", "image_flag", "notes"]
 
 
 def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
@@ -105,6 +106,7 @@ def export_all_csv(storage: Storage, out_path: str | Path) -> Path:
                     c["bow_number"] or "",
                     f"{c['elapsed_s']:.2f}",
                     elapsed,
+                    row_value(c, "elapsed_source", "press"),
                     utc_iso(c["t_press_wall"]),
                     c["primary_image"] or "",
                     c["image_flag"] or "",

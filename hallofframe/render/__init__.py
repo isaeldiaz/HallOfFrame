@@ -64,6 +64,21 @@ def local_hms(wall_ts: float) -> str:
     return dt.strftime("%H:%M:%S")
 
 
+def row_value(row, key, default=None):
+    """Read an optional ``sqlite3.Row`` column without assuming the schema.
+
+    The read-only web ``Storage`` skips migrations (spec §8), so a database
+    written before a column was added can still be served; a missing column (or
+    a NULL value) reads as *default* instead of raising."""
+    try:
+        if key in row.keys():
+            value = row[key]
+            return default if value is None else value
+    except (AttributeError, IndexError, KeyError):
+        pass
+    return default
+
+
 def flag_word(image_flag: str | None, suspect: bool | int | None) -> str:
     """The word shown in a crossing's flag column.
 

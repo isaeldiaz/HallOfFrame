@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS capture (
     t_press         REAL NOT NULL,
     t_press_wall    REAL NOT NULL,
     elapsed_s       REAL NOT NULL,
+    elapsed_source  TEXT NOT NULL DEFAULT 'press',  -- press | frame | manual
     delta_used      REAL NOT NULL,
     bow_number      TEXT,
     primary_image   TEXT,
@@ -191,6 +192,12 @@ class Storage:
             self._conn.execute(
                 "ALTER TABLE capture ADD COLUMN t0_reconstructed INTEGER "
                 "NOT NULL DEFAULT 0")
+        if "elapsed_source" not in ccols:
+            # Every pre-existing crossing's published time is its press time;
+            # the new column records which datum a time came from.
+            self._conn.execute(
+                "ALTER TABLE capture ADD COLUMN elapsed_source TEXT "
+                "NOT NULL DEFAULT 'press'")
 
         self._migrate_capture_frame()
 
@@ -503,31 +510,32 @@ class Storage:
             self._touch(race_id)
             self._conn.commit()
 
-    def set_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
-        """Rewrite a crossing's elapsed time and the derived press timestamps.
+    def set_elapsed(self, capture_id: int, elapsed_s: float, source: str) -> bool:
+        """Write a crossing's published time and its ``elapsed_source``.
 
-        ``elapsed_s`` is the source of truth: ``t_press`` and ``t_press_wall``
-        are recomputed from the race's ``t0_monotonic``/``t0_wall`` so all three
-        stay mutually consistent. Returns False if the capture or its race's
-        monotonic origin is missing (e.g. a reconstructed race without a t0).
-        """
+        ``t_press`` / ``t_press_wall`` are the raw button event and are NEVER
+        rewritten here; only ``elapsed_s`` (the published time) and the source
+        that produced it change. Returns False for an unknown capture."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT c.race_id, r.t0_monotonic, r.t0_wall FROM capture c "
-                "JOIN race r ON r.id = c.race_id WHERE c.id = ?",
-                (capture_id,)).fetchone()
-            if row is None or row["t0_monotonic"] is None:
+                "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
+            if row is None:
                 return False
-            t_press = row["t0_monotonic"] + elapsed_s
-            t_press_wall = (row["t0_wall"] + elapsed_s
-                            if row["t0_wall"] is not None else elapsed_s)
             self._conn.execute(
-                "UPDATE capture SET elapsed_s=?, t_press=?, t_press_wall=?, "
-                "updated_at=? WHERE id=?",
-                (elapsed_s, t_press, t_press_wall, _utcnow(), capture_id))
+                "UPDATE capture SET elapsed_s=?, elapsed_source=?, updated_at=? "
+                "WHERE id=?",
+                (elapsed_s, source, _utcnow(), capture_id))
             self._touch(row["race_id"])
             self._conn.commit()
             return True
+
+    def set_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
+        """Rewrite a crossing's published time from an operator edit.
+
+        A typed time is a ``manual`` source: it changes ``elapsed_s`` only and
+        leaves the raw ``t_press`` / ``t_press_wall`` untouched. Returns False
+        for an unknown capture."""
+        return self.set_elapsed(capture_id, elapsed_s, "manual")
 
     def restore_capture(self, capture_id: int) -> None:
         """Undo a soft delete: set ``deleted=0`` (plan step 7.1).
@@ -567,12 +575,14 @@ class Storage:
             now = _utcnow()
             cur = self._conn.execute(
                 "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
-                "elapsed_s, delta_used, target_ms, primary_frame_id, primary_image, "
-                "image_flag, bow_number, notes, debounce_suspect, deleted, "
-                "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "elapsed_s, elapsed_source, delta_used, target_ms, "
+                "primary_frame_id, primary_image, image_flag, bow_number, notes, "
+                "debounce_suspect, deleted, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (race_id, seq, src["t_press"], src["t_press_wall"], src["elapsed_s"],
-                 src["delta_used"], src["target_ms"], src["primary_frame_id"],
-                 src["primary_image"], src["image_flag"], None, None, 0, 0, now))
+                 src["elapsed_source"], src["delta_used"], src["target_ms"],
+                 src["primary_frame_id"], src["primary_image"], src["image_flag"],
+                 None, None, 0, 0, now))
             self._touch(race_id)
             self._conn.commit()
             return cur.lastrowid
@@ -645,22 +655,55 @@ class Storage:
                 "AND c.target_ms + r.window_after_ms "
                 "ORDER BY f.t_ms", (capture_id,)).fetchall()
 
-    def set_primary(self, capture_id: int, frame_id: int) -> None:
+    def set_primary(self, capture_id: int, frame_id: int,
+                    bind_time: bool = True) -> float | None:
         """Promote *frame_id* to the capture's primary; ``primary_image`` stays
-        a denormalised copy of that frame's path so export/web/UI are unchanged."""
+        a denormalised copy of that frame's path so export/web/UI are unchanged.
+
+        With ``bind_time`` (the operator scrub path) and a previous primary
+        frame in the same race, the published ``elapsed_s`` shifts by
+        ``(B.t_ms - A.t_ms) / 1000`` and ``elapsed_source`` becomes ``'frame'``:
+        the selected frame carries the time. ``bind_time=False`` (the automatic
+        nearest-frame pick and the "time from press" revert) only moves the
+        primary. Returns the resulting ``elapsed_s``, or None for an unknown
+        capture or a frame from another race."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT f.path AS path, f.race_id AS race_id, c.race_id AS cap_race "
-                "FROM frame f JOIN capture c ON c.id=? WHERE f.id=?",
-                (capture_id, frame_id)).fetchone()
-            if row is None or row["race_id"] != row["cap_race"]:
-                return
-            self._conn.execute(
-                "UPDATE capture SET primary_frame_id=?, primary_image=?, "
-                "updated_at=? WHERE id=?",
-                (frame_id, row["path"], _utcnow(), capture_id))
-            self._touch(row["race_id"])
+            cap = self._conn.execute(
+                "SELECT race_id, elapsed_s, primary_frame_id FROM capture "
+                "WHERE id=?", (capture_id,)).fetchone()
+            if cap is None:
+                return None
+            frame = self._conn.execute(
+                "SELECT id, race_id, t_ms, path FROM frame WHERE id=?",
+                (frame_id,)).fetchone()
+            if frame is None or frame["race_id"] != cap["race_id"]:
+                return None
+            elapsed = cap["elapsed_s"]
+            source = None
+            if bind_time and cap["primary_frame_id"] is not None:
+                old = self._conn.execute(
+                    "SELECT race_id, t_ms FROM frame WHERE id=?",
+                    (cap["primary_frame_id"],)).fetchone()
+                if (old is not None and old["race_id"] == cap["race_id"]
+                        and old["t_ms"] != frame["t_ms"]):
+                    # Only a real frame move carries the time; re-affirming the
+                    # same primary must not touch elapsed_s or its source.
+                    elapsed = elapsed + (frame["t_ms"] - old["t_ms"]) / 1000.0
+                    source = "frame"
+            now = _utcnow()
+            if source is not None:
+                self._conn.execute(
+                    "UPDATE capture SET primary_frame_id=?, primary_image=?, "
+                    "elapsed_s=?, elapsed_source=?, updated_at=? WHERE id=?",
+                    (frame_id, frame["path"], elapsed, source, now, capture_id))
+            else:
+                self._conn.execute(
+                    "UPDATE capture SET primary_frame_id=?, primary_image=?, "
+                    "updated_at=? WHERE id=?",
+                    (frame_id, frame["path"], now, capture_id))
+            self._touch(cap["race_id"])
             self._conn.commit()
+            return elapsed
 
     def integrity_ok(self) -> bool:
         with self._lock:

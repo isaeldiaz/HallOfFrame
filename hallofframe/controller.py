@@ -41,6 +41,7 @@ class Capture:
     image_flag: str | None
     debounce_suspect: bool = False
     t0_reconstructed: bool = False
+    elapsed_source: str = "press"
 
 
 class CaptureController:
@@ -68,7 +69,12 @@ class CaptureController:
         self.t0_reconstructed = False
         self.ended_at_mono: float | None = None  # monotonic time of end_race()
         self.ended_capture_count = 0  # non-deleted ends at the moment of ending
-        self.preview_fps = float(config.section("stream")["assumed_fps"])
+        # Prefer the rate the ring buffer was actually sized with (the
+        # calibrated fps when present — main.build_core), so the review caption's
+        # frame delta and the stored fps_nominal match the real spacing.
+        self.preview_fps = float(
+            getattr(framebuffer, "assumed_fps", None)
+            or config.section("stream")["assumed_fps"])
 
         timing = config.section("timing")
         self.start_mode = timing["start_mode"]
@@ -126,7 +132,9 @@ class CaptureController:
                        row["delta_used"], row["image_flag"],
                        bool(row["debounce_suspect"]),
                        bool(row["t0_reconstructed"])
-                       if "t0_reconstructed" in row.keys() else False)
+                       if "t0_reconstructed" in row.keys() else False,
+                       row["elapsed_source"]
+                       if "elapsed_source" in row.keys() else "press")
 
     # --- race lifecycle ---------------------------------------------------
     def start_race(self, t_press: float, name: str = "Race",
@@ -453,23 +461,32 @@ class CaptureController:
         # selection (latency made target appear newer than the newest frame).
         # Recompute it now from what was actually selected (§6.5): the flag
         # describes the attached image, not the transient state at the press.
-        if primary is None:
-            flag = "missing"
-        else:
-            span = self.buffer.span()
-            if span is None or target < span[0] or target > span[1]:
-                flag = "approximate"
-            else:
-                flag = None
-        self.storage.update_capture(capture_id, image_flag=flag)
+        self.storage.update_capture(
+            capture_id, image_flag=self._image_flag_for(target, primary))
 
         if primary is not None:
-            self.storage.set_primary(capture_id, primary["id"])
+            # The automatic nearest-frame pick only attaches a photo; it must not
+            # move the published time (an unscrubbed crossing stays 'press').
+            self.storage.set_primary(capture_id, primary["id"], bind_time=False)
             # Notify the UI so the last-capture panel / log thumbnails can show
             # the photo now that the deferred selection landed (§3). Emitted from
             # the deferred-timer thread, never the trigger path. ``path`` is
             # already relative to data_root (stored by FrameStore.save).
             self._emit("image_ready", sequence=sequence, path=primary["path"])
+
+    def _image_flag_for(self, target: float, primary) -> str | None:
+        """The ``image_flag`` for a capture whose primary is *primary*.
+
+        ``missing`` when nothing was attached; ``approximate`` when the target
+        falls outside the live buffer span; otherwise None. Shared by the
+        deferred selector and the review-time re-picks so a re-bound time cannot
+        leave a stale ``missing`` on a crossing that has a photo."""
+        if primary is None:
+            return "missing"
+        span = self.buffer.span()
+        if span is None or target < span[0] or target > span[1]:
+            return "approximate"
+        return None
 
     def frames_for_capture(self, capture_id: int) -> list:
         """The frames in a capture's selection window (plan step 5.3).
@@ -483,14 +500,16 @@ class CaptureController:
         self.storage.update_capture(capture_id, bow_number=value)
 
     def update_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
-        """Rewrite a crossing's elapsed time and re-derive its frame target.
+        """Rewrite a crossing's published time from a typed value (``manual``).
 
-        ``storage.set_crossing_time`` recomputes the press timestamps; here the
-        selection ``target_ms`` is recomputed too (plan step 7.1). If no frame
-        now falls in the window the image is flagged ``missing`` and the primary
-        cleared, so the review UI can offer "re-pick image". While the race is
-        still running and the live buffer holds frames for the new target,
-        selection is re-run so the photo follows the edited time."""
+        ``storage.set_crossing_time`` records the new ``elapsed_s`` and marks it
+        ``manual``; it never touches ``t_press``. Here the selection ``target_ms``
+        is recomputed from the new elapsed (plan step 7.1) and the nearest frame
+        is re-picked without moving the time. If no frame falls in the window the
+        image is flagged ``missing`` and the primary cleared, so the review UI can
+        offer "re-pick image". While the race is still running and the live buffer
+        holds frames for the new target, selection is re-run so the photo follows
+        the edited time."""
         if not self.storage.set_crossing_time(capture_id, elapsed_s):
             return False
         row = self.storage.capture(capture_id)
@@ -500,19 +519,76 @@ class CaptureController:
         race = self.storage.get_race(race_id)
         if race is None or race["t0_monotonic"] is None:
             return True
-        target_ms = round(
-            (row["t_press"] - row["delta_used"] - race["t0_monotonic"]) * 1000)
+        # The window is centered on the edited time, not the (now immutable) press.
+        target = race["t0_monotonic"] + row["elapsed_s"] - row["delta_used"]
+        target_ms = round((target - race["t0_monotonic"]) * 1000)
         self.storage.update_capture(capture_id, target_ms=target_ms)
-        if not self.storage.frames_for_capture(capture_id):
+        frames = self.storage.frames_for_capture(capture_id)
+        primary = nearest(frames, target_ms) if frames else None
+        if primary is None:
             self.storage.update_capture(
                 capture_id, image_flag="missing",
                 primary_frame_id=None, primary_image=None)
-        target = row["t_press"] - self.delta
+        else:
+            self.storage.set_primary(capture_id, primary["id"], bind_time=False)
+            # A photo is attached again, so a stale 'missing' must not survive.
+            # ('approximate' is a live-buffer judgement and is left as it was.)
+            if row["image_flag"] == "missing":
+                self.storage.update_capture(capture_id, image_flag=None)
+        self._emit("time_changed", capture_id=capture_id,
+                   sequence=row["sequence"], elapsed_s=row["elapsed_s"],
+                   source="manual")
         if (self.running and race_id == self.race_id
                 and self.buffer.window(target, self.window_before_s,
                                        self.window_after_s)):
             self._select_images(capture_id, row["sequence"], target, self.race_dir)
         return True
+
+    def reset_time_to_press(self, capture_id: int) -> float | None:
+        """Revert a crossing to its raw press time ("time from press").
+
+        The primary goes back to the frame nearest the press-derived target and
+        ``elapsed_s`` becomes ``t_press - t0`` with ``elapsed_source = 'press'``.
+        ``t_press`` itself never changes. Returns the restored elapsed, or None
+        for an unknown capture/race."""
+        cap = self.storage.capture(capture_id)
+        if cap is None:
+            return None
+        race = self.storage.get_race(cap["race_id"])
+        if race is None or race["t0_monotonic"] is None:
+            return None
+        elapsed = self._press_elapsed(cap, race)
+        target = race["t0_monotonic"] + elapsed - cap["delta_used"]
+        target_ms = round((target - race["t0_monotonic"]) * 1000)
+        self.storage.update_capture(capture_id, target_ms=target_ms)
+        frames = self.storage.frames_for_capture(capture_id)
+        primary = nearest(frames, target_ms) if frames else None
+        if primary is None:
+            self.storage.update_capture(
+                capture_id, image_flag="missing",
+                primary_frame_id=None, primary_image=None)
+        else:
+            self.storage.set_primary(capture_id, primary["id"], bind_time=False)
+            if cap["image_flag"] == "missing":
+                self.storage.update_capture(capture_id, image_flag=None)
+        self.storage.set_elapsed(capture_id, elapsed, "press")
+        self._emit("time_changed", capture_id=capture_id,
+                   sequence=cap["sequence"], elapsed_s=elapsed, source="press")
+        return elapsed
+
+    @staticmethod
+    def _press_elapsed(cap, race) -> float:
+        """The boot-independent elapsed of a crossing's raw press.
+
+        Normally ``t_press - t0_monotonic``. After a reconstructed resume (N4)
+        ``mark_race_reconstructed`` overwrites the race's ``t0_monotonic`` with
+        the new boot's clock while pre-restart captures keep their old-clock
+        ``t_press``, so the monotonic subtraction is meaningless; the wall-clock
+        pair (both shifted together by ``set_start_time``) is used instead."""
+        if (race["t0_reconstructed"] and race["t0_wall"] is not None
+                and cap["t_press_wall"] is not None):
+            return cap["t_press_wall"] - race["t0_wall"]
+        return cap["t_press"] - race["t0_monotonic"]
 
     def set_start_time(self, race_id: int, new_t0_wall: float) -> bool:
         """Set the race's wall-clock start time (gun), shifting every crossing's
@@ -522,14 +598,22 @@ class CaptureController:
     def set_primary(self, capture_id: int, frame_id: int) -> str | None:
         """Promote *frame_id* to the capture's primary photo (operator review).
 
-        Returns the new primary_image path relative to ``data_root`` (or None).
-        Emits ``image_ready`` so list thumbnails refresh.
+        The published time follows the frame (``elapsed_source = 'frame'``), so
+        this emits ``time_changed`` as well as ``image_ready``. Returns the new
+        primary_image path relative to ``data_root`` (or None).
         """
-        self.storage.set_primary(capture_id, frame_id)
+        if self.storage.set_primary(capture_id, frame_id) is None:
+            # Unknown capture, or a frame belonging to another race: nothing was
+            # written, so do not report the old path as a successful promotion.
+            return None
         cap = self.storage.capture(capture_id)
         path = cap["primary_image"] if cap else None
         if cap and path:
             self._emit("image_ready", sequence=cap["sequence"], path=path)
+        if cap is not None:
+            self._emit("time_changed", capture_id=capture_id,
+                       sequence=cap["sequence"], elapsed_s=cap["elapsed_s"],
+                       source=cap["elapsed_source"])
         return path
 
     def remove(self, capture_id: int) -> None:

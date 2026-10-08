@@ -209,6 +209,7 @@ class _Photo(QLabel):
 
 class ReviewScreen(QWidget):
     edit_race_requested = Signal()
+    notify = Signal(str)  # one-line operator message, shown as the app toast
 
     def __init__(self, controller, data_root, race_id: int | None = None,
                  parent=None):
@@ -221,6 +222,12 @@ class ReviewScreen(QWidget):
         self._frame_paths: dict[int, list] = {}  # capture_id -> [frame dicts]
         self.panel: QWidget | None = None
         self._t0_wall: float | None = None
+        # Monotonic race origin, used to render the press time and the frame
+        # delta in the photo-pane caption ("6:12.55 · frame +2 (press 6:12.48)").
+        # After a reconstructed resume the monotonic origin is on a new boot's
+        # clock, so the wall-clock pair is used instead (N4).
+        self._t0_mono: float | None = None
+        self._t0_reconstructed = False
         # Deletion history, oldest first, so ``U`` can undo more than the last
         # removal (capture ids; reset when a different race is loaded).
         self._undo_stack: list[int] = []
@@ -344,6 +351,8 @@ class ReviewScreen(QWidget):
                               self.race_id, include_deleted=True)]
         row = self.controller.storage.get_race(self.race_id)
         self._t0_wall = row["t0_wall"] if row else None
+        self._t0_mono = row["t0_monotonic"] if row else None
+        self._t0_reconstructed = bool(row["t0_reconstructed"]) if row else False
         self.start_edit.setText(
             local_hms(self._t0_wall) if self._t0_wall is not None else "")
         self.list.clear()
@@ -351,6 +360,7 @@ class ReviewScreen(QWidget):
             self.list.add({
                 "sequence": c["sequence"],
                 "elapsed_s": c["elapsed_s"],
+                "elapsed_source": c["elapsed_source"],
                 "image_path": str(self.data_root / c["primary_image"])
                               if c["primary_image"] else None,
                 "image_flag": c["image_flag"],
@@ -429,12 +439,37 @@ class ReviewScreen(QWidget):
         if chosen is None:
             chosen = min(frames, key=lambda f: abs(f["offset_ms"]))
         self.scrubber.set_frames(frames, chosen["offset_ms"])
-        self._show_frame(chosen["path"], chosen["offset_ms"])
+        self._show_frame(chosen["path"])
 
-    def _show_frame(self, path: str, offset_ms: float) -> None:
-        off = float(offset_ms)
-        self.offset_lbl.setText(f"{off:+.0f} ms")
+    def _show_frame(self, path: str) -> None:
+        self.offset_lbl.setText(self._caption())
         self.photo.set_frame(path, "image unreadable")
+
+    def _caption(self) -> str:
+        """The photo-pane caption: published time · frame delta (press time).
+
+        ``frame +N`` is how many frames the primary sits after the press time
+        (negative when it precedes it); the parenthesised press time is the raw
+        button time, which never changes."""
+        cap = getattr(self, "_current_capture", None)
+        if cap is None:
+            return ""
+        elapsed = cap["elapsed_s"]
+        press = self._press_elapsed(cap)
+        if press is None:
+            return format_elapsed(elapsed)
+        fps = float(getattr(self.controller, "preview_fps", 30.0) or 30.0)
+        frames = round((elapsed - press) * fps)
+        return (f"{format_elapsed(elapsed)} · frame {frames:+d} "
+                f"(press {format_elapsed(press)})")
+
+    def _press_elapsed(self, cap: dict) -> float | None:
+        """The crossing's raw press elapsed, boot-independent (N4-safe)."""
+        if self._t0_reconstructed and self._t0_wall is not None:
+            return cap["t_press_wall"] - self._t0_wall
+        if self._t0_mono is None:
+            return None
+        return cap["t_press"] - self._t0_mono
 
     # --- persistence ------------------------------------------------------
     def _save_start_time(self) -> None:
@@ -493,7 +528,8 @@ class ReviewScreen(QWidget):
             self.list.refresh_time(sequence, cap["elapsed_s"])
             return
         cap["elapsed_s"] = elapsed
-        self.list.refresh_time(sequence, elapsed)
+        cap["elapsed_source"] = "manual"
+        self.list.refresh_time(sequence, elapsed, "manual")
         fresh = self.controller.storage.capture(cap["id"])
         if fresh is not None:
             cap["image_flag"] = fresh["image_flag"]
@@ -615,16 +651,14 @@ class ReviewScreen(QWidget):
             self._move_selection(1)
             return
         if key == Qt.Key_Left and mods & Qt.ShiftModifier:
-            self.scrubber.step(-1)
-            f = self.scrubber.selected_frame()
-            if f:
-                self._show_frame(f["path"], f["offset_ms"])
+            self._step_and_bind(-1)
             return
         if key == Qt.Key_Right and mods & Qt.ShiftModifier:
-            self.scrubber.step(1)
-            f = self.scrubber.selected_frame()
-            if f:
-                self._show_frame(f["path"], f["offset_ms"])
+            self._step_and_bind(1)
+            return
+        if key == Qt.Key_0 and not (mods & (Qt.ShiftModifier | Qt.ControlModifier
+                                            | Qt.AltModifier | Qt.MetaModifier)):
+            self.reset_selected_time()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
             # Save the selected frame and move to the next crossing's bow.
@@ -663,10 +697,54 @@ class ReviewScreen(QWidget):
 
     def _step_frame(self, delta: int) -> None:
         """Step the scrubber from a bow field (Shift+←/→), keeping focus there."""
+        self._step_and_bind(delta)
+
+    def _step_and_bind(self, delta: int) -> None:
+        """Step one frame and make it the primary, moving the time with it.
+
+        Stepping is timing: the published ``elapsed_s`` shifts by the frame
+        delta. A crossing with no frames (``missing``) has nothing to step, so
+        the operator gets a toast instead of a silent no-op."""
+        cap = getattr(self, "_current_capture", None)
+        if cap is None:
+            return
+        if cap.get("image_flag") == "missing" and not self._frame_paths.get(cap["id"]):
+            self.notify.emit("no frames for this crossing")
+            return
         self.scrubber.step(delta)
         f = self.scrubber.selected_frame()
-        if f:
-            self._show_frame(f["path"], f["offset_ms"])
+        if f is not None:
+            self._bind_selected_frame(f)
+
+    def reset_selected_time(self) -> None:
+        """``0`` — restore the crossing's raw press time ("time from press")."""
+        cap = self._selected_capture()
+        if cap is None:
+            return
+        elapsed = self.controller.reset_time_to_press(cap["id"])
+        if elapsed is None:
+            return
+        cap["elapsed_s"] = elapsed
+        cap["elapsed_source"] = "press"
+        for c in self._captures:
+            if c["id"] == cap["id"]:
+                c["elapsed_s"] = elapsed
+                c["elapsed_source"] = "press"
+        fresh = self.controller.storage.capture(cap["id"])
+        if fresh is not None:
+            cap["primary_image"] = fresh["primary_image"]
+            cap["primary_frame_id"] = fresh["primary_frame_id"]
+            cap["target_ms"] = fresh["target_ms"]
+            cap["image_flag"] = fresh["image_flag"]
+        self.list.refresh_time(cap["sequence"], elapsed, "press")
+        self.list.refresh_flag(cap["sequence"], cap["image_flag"],
+                               bool(cap.get("debounce_suspect")))
+        self.list.set_selected(cap["sequence"])
+        if cap["primary_image"]:
+            self.list.update_thumb(cap["sequence"],
+                                   str(self.data_root / cap["primary_image"]))
+        self._show_capture(cap["sequence"])
+        self._show_primary()
 
     def _select_step(self, delta: int) -> None:
         """Move the selection from a bow field (↑/↓), landing in the new bow."""
@@ -700,6 +778,41 @@ class ReviewScreen(QWidget):
         if self._selected_seq is not None:
             self.list.focus_bow(self._selected_seq)
 
+    def _bind_selected_frame(self, f: dict) -> bool:
+        """Promote *f* to primary and pull its time change into the row/list.
+
+        The controller shifts ``elapsed_s`` by the frame delta (the scrub path
+        uses ``bind_time=True``), so the row's time, its ·p/·m marker and the
+        fastest-first order all refresh; the crossing stays selected even if it
+        changes position."""
+        cap = getattr(self, "_current_capture", None)
+        if cap is None or f is None:
+            return False
+        old_elapsed = cap["elapsed_s"]
+        path = self.controller.set_primary(cap["id"], f["id"])
+        if not path:
+            return False
+        fresh = self.controller.storage.capture(cap["id"])
+        if fresh is not None:
+            cap["elapsed_s"] = fresh["elapsed_s"]
+            cap["elapsed_source"] = fresh["elapsed_source"]
+        for c in self._captures:
+            if c["id"] == cap["id"]:
+                c["primary_image"] = path
+                c["primary_frame_id"] = f["id"]
+                c["elapsed_s"] = cap["elapsed_s"]
+                c["elapsed_source"] = cap["elapsed_source"]
+        if cap["elapsed_s"] != old_elapsed:
+            # A real time change can reorder the fastest-first list. When the
+            # time did not move (Tab re-affirming the same frame) skip the
+            # rebuild so an in-progress time edit in the field is not clobbered.
+            self.list.refresh_time(cap["sequence"], cap["elapsed_s"],
+                                   cap.get("elapsed_source"))
+            self.list.set_selected(cap["sequence"])
+        self.list.update_thumb(cap["sequence"], str(self.data_root / path))
+        self._show_frame(f["path"])
+        return True
+
     def _commit_selected_frame(self) -> bool:
         """Promote the scrubber's selected frame to the crossing's primary."""
         cap = getattr(self, "_current_capture", None)
@@ -708,14 +821,8 @@ class ReviewScreen(QWidget):
         f = self.scrubber.selected_frame()
         if f is None:
             return False
-        path = self.controller.set_primary(cap["id"], f["id"])
-        if not path:
+        if not self._bind_selected_frame(f):
             return False
-        for c in self._captures:
-            if c["id"] == cap["id"]:
-                c["primary_image"] = path
-                c["primary_frame_id"] = f["id"]
-        self.list.update_thumb(cap["sequence"], str(self.data_root / path))
         self.saved_lbl.setText("saved")
         self._saved_timer.start(1800)
         return True

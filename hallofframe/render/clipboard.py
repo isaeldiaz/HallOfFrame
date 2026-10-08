@@ -4,7 +4,7 @@ from __future__ import annotations
 import html
 
 from ..storage import Storage
-from . import format_elapsed, local_hms
+from . import format_elapsed, local_hms, row_value
 
 
 def clipboard_data(storage: Storage, race_id: int,
@@ -16,13 +16,13 @@ def clipboard_data(storage: Storage, race_id: int,
       Heat no, heat_no
       Category, name
       Gun start, HH:MM:SS (local wall-clock time of the gun)
-      Position, Elapsed Time, Bow number, notes
+      Position, Elapsed Time, Source, Bow number, notes
       <one row per crossing, fastest to slowest>
 
     When *include_heading* is False the entire heading is omitted — the four
     metadata rows (Race ID, Heat no, Category, Gun start) AND the column header
-    (Position, Elapsed Time, Bow number, notes) — leaving only the crossing
-    values (configurable via ``[web] copy_heading``).
+    (Position, Elapsed Time, Source, Bow number, notes) — leaving only the
+    crossing values (configurable via ``[web] copy_heading``).
     """
     race = storage.get_race(race_id)
     race_no = (race["race_no"] or "") if race else ""
@@ -30,7 +30,7 @@ def clipboard_data(storage: Storage, race_id: int,
     name = (race["name"] or "") if race else ""
     t0_wall = (race["t0_wall"] if race and race["t0_wall"] is not None else None)
 
-    header = ["Position", "Elapsed Time", "Bow number", "notes"]
+    header = ["Position", "Elapsed Time", "Source", "Bow number", "notes"]
     rows: list[list[str]] = []
     if include_heading:
         rows = [
@@ -46,6 +46,7 @@ def clipboard_data(storage: Storage, race_id: int,
         rows.append([
             str(pos),
             format_elapsed(c["elapsed_s"]),
+            row_value(c, "elapsed_source", "press"),
             c["bow_number"] or "",
             c["notes"] or "",
         ])

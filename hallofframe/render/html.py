@@ -20,7 +20,7 @@ from string import Template
 from .. import __version__
 from ..buildinfo import build_stamp
 from ..storage import Storage
-from . import flag_word, format_elapsed, local_hms, utc_iso
+from . import flag_word, format_elapsed, local_hms, row_value, utc_iso
 
 
 # --- HTML export ----------------------------------------------------------
@@ -426,15 +426,9 @@ def _src(rel_path: str, img_base: str = "") -> str:
         urllib.parse.quote(rel_path.replace("\\", "/")), quote=True)
 
 
-def _row_value(row, key, default=None):
-    """Read an optional sqlite3.Row column without assuming the schema."""
-    try:
-        if key in row.keys():
-            value = row[key]
-            return default if value is None else value
-    except (AttributeError, IndexError, KeyError):
-        pass
-    return default
+# Kept as a module-level alias: ``export.py`` (and its shim test) imports
+# ``_row_value`` from here; the one implementation lives in ``render``.
+_row_value = row_value
 
 
 def _thumb_html(capture, img_base: str = "") -> str:
@@ -469,6 +463,7 @@ def _card_html(capture, position: int, img_base: str = "") -> str:
     if _row_value(capture, "t0_reconstructed", 0):
         elapsed = "~" + elapsed  # measured after a reconstructed resume (N4)
     elapsed_raw = "%.2f" % capture["elapsed_s"]
+    source = _row_value(capture, "elapsed_source", "press") or "press"
     seq = "#%03d" % position
     search = " ".join(str(v) for v in (capture["sequence"], bow, elapsed, notes,
                                        word) if v)
@@ -493,6 +488,7 @@ def _card_html(capture, position: int, img_base: str = "") -> str:
         '<div class="card-meta">'
         '<div class="meta-row">'
         + _meta_cell("ELAPSED (S)", elapsed_raw)
+        + _meta_cell("SRC", source)
         + _meta_cell("WALL CLOCK (UTC)", utc_iso(capture["t_press_wall"]))
         + "</div>"
         f"{note_line}</div></div></div>"

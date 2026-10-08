@@ -64,6 +64,7 @@ def build_core(config):
     """Construct transport, reader, buffer, storage and controller.
     Returns a dict of the parts so headless tests can reuse it without Qt."""
     import time
+    from .calibration import Calibration
     from .controller import CaptureController
     from .framebuffer import FrameBuffer
     from .mjpeg import MJPEGReader
@@ -89,8 +90,14 @@ def build_core(config):
         # may point anywhere (fake camera, network camera). See plan step 7.4.
         transport = _NullTransport()
     stream = config.section("stream")
+    # Prefer the calibrated fps (the rate the phone was actually measured at)
+    # when a calibration file is present; fall back to the operator-maintained
+    # [stream] assumed_fps so the ring buffer is sized from the measured rate.
+    cal = Calibration.load(config.data_root)
+    assumed_fps = (max(1, round(cal.fps)) if cal is not None and cal.fps
+                   else int(stream["assumed_fps"]))
     buffer = FrameBuffer(seconds=float(stream["buffer_seconds"]),
-                         assumed_fps=int(stream["assumed_fps"]))
+                         assumed_fps=assumed_fps)
 
     controller = CaptureController(config, storage, buffer)
 

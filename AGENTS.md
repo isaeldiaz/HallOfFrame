@@ -103,6 +103,18 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 - **Image selection is deferred**: on a press, only the capture row is queued;
   a `threading.Timer` selects frames ~`window_after_ms + margin` later so the
   after-window frames exist in the buffer (spec §6.5).
+- **`t_press` is immutable; the published time follows the frame.** `capture.
+  t_press` is the raw button event and is written only by `insert_capture` and
+  `clone_capture` (grep `t_press` in `storage.py`). `t_press_wall` is written
+  there too plus the gun-time correction in `set_start_time` (which shifts the
+  whole race's wall clock together). The
+  published `capture.elapsed_s` starts at `t_press − t0` with
+  `elapsed_source='press'`; scrubbing the review screen to another primary frame
+  shifts it by `(B.t_ms − A.t_ms)/1000` (`'frame'`), a typed time is `'manual'`,
+  and review's `0` ("time from press") restores `press`. The automatic
+  nearest-frame pick and the revert call `set_primary(..., bind_time=False)`; the
+  operator path binds time. The review list marks each row `·p`/`·m` (nothing for
+  `frame`). Export/web carry `elapsed_source`.
 - **Frames are gun-indexed and saved once per race** (`framestore.py`):
   `frames/{t_ms:08d}.jpg` where `t_ms = round((t_recv - t0) * 1000)`; a crossing
   refers to frames by `target_ms ± the race's saved window`, so overlapping
