@@ -359,7 +359,14 @@ class CaptureController:
         # the set when it fires so the set does not grow for every capture.
         # Skipped entirely in a timing-only race — no images to attach.
         if not image_off:
-            delay = self.window_after_s + self._margin_s
+            # A negative Δ (water mode: Δ = R − L) puts the target later than the
+            # press, so the after-window reaches past t_press + window_after and
+            # those frames do not exist yet at the base delay. Extend the margin
+            # by |Δ| or the post-line evidence is silently truncated (§5.4/§6.5).
+            # Cap at the buffer span so a pathological Δ cannot schedule a timer
+            # far into the future.
+            extra = min(max(0.0, -payload["delta_used"]), self.buffer.seconds)
+            delay = self.window_after_s + self._margin_s + extra
 
             def _fire() -> None:
                 with self._timers_lock:

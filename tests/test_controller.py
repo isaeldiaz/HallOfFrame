@@ -216,7 +216,10 @@ class TestController(Base):
         race_id = self.controller.start_race(1000.0, name="Race-T")
         self.controller.delta = -500.0  # target = t_press + 500, way past newest
         self.controller.record_crossing(1000.0 + 2.0)
-        self.settle()
+        self.controller._queue.join()
+        # The selection margin is extended by |Δ| (capped at the buffer span),
+        # so advance well past it before checking the empty window.
+        self.scheduler.advance(100.0)
         rows = self.storage.captures_for_race(race_id)
         self.assertEqual(rows[0]["image_flag"], "missing")
         self.assertIsNone(rows[0]["primary_image"])
@@ -419,6 +422,19 @@ class TestController(Base):
         rows_b = self.storage._conn.execute(
             "SELECT COUNT(*) FROM frame WHERE race_id=?", (race_b,)).fetchone()[0]
         self.assertEqual(rows_b, 0)
+
+    def test_negative_delta_extends_the_selection_margin(self):
+        # Water-mode Δ = R − L can be negative; the deferred selection must wait
+        # |Δ| longer so the frames after the target are in the buffer.
+        self.seed_buffer(self.buffer)
+        self.controller.start_race(1000.0, name="R")
+        self.controller.delta = -0.2
+        self.controller.record_crossing(1000.0 + 5.0)
+        self.controller._queue.join()
+        delay = self.scheduler._items[-1].when
+        self.assertAlmostEqual(
+            delay, self.controller.window_after_s + self.controller._margin_s
+            + 0.2, places=6)
 
     def test_radio_start_applies_delay_to_t0(self):
         cfg = self.config_factory(timing={"start_mode": "radio",
