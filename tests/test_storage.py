@@ -120,6 +120,21 @@ def test_race_bundle_orders_by_elapsed_and_excludes_deleted(storage, clock):
     assert storage.race_bundle(999) == (None, [])
 
 
+def test_open_race_returns_newest_unended(storage, clock):
+    # No race at all.
+    assert storage.open_race() is None
+    first = _make_race(storage, name="A", race_no="101", heat_no="1")
+    assert storage.open_race()["id"] == first
+    second = _make_race(storage, name="B", race_no="102", heat_no="1")
+    assert storage.open_race()["id"] == second
+    # Ending the newest exposes the older one again.
+    storage.mark_race_ended(second, 2000.0)
+    assert storage.open_race()["id"] == first
+    # Ending everything yields None.
+    storage.mark_race_ended(first, 3000.0)
+    assert storage.open_race() is None
+
+
 def test_all_bundles_yields_oldest_first(storage, clock):
     first = _make_race(storage, name="A", race_no="101", heat_no="1")
     second = _make_race(storage, name="B", race_no="102", heat_no="1")

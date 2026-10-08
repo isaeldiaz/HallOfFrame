@@ -196,6 +196,16 @@ class Storage:
             return self._conn.execute(
                 "SELECT * FROM race WHERE id=?", (race_id,)).fetchone()
 
+    def open_race(self):
+        """The newest race that was never ended (``ended_at IS NULL``), or None.
+
+        Used on startup to offer resuming a race interrupted by a crash/restart
+        (plan step 3.5, N4)."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM race WHERE ended_at IS NULL "
+                "ORDER BY id DESC LIMIT 1").fetchone()
+
     def list_races(self, reviewed_only: bool = False):
         """Every race, newest first. With *reviewed_only*, only races whose
         operator closed review (``reviewed=1``) — the ones the web index shows."""

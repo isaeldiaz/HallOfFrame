@@ -25,6 +25,7 @@ from PySide6.QtGui import QColor, QImage, QKeyEvent
 from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.controller import CaptureController
+from hallofframe.session import Phase
 from hallofframe.ui.state import AppState
 
 try:  # main_window resolves trigger keycodes through evdev.ecodes
@@ -175,7 +176,7 @@ class TestReviewScreen(unittest.TestCase):
         self.assertNotEqual(screen._selected_seq, first, "Enter did not advance")
         self.assertIsInstance(self.app.focusWidget(), QLineEdit,
                               "advance should land in the next bow field")
-        self.assertFalse(self.win._armed,
+        self.assertIsNot(self.win.session.phase, Phase.ARMED,
                          "Enter must not reach the race-start shortcut")
 
     def test_tab_in_the_bow_field_advances(self):
@@ -206,11 +207,14 @@ class TestReviewScreen(unittest.TestCase):
 
     def test_review_silences_the_race_shortcuts(self):
         self.review()
-        self.assertTrue(all(not s.isEnabled() for s in self.win._race_shortcuts),
+        race_keys = ("Return", "Enter", "SPACE")
+        self.assertTrue(all(not self.win._shortcuts[k].isEnabled()
+                            for k in race_keys),
                         "Enter/Space must not fire while REVIEW is on screen")
         self.win._close_review()
         self.app.processEvents()
-        self.assertTrue(all(s.isEnabled() for s in self.win._race_shortcuts),
+        self.assertTrue(all(self.win._shortcuts[k].isEnabled()
+                            for k in race_keys),
                         "race controls must come back on leaving REVIEW")
 
     def test_typing_silences_the_typable_shortcuts(self):
@@ -219,7 +223,10 @@ class TestReviewScreen(unittest.TestCase):
         self.app.processEvents()
         self.key(Qt.Key_Tab)
         self.assertIsInstance(self.app.focusWidget(), QLineEdit)
-        self.assertTrue(all(not s.isEnabled() for s in self.win._typable_shortcuts),
+        typable = ("C", "E", "L", "D", "R", "N", "/", "End",
+                   "Return", "Enter", "SPACE")
+        self.assertTrue(all(not self.win._shortcuts[k].isEnabled()
+                            for k in typable),
                         "a focused text field must get its own characters")
 
     # --- 5. navigation must survive a focused bow field -------------------

@@ -58,9 +58,13 @@ hallofframe/
   log.py             Structured JSONL logging.
   calibration.py     Latency calibration helpers plus the single `Calibration`
                      loader (the only place that reads the calibration file).
-  ui/                PySide6 widgets: main_window, ready_screen, race_screen,
-                     review_screen, crossing_list, preview_widget,
-                     calibration_dialog.
+  session.py         Qt-free `Session` state machine (`Phase`, transitions,
+                     `SessionError`), `derive_state()`, and the `KEYMAP`/
+                     `KEYBAR_NOTE` key tables.
+  ui/                PySide6 widgets: main_window, ready_screen, roster_view,
+                     race_screen, review_screen, crossing_list, preview_widget,
+                     calibration_dialog. `ui/state.py` holds only the
+                     `AppState` enum.
   tools/ingest_soak.py  Soak-test utility for the ingest path.
   tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
                      near-complete DB, plays the final race, verifies integrity/
@@ -90,6 +94,14 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   and `ui/main_window.py` each subscribe one function that switches on `kind`.
   Never call Qt widgets directly from a worker thread — it can deadlock the GUI.
 - **No modal dialogs during a race** (spec §7.5); errors surface as a banner.
+- **UI position is one `Session` state machine** (`session.py`): `MainWindow`
+  holds a `Session`, every lifecycle action is a named transition
+  (`arm`/`race_started`/`race_ended`/`open_review`/...), and illegal ones raise
+  `SessionError` (shown as a toast). `derive_state(session, stream_alive,
+  cal_ok)` maps it to `AppState`. Which keys do what in each state is the
+  Qt-free `KEYMAP` table; `MainWindow` builds one `QShortcut` per distinct key
+  and enables the subset for the current state. `MainWindow.state_changed` is
+  the hook `main.py` uses to sync the trigger grab.
 - **Calibration (`delta`)** is validated at race start against the live stream
   (§8) by the single `Calibration` loader (`calibration.py`): water mode requires
   a calibration file matching live resolution/fps; screen mode needs none. A dead
@@ -183,6 +195,13 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   selection, calibration, export, archive, and (recently added) **End Race +
   Quit**. If a request mentions an end/quit problem, that is implemented —
   check the current `end_race()`/UI wiring before assuming it's missing.
+- **Resume after restart (N4).** On startup, if `storage.open_race()` finds a
+  race with no `ended_at`, `main.py` shows a non-modal Resume/Discard banner.
+- **Refactor note (phase 3).** The plan's target of `ui/main_window.py` under
+  350 lines was not reached (it is ~766). Roster rendering was extracted to
+  `ui/roster_view.py`; the remaining bulk is the evdev/session orchestration and
+  health/export logic. Closing the gap needs a presenter extraction that no plan
+  step specifies; accepted as a documented deviation (2026-10-06).
 - Version in `hallofframe/__init__.py` (`__version__`).
 - **Finish horn is hardware-driven — §13.2 must-have closed (2026-10-06).** The
   deployed crossing button is a **double-pole switch**: pole 1 is the USB HID

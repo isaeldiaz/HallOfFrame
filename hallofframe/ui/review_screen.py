@@ -435,9 +435,7 @@ class ReviewScreen(QWidget):
         if cap:
             self.controller.soft_delete(cap["id"])
         self._captures = [c for c in self._captures if c["sequence"] != sequence]
-        self.list._rows.pop(sequence, None)
-        self.list._edits.pop(sequence, None)
-        self.list._rebuild()
+        self.list.remove(sequence)
         if self._captures:
             self._select(self._captures[0]["sequence"])
 

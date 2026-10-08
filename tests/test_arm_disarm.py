@@ -8,6 +8,7 @@ from hallofframe.controller import CaptureController
 from hallofframe.framebuffer import FrameBuffer, Frame
 from hallofframe.main import build_trigger
 from hallofframe.roster import recorded_keys
+from hallofframe.session import Phase
 from hallofframe.storage import Storage
 from hallofframe.ui.main_window import MainWindow
 from hallofframe.ui.state import AppState
@@ -47,11 +48,11 @@ class TestArmDisarm(unittest.TestCase):
         # Arm the race
         self.win._arm_start()
         self.assertEqual(self.win._last_state, AppState.ARMED)
-        self.assertTrue(self.win._armed)
+        self.assertIs(self.win.session.phase, Phase.ARMED)
 
         # F12 disarms
         self.win.on_evdev_end(time.monotonic(), code=88)
-        self.assertFalse(self.win._armed)
+        self.assertIs(self.win.session.phase, Phase.IDLE)
         self.assertEqual(self.win._last_state, AppState.READY)
 
     def test_arm_and_disarm_via_esc(self):
@@ -62,11 +63,11 @@ class TestArmDisarm(unittest.TestCase):
         # Arm the race
         self.win._arm_start()
         self.assertEqual(self.win._last_state, AppState.ARMED)
-        self.assertTrue(self.win._armed)
+        self.assertIs(self.win.session.phase, Phase.ARMED)
 
         # Esc disarms (via evdev code 1 or via _esc)
         self.win.on_evdev_end(time.monotonic(), code=1)
-        self.assertFalse(self.win._armed)
+        self.assertIs(self.win.session.phase, Phase.IDLE)
         self.assertEqual(self.win._last_state, AppState.READY)
 
     def test_esc_during_recording_does_not_stop_race(self):
@@ -104,7 +105,7 @@ class TestArmDisarm(unittest.TestCase):
         try:
             # The provisional (name-keyed) race must NOT fire the blue
             # "recorded, not in roster" banner.
-            win._render_roster_banner(win.roster.result, recorded_keys(storage))
+            win.roster_view.render_banner(win.roster.result, recorded_keys(storage))
             self.assertEqual(win.banner_host.lay.count(), 1)  # amber dup only
         finally:
             ctl.stop()
@@ -118,7 +119,7 @@ class TestArmDisarm(unittest.TestCase):
         ctl = CaptureController(cfg, storage, self.buffer)
         win = MainWindow(cfg, ctl, self.buffer)
         try:
-            win._load_races()
+            win.roster_view.load()
             self.assertTrue(win.roster.result.missing)
             race, is_unlisted = win.ready.current_selection()
             self.assertFalse(is_unlisted)

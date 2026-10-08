@@ -264,6 +264,13 @@ class BannerHost(QWidget):
         self.lay.addWidget(banner)
         self.show()
 
+    def remove(self, banner: Banner) -> None:
+        """Drop one banner (e.g. the startup resume prompt once answered)."""
+        self.lay.removeWidget(banner)
+        banner.deleteLater()
+        if self.lay.count() == 0:
+            self.hide()
+
 
 class Toast(QWidget):
     """Transient, dismissible warning anchored bottom-right. Never modal."""
