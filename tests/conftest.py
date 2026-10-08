@@ -30,7 +30,6 @@ _CANONICAL: dict = {
         "image_mode": "auto",
     },
     "capture": {"window_before_ms": 50, "window_after_ms": 50},
-    "archive": {"enabled": False, "every_nth_frame": 1},
     "trigger": {
         "device_path": "/dev/input/event3",
         "crossing_keycodes": [57],

@@ -34,6 +34,7 @@ from ..config import Config
 from ..controller import CaptureController
 from ..export import export_all_csv, export_all_html
 from ..framebuffer import FrameBuffer
+from ..framestore import FrameStore, nearest
 from ..mjpeg import Frame
 from ..roster import recorded_keys
 from ..storage import Storage
@@ -53,7 +54,6 @@ def make_config(data_root, window_ms=500, fps=30):
                    "debounce_ms": 20, "start_mode": "direct",
                    "radio_delay_ms": 0.0, "image_mode": "auto"},
         "capture": {"window_before_ms": window_ms, "window_after_ms": window_ms},
-        "archive": {"enabled": False, "every_nth_frame": 1},
     }
     return Config(data=data, path=Path(data_root) / "config.toml")
 
@@ -87,10 +87,10 @@ def seed_regatta(storage, *, races=150, min_captures=4, max_captures=8,
                  seed=1, delete_fraction=0.02, approximate_fraction=0.05):
     """Build a near-complete regatta DB through the real Storage API.
 
-    Every race, capture, window frame and image file is written exactly as the
-    app would produce it (same schema, ``UNIQUE(race_id, sequence)``, one
-    primary per capture, relative ``capture_frame.path``). Returns a stats dict
-    used both for the report and for exact count checks.
+    Every race, capture, gun-indexed frame and image file is written exactly as
+    the app would produce it (same schema, ``UNIQUE(race_id, sequence)``, one
+    primary per capture, relative ``frame.path`` under ``frames/``). Returns a
+    stats dict used both for the report and for exact count checks.
     """
     if jpeg is None:
         jpeg = make_jpeg()
@@ -110,37 +110,39 @@ def seed_regatta(storage, *, races=150, min_captures=4, max_captures=8,
             name=name, t0_monotonic=t0, t0_wall=t0_wall,
             start_mode="direct", radio_delay_ms=0.0, delta_used=0.0,
             viewing_mode="screen", fps_nominal=fps,
-            race_no=race_no, heat_no="1")
-        caps_dir = _race_dir(storage.data_root, race_id, name) / "captures"
-        caps_dir.mkdir(parents=True, exist_ok=True)
+            race_no=race_no, heat_no="1",
+            window_before_ms=window_ms, window_after_ms=window_ms)
+        # Seed through the real FrameStore so the on-disk layout (frames/ named
+        # by t_ms) and the frame rows are exactly what the app writes (5.5).
+        store = FrameStore(storage, race_id,
+                           _race_dir(storage.data_root, race_id, name), t0)
 
         n = rng.randint(min_captures, max_captures)
         for seq in range(1, n + 1):
             t_press = t0 + seq * 12.0
             elapsed = t_press - t0
+            target_ms = round(elapsed * 1000)
             approx = rng.random() < approximate_fraction
             cap_id = storage.insert_capture(
                 race_id, seq, t_press, t0_wall + elapsed, elapsed, 0.0,
                 image_flag="approximate" if approx else None,
                 bow_number=str(rng.randint(1, 20)),
-                debounce_suspect=int(rng.random() < 0.03))
-            primary_id = None
-            for k in range(frames_per_capture):
-                offset = _offset_for(k, frames_per_capture, window_ms)
-                sign = "-" if offset < 0 else "+"
-                fname = f"{seq:03d}_w{sign}{abs(offset):04.0f}.jpg"
-                fpath = caps_dir / fname
-                fpath.write_bytes(jpeg)
-                frame_id = storage.insert_frame(
-                    cap_id, t_press + offset / 1000.0, offset,
-                    str(fpath.relative_to(storage.data_root)))
-                stats["files_written"] += 1
-                # primary = the frame nearest the target (offset ~ 0)
-                if k == frames_per_capture // 2:
-                    primary_id = frame_id
-            storage.set_primary(cap_id, primary_id)
+                debounce_suspect=int(rng.random() < 0.03),
+                target_ms=target_ms)
+            window = [
+                Frame(t_press + _offset_for(k, frames_per_capture, window_ms) / 1000.0,
+                      t0_wall + elapsed
+                      + _offset_for(k, frames_per_capture, window_ms) / 1000.0,
+                      0, jpeg)
+                for k in range(frames_per_capture)
+            ]
+            rows = store.save(window)
+            primary = nearest(rows, target_ms)
+            if primary is not None:
+                storage.set_primary(cap_id, primary["id"])
             stats["captures"] += 1
-            stats["frames"] += frames_per_capture
+            stats["frames"] += len(rows)
+            stats["files_written"] += len(rows)
             if rng.random() < delete_fraction:
                 storage.update_capture(cap_id, deleted=1)
                 stats["deleted"] += 1

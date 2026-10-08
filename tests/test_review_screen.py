@@ -67,15 +67,19 @@ def review_screen_env(request, data_root, config, storage, buffer, qapp):
     inst.buffer.health = lambda: (True, 30.0, 0.1)
     inst.controller = CaptureController(inst.config, inst.storage, inst.buffer)
     inst.race_id = inst.storage.create_race("R", 0.0, time.time(), "direct",
-                                            0.0, 0.0, "screen")
+                                            0.0, 0.0, "screen",
+                                            window_before_ms=500,
+                                            window_after_ms=500)
     for seq in (1, 2, 3):
+        target_ms = seq * 1000
         cap = inst.storage.insert_capture(inst.race_id, seq, float(seq),
-                                          time.time(), float(seq) * 10, 0.0)
-        for i in range(FRAMES):
-            offset = -500.0 + i * (1000.0 / (FRAMES - 1))
-            frame_id = inst.storage.insert_frame(cap, 0.0, offset, "caps/f.jpg")
-            if i == FRAMES // 2:
-                inst.storage.set_primary(cap, frame_id)
+                                          time.time(), float(seq) * 10, 0.0,
+                                          target_ms=target_ms)
+        t_ms = [target_ms + round(-500.0 + i * (1000.0 / (FRAMES - 1)))
+                for i in range(FRAMES)]
+        frame_rows = inst.storage.insert_frames(
+            [(inst.race_id, ms, ms / 1000.0, "caps/f.jpg") for ms in t_ms])
+        inst.storage.set_primary(cap, frame_rows[FRAMES // 2]["id"])
     inst.controller.race_id = inst.race_id
 
     inst.win = MainWindow(inst.config, inst.controller, inst.buffer)
@@ -152,8 +156,8 @@ class TestReviewScreen(unittest.TestCase):
         self.assertEqual(screen._selected_seq, selected,
                          "Tab stays on the crossing so the bow can be typed")
         self.assertIsInstance(self.app.focusWidget(), QLineEdit)
-        frames = {f["id"]: f for f in self.storage.frames_for_capture(capture_id)}
-        self.assertEqual(frames[chosen["id"]]["is_primary"], 1,
+        cap = self.storage.capture(capture_id)
+        self.assertEqual(cap["primary_frame_id"], chosen["id"],
                          "the scrubber frame was not promoted to primary")
 
     # --- 3. Enter reaches the screen and advances -----------------------
@@ -240,8 +244,8 @@ class TestReviewScreen(unittest.TestCase):
                             "Shift+Right in a bow field did not step the frame")
         self.key(Qt.Key_Tab)                       # commit it and advance
         self.assertIsInstance(self.app.focusWidget(), QLineEdit)
-        frames = {f["id"]: f for f in self.storage.frames_for_capture(capture_id)}
-        self.assertEqual(frames[stepped["id"]]["is_primary"], 1,
+        cap = self.storage.capture(capture_id)
+        self.assertEqual(cap["primary_frame_id"], stepped["id"],
                          "Tab after text-mode stepping did not promote the frame")
         after_tab = screen._selected_seq
         self.assertNotEqual(after_tab, first, "Tab in a bow field did not advance")

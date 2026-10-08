@@ -20,6 +20,8 @@ import pytest
 
 from hallofframe import __version__, buildinfo
 from hallofframe import export, web
+from hallofframe.framestore import FrameStore
+from hallofframe.mjpeg import Frame
 
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 
@@ -63,33 +65,46 @@ def update_goldens(request):
 
 @pytest.fixture
 def seeded(storage, fixed_clock):
-    """Two races (3 + 1 crossings) with fixed, mutually consistent timestamps."""
+    """Two races (3 + 1 crossings) with fixed, mutually consistent timestamps.
+
+    Primary photos are seeded through the gun-indexed frame store so the golden
+    ``primary_image`` paths are ``races/.../frames/{t_ms:08d}.jpg`` — the layout a
+    real race writes (plan step 5.7)."""
     boot = "test-boot"
+    race_dir = storage.data_root / "races" / "Race-20231114-2213"
 
     race_a = storage.create_race(
         "Men under 18, single, final", 1000.0, T0_WALL, "direct", 0.0, 0.0,
-        "water", 30.0, boot_id=boot, race_no="101", heat_no="1")
+        "water", 30.0, boot_id=boot, race_no="101", heat_no="1",
+        window_before_ms=500, window_after_ms=500)
     race_b = storage.create_race(
         "Women open, double, heat", 2000.0, T0_WALL_B, "direct", 0.0, 0.0,
-        "water", 30.0, boot_id=boot, race_no="102", heat_no="2")
+        "water", 30.0, boot_id=boot, race_no="102", heat_no="2",
+        window_before_ms=500, window_after_ms=500)
 
     specs_a = [
-        (1, 6.12, "07", "races/Race-20231114-2213/cap_0001.jpg", None,
-         "photo finish"),
-        (2, 7.45, "04", None, "approximate", None),
-        (3, 8.01, "12", None, "missing", "lane 3"),
+        (1, 6.12, "07", True, None, "photo finish"),
+        (2, 7.45, "04", False, "approximate", None),
+        (3, 8.01, "12", False, "missing", "lane 3"),
     ]
-    for seq, elapsed, bow, image, flag, notes in specs_a:
+    store_a = FrameStore(storage, race_a, race_dir, 1000.0)
+    for seq, elapsed, bow, has_image, flag, notes in specs_a:
         cap = storage.insert_capture(
             race_a, seq, 1000.0 + elapsed, T0_WALL + elapsed, elapsed, 0.0,
-            image_flag=flag, bow_number=bow, notes=notes)
-        if image:
-            storage.update_capture(cap, primary_image=image)
+            image_flag=flag, bow_number=bow, notes=notes,
+            target_ms=round(elapsed * 1000))
+        if has_image:
+            rows = store_a.save(
+                [Frame(1000.0 + elapsed, T0_WALL + elapsed, seq, b"jpeg")])
+            storage.set_primary(cap, rows[0]["id"])
 
+    store_b = FrameStore(storage, race_b, race_dir, 2000.0)
     cap_b = storage.insert_capture(
-        race_b, 1, 2000.0 + 9.99, T0_WALL_B + 9.99, 9.99, 0.0, bow_number="03")
-    storage.update_capture(
-        cap_b, primary_image="races/Race-20231114-2213/cap_0002.jpg")
+        race_b, 1, 2000.0 + 9.99, T0_WALL_B + 9.99, 9.99, 0.0,
+        bow_number="03", target_ms=9990)
+    rows_b = store_b.save(
+        [Frame(2000.0 + 9.99, T0_WALL_B + 9.99, 1, b"jpeg")])
+    storage.set_primary(cap_b, rows_b[0]["id"])
 
     storage.mark_race_reviewed(race_a)
     storage.mark_race_reviewed(race_b)

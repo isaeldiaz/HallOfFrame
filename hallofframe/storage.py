@@ -12,6 +12,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .config import DEFAULTS
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS race (
     id                INTEGER PRIMARY KEY,
@@ -36,8 +38,19 @@ CREATE TABLE IF NOT EXISTS race (
     reviewed          INTEGER NOT NULL DEFAULT 0,  -- operator closed review (§6.8)
     audio_path        TEXT,                        -- phase 8, unused
     audio_t0_offset_s REAL,                        -- phase 8, unused
+    window_before_ms  INTEGER,                     -- phase 5: copied from config
+    window_after_ms   INTEGER,                     -- phase 5: copied from config
     CHECK (start_mode   IN ('direct','radio','external')),
     CHECK (viewing_mode IN ('water','screen'))
+);
+
+CREATE TABLE IF NOT EXISTS frame (
+    id       INTEGER PRIMARY KEY,
+    race_id  INTEGER NOT NULL REFERENCES race(id),
+    t_ms     INTEGER NOT NULL,                     -- ms since the gun
+    t_recv   REAL NOT NULL,
+    path     TEXT NOT NULL,
+    UNIQUE (race_id, t_ms)
 );
 
 CREATE TABLE IF NOT EXISTS capture (
@@ -57,17 +70,10 @@ CREATE TABLE IF NOT EXISTS capture (
     updated_at      TEXT,                          -- last write (§6.7)
     bow_suggested   TEXT,                          -- phase 8, unused
     bow_source      TEXT,                          -- phase 8, unused
+    target_ms       INTEGER,                       -- phase 5: selection target
+    primary_frame_id INTEGER REFERENCES frame(id), -- phase 5
     UNIQUE (race_id, sequence),
     CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
-);
-
-CREATE TABLE IF NOT EXISTS capture_frame (
-    id              INTEGER PRIMARY KEY,
-    capture_id      INTEGER NOT NULL REFERENCES capture(id),
-    t_recv          REAL NOT NULL,
-    offset_ms       REAL NOT NULL,
-    path            TEXT NOT NULL,
-    is_primary      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -76,10 +82,7 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE INDEX IF NOT EXISTS idx_capture_race ON capture(race_id, sequence);
-CREATE INDEX IF NOT EXISTS idx_frame_capture ON capture_frame(capture_id, t_recv);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_one_primary ON capture_frame(capture_id)
-    WHERE is_primary = 1;
+CREATE INDEX IF NOT EXISTS idx_frame_race ON frame(race_id, t_ms);
 """
 
 
@@ -133,6 +136,16 @@ class Storage:
         if "audio_t0_offset_s" not in cols:
             self._conn.execute(
                 "ALTER TABLE race ADD COLUMN audio_t0_offset_s REAL")
+        added_windows = "window_before_ms" not in cols
+        if added_windows:
+            self._conn.execute("ALTER TABLE race ADD COLUMN window_before_ms INTEGER")
+            self._conn.execute("ALTER TABLE race ADD COLUMN window_after_ms INTEGER")
+            # Seed every pre-existing race from the current config defaults, so a
+            # later config change cannot alter which frames belong to it (plan 5.1).
+            self._conn.execute(
+                "UPDATE race SET window_before_ms=?, window_after_ms=?",
+                (DEFAULTS["capture"]["window_before_ms"],
+                 DEFAULTS["capture"]["window_after_ms"]))
 
         ccols = {r[1] for r in self._conn.execute("PRAGMA table_info(capture)")}
         if "updated_at" not in ccols:
@@ -145,6 +158,71 @@ class Storage:
             self._conn.execute("ALTER TABLE capture ADD COLUMN bow_suggested TEXT")
         if "bow_source" not in ccols:
             self._conn.execute("ALTER TABLE capture ADD COLUMN bow_source TEXT")
+        if "target_ms" not in ccols:
+            self._conn.execute("ALTER TABLE capture ADD COLUMN target_ms INTEGER")
+        if "primary_frame_id" not in ccols:
+            self._conn.execute(
+                "ALTER TABLE capture ADD COLUMN primary_frame_id INTEGER "
+                "REFERENCES frame(id)")
+
+        self._migrate_capture_frame()
+
+    def _migrate_capture_frame(self) -> None:
+        """One-time move from the per-crossing ``capture_frame`` table to the
+        race-wide ``frame`` table (plan step 5.1).
+
+        All DML runs in one transaction (committed by ``__init__``): insert the
+        gun-indexed frames, point each capture at its target and primary frame,
+        then drop the old table. Old image files stay where they are — the row
+        keeps its existing ``path``."""
+        exists = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='capture_frame'"
+        ).fetchone()
+        if exists is None:
+            return
+
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS frame ("
+            "id INTEGER PRIMARY KEY, race_id INTEGER NOT NULL REFERENCES race(id), "
+            "t_ms INTEGER NOT NULL, t_recv REAL NOT NULL, path TEXT NOT NULL, "
+            "UNIQUE (race_id, t_ms))")
+
+        old_rows = self._conn.execute(
+            "SELECT cf.capture_id, cf.t_recv, cf.path, cf.is_primary, "
+            "c.race_id, c.t_press, c.delta_used, r.t0_monotonic "
+            "FROM capture_frame cf "
+            "JOIN capture c ON c.id = cf.capture_id "
+            "JOIN race r ON r.id = c.race_id").fetchall()
+
+        for row in old_rows:
+            t0 = row["t0_monotonic"]
+            if t0 is None:
+                continue
+            t_ms = round((row["t_recv"] - t0) * 1000)
+            self._conn.execute(
+                "INSERT OR IGNORE INTO frame (race_id, t_ms, t_recv, path) "
+                "VALUES (?,?,?,?)",
+                (row["race_id"], t_ms, row["t_recv"], row["path"]))
+
+        # target_ms is derived purely from the press, so every capture gets one.
+        self._conn.execute(
+            "UPDATE capture SET target_ms = CAST(ROUND((t_press - delta_used - "
+            "(SELECT r.t0_monotonic FROM race r WHERE r.id = capture.race_id)) "
+            "* 1000) AS INTEGER)")
+
+        for row in old_rows:
+            if not row["is_primary"] or row["t0_monotonic"] is None:
+                continue
+            t_ms = round((row["t_recv"] - row["t0_monotonic"]) * 1000)
+            frame = self._conn.execute(
+                "SELECT id FROM frame WHERE race_id=? AND t_ms=?",
+                (row["race_id"], t_ms)).fetchone()
+            if frame is not None:
+                self._conn.execute(
+                    "UPDATE capture SET primary_frame_id=? WHERE id=?",
+                    (frame["id"], row["capture_id"]))
+
+        self._conn.execute("DROP TABLE capture_frame")
 
     # --- write bookkeeping (spec §6.7) ------------------------------------
     def _touch(self, race_id: int | None) -> None:
@@ -176,17 +254,20 @@ class Storage:
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
                     delta_used, viewing_mode, fps_nominal=None, boot_id=None,
-                    notes=None, image_off=0, race_no=None, heat_no=None) -> int:
+                    notes=None, image_off=0, race_no=None, heat_no=None,
+                    window_before_ms=None, window_after_ms=None) -> int:
         with self._lock:
             now = _utcnow()
             cur = self._conn.execute(
                 "INSERT INTO race (name, race_no, heat_no, boot_id, t0_monotonic, "
                 "t0_wall, start_mode, radio_delay_ms, delta_used, viewing_mode, "
-                "fps_nominal, notes, created_at, updated_at, image_off) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "fps_nominal, notes, created_at, updated_at, image_off, "
+                "window_before_ms, window_after_ms) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name, race_no, heat_no, boot_id or current_boot_id(),
                  t0_monotonic, t0_wall, start_mode, radio_delay_ms, delta_used,
-                 viewing_mode, fps_nominal, notes, now, now, int(image_off)))
+                 viewing_mode, fps_nominal, notes, now, now, int(image_off),
+                 window_before_ms, window_after_ms))
             self._touch(cur.lastrowid)
             self._conn.commit()
             return cur.lastrowid
@@ -350,15 +431,15 @@ class Storage:
 
     def insert_capture(self, race_id, sequence, t_press, t_press_wall, elapsed_s,
                        delta_used, image_flag=None, debounce_suspect=0,
-                       bow_number=None, notes=None) -> int:
+                       bow_number=None, notes=None, target_ms=None) -> int:
         with self._lock:
             now = _utcnow()
             cur = self._conn.execute(
                 "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
                 "elapsed_s, delta_used, image_flag, debounce_suspect, bow_number, "
-                "notes, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "notes, updated_at, target_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (race_id, sequence, t_press, t_press_wall, elapsed_s, delta_used,
-                 image_flag, debounce_suspect, bow_number, notes, now))
+                 image_flag, debounce_suspect, bow_number, notes, now, target_ms))
             self._touch(race_id)
             self._conn.commit()
             return cur.lastrowid
@@ -425,43 +506,72 @@ class Storage:
         with self._lock:
             return self._conn.execute(q, (race_id,)).fetchall()
 
-    # --- capture_frame ----------------------------------------------------
-    def insert_frame(self, capture_id, t_recv, offset_ms, path, is_primary=0) -> int:
+    # --- frame ------------------------------------------------------------
+    def frame_exists(self, race_id: int, t_ms: int) -> bool:
         with self._lock:
-            cur = self._conn.execute(
-                "INSERT INTO capture_frame (capture_id, t_recv, offset_ms, path, "
-                "is_primary) VALUES (?,?,?,?,?)",
-                (capture_id, t_recv, offset_ms, path, is_primary))
             row = self._conn.execute(
-                "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
-            self._touch(row["race_id"] if row else None)
-            self._conn.commit()
-            return cur.lastrowid
+                "SELECT 1 FROM frame WHERE race_id=? AND t_ms=?",
+                (race_id, t_ms)).fetchone()
+            return row is not None
 
-    def frames_for_capture(self, capture_id: int):
+    def insert_frames(self, rows) -> list:
+        """Insert gun-indexed frames, one transaction (plan step 5.1).
+
+        *rows* is a list of ``(race_id, t_ms, t_recv, path)`` tuples. Each is
+        ``INSERT OR IGNORE``-d so a frame already stored (same race and t_ms) is
+        left untouched; the frame rows for the given pairs are then returned,
+        ordered by ``t_ms`` — new and pre-existing alike."""
+        rows = list(rows)
+        if not rows:
+            return []
+        pairs = sorted({(r[0], r[1]) for r in rows}, key=lambda p: (p[1], p[0]))
+        with self._lock:
+            for race_id, t_ms, t_recv, path in rows:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO frame (race_id, t_ms, t_recv, path) "
+                    "VALUES (?,?,?,?)", (race_id, t_ms, t_recv, path))
+            for race_id in {r[0] for r in rows}:
+                self._touch(race_id)
+            out = []
+            for race_id, t_ms in pairs:
+                row = self._conn.execute(
+                    "SELECT * FROM frame WHERE race_id=? AND t_ms=?",
+                    (race_id, t_ms)).fetchone()
+                if row is not None:
+                    out.append(row)
+            self._conn.commit()
+            return out
+
+    def frames_for_capture(self, capture_id: int) -> list:
+        """The race's frames within the capture's selection window, by t_ms.
+
+        A frame can belong to several crossings; nothing is copied per capture
+        (plan step 5.1)."""
         with self._lock:
             return self._conn.execute(
-                "SELECT * FROM capture_frame WHERE capture_id=? ORDER BY t_recv",
-                (capture_id,)).fetchall()
+                "SELECT f.* FROM frame f "
+                "JOIN capture c ON c.race_id = f.race_id "
+                "JOIN race r ON r.id = c.race_id "
+                "WHERE c.id=? AND c.target_ms IS NOT NULL "
+                "AND f.t_ms BETWEEN c.target_ms - r.window_before_ms "
+                "AND c.target_ms + r.window_after_ms "
+                "ORDER BY f.t_ms", (capture_id,)).fetchall()
 
     def set_primary(self, capture_id: int, frame_id: int) -> None:
-        """Promote *frame_id* to primary; demote others (unique index enforces)."""
+        """Promote *frame_id* to the capture's primary; ``primary_image`` stays
+        a denormalised copy of that frame's path so export/web/UI are unchanged."""
         with self._lock:
-            self._conn.execute(
-                "UPDATE capture_frame SET is_primary=0 WHERE capture_id=?",
-                (capture_id,))
-            self._conn.execute(
-                "UPDATE capture_frame SET is_primary=1 WHERE id=? AND capture_id=?",
-                (frame_id, capture_id))
             row = self._conn.execute(
-                "SELECT cf.path, c.race_id AS race_id FROM capture_frame cf "
-                "JOIN capture c ON c.id = cf.capture_id WHERE cf.id=?",
-                (frame_id,)).fetchone()
-            if row:
-                self._conn.execute(
-                    "UPDATE capture SET primary_image=?, updated_at=? WHERE id=?",
-                    (row["path"], _utcnow(), capture_id))
-                self._touch(row["race_id"])
+                "SELECT f.path AS path, f.race_id AS race_id, c.race_id AS cap_race "
+                "FROM frame f JOIN capture c ON c.id=? WHERE f.id=?",
+                (capture_id, frame_id)).fetchone()
+            if row is None or row["race_id"] != row["cap_race"]:
+                return
+            self._conn.execute(
+                "UPDATE capture SET primary_frame_id=?, primary_image=?, "
+                "updated_at=? WHERE id=?",
+                (frame_id, row["path"], _utcnow(), capture_id))
+            self._touch(row["race_id"])
             self._conn.commit()
 
     def integrity_ok(self) -> bool:

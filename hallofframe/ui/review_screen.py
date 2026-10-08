@@ -357,10 +357,16 @@ class ReviewScreen(QWidget):
             self.photo.set_frame(None, "no crossing")
             self._current_capture = None
             return
-        frames = self.controller.storage.frames_for_capture(cap["id"])
+        frames = self.controller.frames_for_capture(cap["id"])
+        # The frame store keys frames by gun-time (t_ms) and marks the primary on
+        # the capture (primary_frame_id); the scrubber wants a per-capture
+        # offset from the selection target and a primary flag (plan step 5.3).
+        target_ms = cap["target_ms"] or 0
+        primary_id = cap["primary_frame_id"]
         self._frame_paths[cap["id"]] = [
-            {"path": str(self.data_root / f["path"]), "offset_ms": f["offset_ms"],
-             "id": f["id"], "primary": bool(f["is_primary"])} for f in frames]
+            {"path": str(self.data_root / f["path"]),
+             "offset_ms": f["t_ms"] - target_ms,
+             "id": f["id"], "primary": f["id"] == primary_id} for f in frames]
         self._current_capture = cap
 
     def _show_primary(self) -> None:
@@ -556,6 +562,7 @@ class ReviewScreen(QWidget):
         for c in self._captures:
             if c["id"] == cap["id"]:
                 c["primary_image"] = path
+                c["primary_frame_id"] = f["id"]
         self.list.update_thumb(cap["sequence"], str(self.data_root / path))
         self.saved_lbl.setText("saved")
         self._saved_timer.start(1800)

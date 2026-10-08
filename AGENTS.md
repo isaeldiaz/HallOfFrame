@@ -12,7 +12,8 @@ laptop to record boat crossing times. The system must:
 - Time each crossing with **millisecond-level accuracy**, driven by **evdev
   kernel timestamps** (not Qt key events).
 - Attach the saved photo nearest each recorded time for jury review.
-- Persist races to SQLite and archive continuous footage for recovery.
+- Persist races to SQLite and save the frames around each crossing once per
+  race, named by time since the gun, for jury review.
 - Never block the trigger path: nothing timing-critical touches disk.
 
 The authoritative requirements are in **`hallofframe-finish-timer-spec.md`**
@@ -47,8 +48,10 @@ hallofframe/
   framebuffer.py     Timestamped ring buffer; window(target, before, after).
   storage.py         SQLite persistence (WAL, foreign_keys ON), schema + migrations.
                      `updated_at` on race/capture, `meta` table, `race_bundle`/
-                     `all_bundles`, `race_identity_rows`.
-  archive.py         Continuous per-race footage writer with disk-space handling.
+                     `all_bundles`, `race_identity_rows`, the `frame` table.
+  framestore.py      Gun-indexed frame files: `frames/{t_ms:08d}.jpg`, one per
+                     t_ms per race; `FrameStore.save`/`nearest`. Replaces the old
+                     per-crossing `captures/` writer and `archive.py` (removed).
   export.py          CSV + whole-database HTML export; format_elapsed(); flag_word().
   web.py             SEPARATE-PROCESS HTTP results server (own read-only SQLite
                      connection; never touches the app's locked Storage). Live
@@ -89,6 +92,10 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 - **Image selection is deferred**: on a press, only the capture row is queued;
   a `threading.Timer` selects frames ~`window_after_ms + margin` later so the
   after-window frames exist in the buffer (spec §6.5).
+- **Frames are gun-indexed and saved once per race** (`framestore.py`):
+  `frames/{t_ms:08d}.jpg` where `t_ms = round((t_recv - t0) * 1000)`; a crossing
+  refers to frames by `target_ms ± the race's saved window`, so overlapping
+  crossings share files. Continuous archiving was removed (phase 5).
 - **No disk on the trigger path.** Commits happen on the persistence writer
   thread via a `queue.Queue`.
 - **Worker→UI is thread-safe via a Qt signal bridge** (`_TriggerBridge` in
@@ -136,14 +143,15 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   needed to force timing-only when the stream is *up*. There is no mid-race GUI
   toggle.
   - `{event_name}.db` (`[paths] event_name`) — SQLite (`race`, `capture`,
-    `capture_frame`). The event name is set in `config.toml` and every piece of
+    `frame`). The event name is set in `config.toml` and every piece of
     generated data carries it.
   - `[web]` — optional live results HTTP server (host, port, enabled). Runs as
     a **separate process** (`python -m hallofframe.web --config PATH`); it opens
     its **own** SQLite read connection (WAL-safe against the app's writer) and
     serves only pre-rendered HTML + files already on disk, so viewer load never
     perturbs the evdev timing thread. Never point it at the app's `Storage`.
-  - `races/<Race-YYYYmmdd-HHMM>/` — capture images + per-race `archive/`.
+  - `races/<id>_<name>/frames/{t_ms:08d}.jpg` — gun-indexed frames, one file
+    per `t_ms` per race; a crossing references frames by time range.
   - `logs/{event_name}-app.jsonl` — structured log; useful for reproducing
     issues.
   - `calibration.json` — latency result produced by Calibrate.
@@ -198,9 +206,10 @@ If the **same** keycode is listed in both `crossing_keycodes` and
 ## Current-state notes
 
 - App already supports: arm, start, multiple crossings, deferred image
-  selection, calibration, export, archive, and (recently added) **End Race +
-  Quit**. If a request mentions an end/quit problem, that is implemented —
-  check the current `end_race()`/UI wiring before assuming it's missing.
+  selection, calibration, export, the gun-indexed frame store, and (recently
+  added) **End Race + Quit**. If a request mentions an end/quit problem, that is
+  implemented — check the current `end_race()`/UI wiring before assuming it's
+  missing.
 - **Resume after restart (N4).** On startup, if `storage.open_race()` finds a
   race with no `ended_at`, `main.py` shows a non-modal Resume/Discard banner.
 - **Refactor note (phase 3).** The plan's target of `ui/main_window.py` under
