@@ -420,6 +420,25 @@ class TestController(Base):
             "SELECT COUNT(*) FROM frame WHERE race_id=?", (race_b,)).fetchone()[0]
         self.assertEqual(rows_b, 0)
 
+    def test_resume_race_reattaches_same_boot(self):
+        # N4: after a restart the same boot_id resumes the race with its
+        # original t0 and a rebuilt frame store.
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="R")
+        self.controller.record_crossing(1000.0 + 5.0)
+        self.commit()
+        fresh = CaptureController(self.config, self.storage, self.buffer,
+                                  scheduler=FakeScheduler())
+        try:
+            fresh.resume_race(race_id)
+            self.assertTrue(fresh.running)
+            self.assertEqual(fresh.race_id, race_id)
+            self.assertAlmostEqual(fresh.t0, 1000.0, places=6)
+            self.assertIsNotNone(fresh.store)
+            self.assertFalse(fresh.image_off)
+        finally:
+            fresh.stop()
+
     def test_writer_thread_survives_a_failed_commit(self):
         # A single failed commit (disk full, sequence collision) must not kill
         # the persistence writer; later crossings must still be saved.
