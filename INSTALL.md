@@ -185,10 +185,12 @@ Note `importlib.metadata.version('evdev')` — **the module has no
 right next to the (also broken) clock snippet below, giving two consecutive
 failures in the same verification block.
 
-Expect `KEY_F13 = 183` and `KEY_F14 = 184`, matching the `crossing_keycodes` and
-`start_keycodes` defaults in spec §8. (Spec v1.2 moved the trigger off
-`KEY_SPACE = 57`; see §6.4 — the evdev trigger is global and a space typed into
-a bow-number field would otherwise fire a phantom crossing.)
+The deployed setup uses the double-pole crossing button as a dedicated USB HID
+device: `crossing_keycodes = [57]` (`SPACE`), `start_keycodes = [28]` (`ENTER`)
+and `end_keycodes = [88]` (`F12`), with `grab_device = true`. Because the device
+is dedicated and grabbed for the race, a space typed into a bow field cannot
+reach it (see §6.4); the `SPACE` default is an accepted operator choice, not the
+spec's original `KEY_F13`/`KEY_F14`.
 
 Qt actually opening a window — this needs a graphical session, so run it from a
 desktop terminal, not over SSH:

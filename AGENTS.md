@@ -238,6 +238,19 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   `ui/roster_view.py`; the remaining bulk is the evdev/session orchestration and
   health/export logic. Closing the gap needs a presenter extraction that no plan
   step specifies; accepted as a documented deviation (2026-10-06).
+- **Timing-source guards (2026-10-08).** The Qt start/crossing fallback is
+  disabled whenever an evdev trigger is present (`MainWindow.evdev_active`), so a
+  click or shortcut can never supply a Qt-loop `time.monotonic()` in place of
+  the kernel timestamp. `TriggerListener` verifies at startup that the device's
+  event timestamps share `CLOCK_MONOTONIC` (spec §6.4) and refuses (Qt fallback)
+  on mismatch. A radio-relayed start applies `radio_delay_ms` to `t0` (§5.3.1).
+- **Web reads read-only (2026-10-08).** `Storage(..., read_only=True)` opens its
+  own `mode=ro` SQLite connection (no schema, no migrations) and `/img/` serves
+  only images under `races/`; race/excel pages enforce the reviewed gate.
+- **N4 per-capture flag.** A resume that reconstructs `t0` (boot_id mismatch)
+  sets `capture.t0_reconstructed` on every crossing recorded after it; CSV and
+  HTML render those elapsed times with a `~` prefix.
+- **Elapsed format is `M:SS.mmm`** (`render.format_elapsed`), per spec §6.8.
 - Version in `hallofframe/__init__.py` (`__version__`).
 - **Finish horn is hardware-driven — §13.2 must-have closed (2026-10-06).** The
   deployed crossing button is a **double-pole switch**: pole 1 is the USB HID

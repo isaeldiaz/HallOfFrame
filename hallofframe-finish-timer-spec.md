@@ -537,23 +537,41 @@ only, and must be run on the ordinary GIL build. Package layout:
 hallofframe/
     __init__.py
     main.py              # entry point, wires everything together
-    config.py            # config load/save, dataclass
+    config.py            # config load + defaults (never writes the file, §8)
     transport.py         # iproxy lifecycle management
     mjpeg.py             # MJPEGReader
     framebuffer.py       # FrameBuffer
     trigger.py           # TriggerListener (evdev)
     controller.py        # CaptureController
     storage.py           # SQLite + filesystem
-    archive.py           # ArchiveWriter
-    calibration.py       # latency calibration routine
+    framestore.py        # gun-indexed frame files (§6.6); replaces archive.py
+    calibration.py       # latency calibration + the single Calibration loader
+    roster.py            # Qt-free Roster (race CSV) + race-day edits
+    session.py           # Qt-free Session state machine + KEYMAP
     log.py               # structured logging setup (§6.9)
+    web.py               # separate-process results server (own read-only DB)
+    render/
+        __init__.py      # format_elapsed/parse_elapsed/utc_iso/local_hms/flag_word
+        csv.py           # export_csv / export_all_csv
+        clipboard.py     # clipboard_data
+        html.py          # page() skeleton + build_all_html
+    export.py            # deprecation shim re-exporting render.*
     ui/
         __init__.py
-        main_window.py
+        main_window.py   # builds screens, forwards to Session
+        ready_screen.py
+        roster_view.py
+        race_screen.py
+        review_screen.py
+        crossing_list.py # one CrossingList, fastest-first (§7.3)
+        images.py        # load_scaled(), the only image decoder
         preview_widget.py
-        capture_list.py
         calibration_dialog.py
-    export.py            # CSV export + whole-database HTML page
+        widgets.py
+        state.py         # AppState enum
+    tools/
+        ingest_soak.py
+        fake_camera.py   # MJPEG server over a folder of JPEGs
 ```
 
 ### 6.1 `transport.py` — iproxy lifecycle
@@ -1036,6 +1054,8 @@ leaving it implicit.
 CREATE TABLE race (
     id                INTEGER PRIMARY KEY,
     name              TEXT NOT NULL,
+    race_no           TEXT,             -- roster identity (with heat_no)
+    heat_no           TEXT,
     boot_id           TEXT NOT NULL,   -- /proc/sys/kernel/random/boot_id (§6.5)
     t0_monotonic      REAL NOT NULL,
     t0_wall           REAL NOT NULL,   -- UTC epoch seconds, for the record only
@@ -1047,6 +1067,15 @@ CREATE TABLE race (
     fps_nominal       REAL,
     notes             TEXT,
     created_at        TEXT NOT NULL,
+    updated_at        TEXT,            -- last write; drives web "Results updated"
+    ended_at          TEXT,            -- N4: set by End Race
+    t_end_monotonic   REAL,
+    image_off         INTEGER NOT NULL DEFAULT 0,  -- timing-only race (§6.5)
+    reviewed          INTEGER NOT NULL DEFAULT 0,  -- web publishes only reviewed
+    audio_path        TEXT,            -- phase 8
+    audio_t0_offset_s REAL,            -- phase 8
+    window_before_ms  INTEGER,         -- frozen from config at race start (§6.6)
+    window_after_ms   INTEGER,
     CHECK (start_mode   IN ('direct','radio','external')),
     CHECK (viewing_mode IN ('water','screen'))
 );
@@ -1067,6 +1096,10 @@ CREATE TABLE capture (
     debounce_suspect INTEGER NOT NULL DEFAULT 0,  -- §6.4; recorded, never dropped
     deleted         INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
+    updated_at      TEXT,               -- last write (§6.7)
+    bow_suggested   TEXT,               -- phase 8
+    bow_source      TEXT,               -- phase 8
+    t0_reconstructed INTEGER NOT NULL DEFAULT 0,  -- N4: recorded after a resume
     UNIQUE (race_id, sequence),
     CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
 );
@@ -1080,7 +1113,13 @@ CREATE TABLE frame (
     UNIQUE (race_id, t_ms)
 );
 
+CREATE TABLE meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE INDEX idx_capture_race ON capture(race_id, sequence);
+CREATE INDEX idx_frame_race ON frame(race_id, t_ms);
 -- The UNIQUE (race_id, t_ms) constraint already indexes the window lookup.
 ```
 
@@ -1119,15 +1158,14 @@ source of truth for every runtime path in this document, in `INSTALL.md` and in
     config.toml
     calibration.json
     logs/
-        <event_name>-<race_id>.jsonl
+        <event_name>-app.jsonl        # one log per app run (log.py)
     races/
-        2026-08-21_heat3/
+        0001_2026-08-21_heat3/
             frames/
                 00001667.jpg          # one file per t_ms since the gun
                 00005000.jpg
                 00005100.jpg
                 ...
-            export.csv
 ```
 
 v1.0's per-crossing `captures/` directory and the never-wired `archive/` are
@@ -1170,7 +1208,7 @@ with dialogs during a race: every anomaly that is *not* shown to the operator
 must still be recoverable afterwards, and the failure reports defined in
 `TESTING.md` §2 have nothing to cite without it.
 
-- Write JSON Lines to `<data_root>/logs/<event_name>-<race_id>.jsonl`, one object per
+- Write JSON Lines to `<data_root>/logs/<event_name>-app.jsonl`, one object per
   event, each carrying `t_mono`, `t_wall`, `level`, `component`, `event` and
   event-specific fields.
 - Log at minimum: application start with the full environment fingerprint
@@ -1308,6 +1346,7 @@ event_name = "event"           # competition/event name carried by generated dat
                               # (DB, logs, default roster CSV; see §6.7)
 
 [transport]
+enabled = true               # false = skip iproxy/USB; [stream] url may point anywhere
 local_port = 8081
 device_port = 8081
 udid = ""                    # empty = first device found
@@ -1343,22 +1382,35 @@ end_device_path = ""         # optional SECOND device handling ONLY the end
                              # keycodes, NEVER grabbed (Qt keeps typing, e.g.
                              # boat numbers) while device_path is grabbed.
                              # Empty = end handled on device_path too.
-crossing_keycodes = [183]    # KEY_F13 — never KEY_SPACE (§6.4)
-start_keycodes = [184]       # KEY_F14
-grab_device = false          # true = exclusive grab; required if using the
-                             # internal keyboard as the trigger (§6.4)
+crossing_keycodes = [57]     # KEY_SPACE — operator choice on a dedicated,
+start_keycodes = [28]        # KEY_ENTER  grabbed USB device (§6.4)
+grab_device = true           # true = exclusive grab for the race
 
-[archive]
-enabled = true
-every_nth_frame = 1
-min_free_gb = 60             # 20 GB buys only 44-75 minutes (§6.6)
-degrade_at_gb = 10           # switch to every_nth_frame = 5
-stop_at_gb = 3               # stop archiving; captures continue
-ballast_gb = 3               # fallocate reserve so the OS cannot be starved
+# [archive] was removed 2026-10-06. Continuous archiving is replaced by the
+# gun-indexed frame store (§6.6): frames are saved once per race, around crossings.
 
 [ui]
 finish_line_x = 0.5          # normalised 0..1 position of the overlay
 preview_fps = 10
+
+[races]
+csv_path = "{event_name}_races.csv"   # the Ready-screen roster
+
+[web]
+enabled = true               # optional separate-process results server (§8)
+host = "127.0.0.1"
+port = 8080
+copy_heading = true          # include the Race ID/Heat/Category/Gun block when copying
+
+[voice]
+enabled = false              # phase 8 (voice annotation); unused until then
+input = "default"
+play_before_s = 3.0
+play_after_s = 5.0
+transcribe = false
+model = "base"
+transcribe_before_s = 1.0
+transcribe_after_s = 4.0
 ```
 
 The stream URL path (`/live`) and ports are **app- and version-dependent**.

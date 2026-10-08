@@ -98,6 +98,7 @@ preview_fps = 10
 enabled = true               # false = the server refuses to start
 host = "127.0.0.1"           # localhost only; "0.0.0.0" exposes it on the LAN
 port = 8080
+copy_heading = true          # include the Race ID/Heat/Category/Gun block in a copied table
 
 [voice]
 # Phase 8 (voice annotation) — optional, off by default. Present now so the

@@ -66,7 +66,7 @@ The app never writes its config — copy the templates and hand-edit:
 ```bash
 mkdir -p ~/regatta-data
 cp hallofframe.example.toml ~/regatta-data/config.toml   # full example, every section
-cp races.example.csv ~/regatta-data/races.csv        # the race roster for the dropdown
+cp races.example.csv ~/regatta-data/event_races.csv  # the race roster for the dropdown
 $EDITOR ~/regatta-data/config.toml
 ```
 
@@ -93,7 +93,7 @@ Data lives in the data root — `<data_root>`, which defaults to `~/regatta-data
 but is any directory set by `[paths] data_root` (e.g. `$HOME/regatta-data`):
 
 - `{event_name}.db` — SQLite (`race`, `capture`, `frame`)
-- `races/<Race-YYYYmmdd-HHMM>/` — crossing frames (`frames/<t_ms>.jpg`)
+- `races/<id>_<name>/` — crossing frames (`frames/<t_ms>.jpg`, named by ms since the gun)
 - `logs/{event_name}-app.jsonl` — structured log
 - `calibration.json` — latency result from Calibrate
 - `{event_name}_races.csv` — the race roster (one race per row: `race_no`,
@@ -136,7 +136,7 @@ Only **two files** must be created or edited by you — both live in `<data_root
 
 Every other file is **created automatically** under `<data_root>` once the app
 runs: `{event_name}.db`, `logs/{event_name}-app.jsonl`,
-`races/<Race-YYYYmmdd-HHMM>/` (crossing frames) and `calibration.json`.
+`races/<id>_<name>/` (crossing frames) and `calibration.json`.
 
 ### Step by step
 
@@ -251,17 +251,22 @@ hallofframe/
   transport.py     iproxy USB tunnel lifecycle (host→device, TCP-only).
   mjpeg.py         MJPEG parse loop; emits timestamped Frame objects.
   framebuffer.py   Timestamped ring buffer.
-  storage.py       SQLite persistence (WAL, foreign_keys ON).
-  framestore.py    Gun-indexed frame store (one file per crossing-window frame).
-  export.py        CSV export; whole-database HTML results page (`D`).
-  web.py           Separate-process HTTP results server (live race pages,
-                   frames, "Copy as Excel").
-  config.py        config.toml load + defaults.
+  storage.py       SQLite persistence (WAL, foreign_keys ON); `updated_at`,
+                   `meta`, `frame` table.
+  framestore.py    Gun-indexed frame store (one file per t_ms per race).
+  render/          csv.py, clipboard.py, html.py split out of export.py.
+  export.py        Deprecation shim re-exporting render.*.
+  web.py           Separate-process HTTP results server (own read-only SQLite
+                   connection; live race pages, frames, "Copy as Excel").
+  config.py        config.toml load + defaults (never writes the file).
   log.py           Structured JSONL logging.
-  calibration.py   Latency calibration helpers.
+  calibration.py   Latency calibration helpers + the single Calibration loader.
+  roster.py        Qt-free Roster: the race CSV and its race-day edits.
+  session.py       Qt-free Session state machine + KEYMAP.
   assets/          Application logo.
-  ui/              PySide6 widgets.
-  tools/           Soak-test utility.
+  ui/              PySide6 widgets (main_window, ready/race/review screens,
+                   crossing_list, images.load_scaled, roster_view, dialogs).
+  tools/           Soak-test utility and the fake MJPEG camera.
 ```
 
 ## License
