@@ -12,9 +12,12 @@ import pytest
 from PySide6.QtCore import Qt
 
 from hallofframe.framebuffer import FrameBuffer
-from hallofframe.roster import RaceInfo, recorded_keys, rename_races
+from hallofframe.roster import RaceInfo, Roster, recorded_keys, rename_races
 from hallofframe.storage import Storage
 from hallofframe.ui.ready_screen import ReadyScreen
+from hallofframe.ui.roster_view import RosterView
+from hallofframe.ui.state import AppState
+from hallofframe.ui.widgets import BannerHost
 
 pytestmark = pytest.mark.qt
 
@@ -67,6 +70,49 @@ class TestStorageRaceNames(unittest.TestCase):
         self.assertEqual(n, 1)
         row = self.storage.get_race(1)
         self.assertEqual(row["name"], "Renamed")
+
+
+@pytest.mark.usefixtures("qapp")
+class TestRosterMoveWiring(unittest.TestCase):
+    """Plan step 2.4: Shift+↑/↓ reach Roster.move and keep the row selected."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.csv = self.root / "r.csv"
+        self.csv.write_text("race_no,heat_no,name,source,status\n"
+                            "101,1,A,sheet,\n102,1,B,sheet,\n103,1,C,sheet,\n",
+                            encoding="utf-8")
+        self.roster = Roster(str(self.csv))
+        self.roster.load()
+        self.storage = Storage(self.root)
+        self.rs = ReadyScreen(FrameBuffer(assumed_fps=30))
+
+        class _Parent:
+            config = None
+
+        self.view = RosterView(
+            ready=self.rs, banner_host=BannerHost(), roster=self.roster,
+            storage=self.storage, toast=lambda *a, **k: None,
+            parent=_Parent(), state=lambda: AppState.READY)
+        self.view.render()
+
+    def tearDown(self):
+        self.storage.close()
+        self.tmp.cleanup()
+
+    def test_move_down_reorders_and_keeps_selection(self):
+        self.assertTrue(self.rs.select_key(("num", "101", "1")))
+        self.view.move_selected(1)
+        self.assertEqual([r.race_no for r in self.roster.races],
+                         ["102", "101", "103"])
+        self.assertEqual(self.rs.selected_key(), ("num", "101", "1"))
+
+    def test_move_at_the_end_is_refused(self):
+        self.assertTrue(self.rs.select_key(("num", "103", "1")))
+        self.view.move_selected(1)  # already last
+        self.assertEqual([r.race_no for r in self.roster.races],
+                         ["101", "102", "103"])
 
 
 @pytest.mark.usefixtures("qapp")
