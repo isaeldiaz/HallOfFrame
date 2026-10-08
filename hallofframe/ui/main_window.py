@@ -91,6 +91,10 @@ class MainWindow(QMainWindow):
         self.controller = controller
         self.buffer = buffer
         self.trigger = trigger
+        # True once main.py has built an evdev trigger: the Qt start/crossing
+        # caps and shortcuts are then disabled so a click or keypress can never
+        # supply a Qt-loop timestamp in place of the kernel one (§5.3, §6.4).
+        self.evdev_active = False
         self._logger = logger
 
         self.setWindowTitle("HallOfFrame — Finish-Line Timer")
@@ -114,7 +118,7 @@ class MainWindow(QMainWindow):
         self.center = QStackedWidget()
         self.ready = ReadyScreen(buffer)
         self.ready.finish_line_changed.connect(self._finish_line_changed)
-        self.armed = ArmedScreen(on_start=lambda: self.on_evdev_start(time.monotonic()))
+        self.armed = ArmedScreen(on_start=lambda: self._armed_start_clicked())
         self.recording = RaceScreen()
         self.race_over = RaceOverScreen()
         self.center.addWidget(self.ready)
@@ -287,10 +291,19 @@ class MainWindow(QMainWindow):
     def _end_key(self) -> None:
         self.on_evdev_end(time.monotonic(), 88)
 
+    def _armed_start_clicked(self) -> None:
+        if self.evdev_active:
+            return  # use the trigger device; Qt must not supply the timestamp
+        self.on_evdev_start(time.monotonic())
+
     def _start_key(self) -> None:
+        if self.evdev_active:
+            return
         self.on_evdev_start(time.monotonic())
 
     def _crossing_key(self) -> None:
+        if self.evdev_active:
+            return
         self.controller.record_crossing(time.monotonic())
 
     def _move_up(self) -> None:

@@ -104,6 +104,24 @@ class TestArmDisarm(unittest.TestCase):
             self.win._calibrate()
             dlg.assert_not_called()
 
+    def test_qt_fallback_disabled_when_evdev_active(self):
+        _seed_buffer(self.buffer)
+        self.win._recompute_state()
+        self.win.evdev_active = True
+        with mock.patch.object(self.win, "on_evdev_start") as start, \
+                mock.patch.object(self.controller, "record_crossing") as rec:
+            self.win._start_key()
+            self.win._crossing_key()
+            self.win._armed_start_clicked()
+            start.assert_not_called()
+            rec.assert_not_called()
+
+        # Without evdev the Qt fallback must work (degraded precision).
+        self.win.evdev_active = False
+        with mock.patch.object(self.win, "on_evdev_start") as start:
+            self.win._start_key()
+            start.assert_called_once()
+
     def test_resume_is_refused_while_a_race_is_running(self):
         _seed_buffer(self.buffer)
         self.win._recompute_state()

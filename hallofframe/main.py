@@ -261,6 +261,9 @@ def main(argv=None) -> int:
 
     listeners, fallback, extra_listeners = build_trigger(
         config, _crossing, _start, _end, logger)
+    # With an evdev timing device present, the Qt start/crossing fallback is
+    # disabled: its time.monotonic() timestamp is not the kernel one (§5.3).
+    win.evdev_active = listeners is not None
     if fallback:
         # Qt key-event fallback (§6.4): degraded precision, say so.
         logger.warning("trigger", "qt_fallback")
