@@ -70,7 +70,10 @@ def build_core(config):
     from .storage import Storage
     from .transport import UsbTransport
 
-    storage = Storage(config.data_root, event_name=config.event_name)
+    capture_cfg = config.section("capture")
+    storage = Storage(config.data_root, event_name=config.event_name,
+                      window_before_ms=int(capture_cfg["window_before_ms"]),
+                      window_after_ms=int(capture_cfg["window_after_ms"]))
 
     transport_cfg = config.section("transport")
     if bool(transport_cfg.get("enabled", True)):

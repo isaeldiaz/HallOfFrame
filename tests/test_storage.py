@@ -248,6 +248,28 @@ def _tables(conn) -> set:
         "SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def test_migration_uses_the_configured_windows(data_root):
+    db = data_root / "event.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(OLD_SCHEMA)
+    conn.execute(
+        "INSERT INTO race (name, boot_id, t0_monotonic, t0_wall, start_mode, "
+        "radio_delay_ms, delta_used, viewing_mode, created_at) "
+        "VALUES ('R','boot',1000.0,1000.0,'direct',0.0,0.0,'screen',"
+        "'2024-01-01T00:00:00+00:00')")
+    conn.commit()
+    conn.close()
+
+    st = storage_mod.Storage(data_root, window_before_ms=300,
+                             window_after_ms=700)
+    try:
+        race = st._conn.execute(
+            "SELECT window_before_ms, window_after_ms FROM race").fetchone()
+        assert (race[0], race[1]) == (300, 700)
+    finally:
+        st.close()
+
+
 def test_migration_from_old_schema(data_root):
     db = data_root / "event.db"
     conn = sqlite3.connect(str(db))

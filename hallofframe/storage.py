@@ -96,10 +96,15 @@ def current_boot_id() -> str:
 
 class Storage:
     def __init__(self, data_root: Path, event_name: str = "event",
-                 read_only: bool = False):
+                 read_only: bool = False, window_before_ms: int | None = None,
+                 window_after_ms: int | None = None):
         self.data_root = Path(data_root)
         self.event_name = event_name or "event"
         self.read_only = read_only
+        # Config windows used when migrating an old database (plan step 5.1):
+        # a pre-existing race must keep the operator's window, not the default.
+        self._window_before_ms = window_before_ms
+        self._window_after_ms = window_after_ms
         self.data_root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_root / f"{self.event_name}.db"
         self._lock = threading.Lock()
@@ -153,12 +158,17 @@ class Storage:
         if added_windows:
             self._conn.execute("ALTER TABLE race ADD COLUMN window_before_ms INTEGER")
             self._conn.execute("ALTER TABLE race ADD COLUMN window_after_ms INTEGER")
-            # Seed every pre-existing race from the current config defaults, so a
-            # later config change cannot alter which frames belong to it (plan 5.1).
+            # Seed every pre-existing race from the current config, so a later
+            # config change cannot alter which frames belong to it (plan 5.1).
+            before = (self._window_before_ms
+                      if self._window_before_ms is not None
+                      else DEFAULTS["capture"]["window_before_ms"])
+            after = (self._window_after_ms
+                     if self._window_after_ms is not None
+                     else DEFAULTS["capture"]["window_after_ms"])
             self._conn.execute(
                 "UPDATE race SET window_before_ms=?, window_after_ms=?",
-                (DEFAULTS["capture"]["window_before_ms"],
-                 DEFAULTS["capture"]["window_after_ms"]))
+                (before, after))
 
         ccols = {r[1] for r in self._conn.execute("PRAGMA table_info(capture)")}
         if "updated_at" not in ccols:
