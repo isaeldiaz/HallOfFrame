@@ -210,8 +210,13 @@ def key_cap_style(hot: bool = False) -> str:
     return (
         f"QWidget {{ background:{bg}; border:1px solid {border};"
         f" border-radius:4px; }}"
+        # The cap is a QPushButton carrying the combined "key — label" text, so
+        # the smaller font has to be set on QPushButton: the widget stylesheet
+        # beats the app-level QPushButton rule. A review-state bar at 18px needs
+        # ~1963 px, wider than the 1920 px panel, and clipped the trailing caps.
+        f" QPushButton {{ font-size:15px; padding:8px 12px; }}"
         f" QLabel[role='key'] {{ font-family:'{FONT_MONO}'; font-weight:600;"
         f" color:{keycolor}; padding:3px 9px; border:1px solid {border};"
         f" border-radius:3px; }}"
-        f" QLabel[role='label'] {{ color:{labelcolor}; font-size:18px; }}"
+        f" QLabel[role='label'] {{ color:{labelcolor}; font-size:15px; }}"
     )
