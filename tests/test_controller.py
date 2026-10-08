@@ -420,6 +420,23 @@ class TestController(Base):
             "SELECT COUNT(*) FROM frame WHERE race_id=?", (race_b,)).fetchone()[0]
         self.assertEqual(rows_b, 0)
 
+    def test_radio_start_applies_delay_to_t0(self):
+        cfg = self.config_factory(timing={"start_mode": "radio",
+                                          "radio_delay_ms": 500.0})
+        self.seed_buffer(self.buffer)
+        ctl = CaptureController(cfg, self.storage, self.buffer,
+                                scheduler=FakeScheduler())
+        try:
+            rid = ctl.start_race(1000.0, name="R")
+            self.assertAlmostEqual(ctl.t0, 999.5, places=6)
+            ctl.record_crossing(1001.0)
+            ctl._queue.join()
+            cap = self.storage.captures_for_race(rid)[0]
+            self.assertAlmostEqual(cap["elapsed_s"], 1.5, places=6)
+            self.assertEqual(self.storage.get_race(rid)["radio_delay_ms"], 500.0)
+        finally:
+            ctl.stop()
+
     def test_resume_race_reattaches_same_boot(self):
         # N4: after a restart the same boot_id resumes the race with its
         # original t0 and a rebuilt frame store.

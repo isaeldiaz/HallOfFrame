@@ -136,8 +136,14 @@ class CaptureController:
             if prior is not None and prior["ended_at"] is None:
                 raise RaceStateError(f"end race {self.race_id} first")
 
-        self.t0 = t_press
-        self.t0_wall = time.time()
+        # Radio-relayed starts (§5.3.1): the operator hears the gun D seconds
+        # late, so the real t0 is D before the press. Applied to t0 (not to each
+        # elapsed) so every time carries the correction; D is 0 unless the race
+        # is configured start_mode="radio".
+        delay_s = (self.radio_delay_ms / 1000.0
+                   if self.start_mode == "radio" else 0.0)
+        self.t0 = t_press - delay_s
+        self.t0_wall = time.time() - delay_s
         # Validate calibration against the live stream BEFORE starting (spec §8):
         # refuse to start with a stale or mismatched Δ. Runs off the timing path's
         # per-crossing work, so a one-time decode here is acceptable.
@@ -168,7 +174,7 @@ class CaptureController:
         self.ended_capture_count = 0
 
         race_id = self.storage.create_race(
-            name=name, t0_monotonic=t_press, t0_wall=self.t0_wall,
+            name=name, t0_monotonic=self.t0, t0_wall=self.t0_wall,
             start_mode=self.start_mode,
             radio_delay_ms=self.radio_delay_ms if self.start_mode == "radio" else 0.0,
             delta_used=self.delta, viewing_mode=timing_viewing(self.config),
