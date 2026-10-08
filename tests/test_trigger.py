@@ -6,7 +6,11 @@ semantics are exercised directly: the timestamp passed in is used verbatim.
 """
 from __future__ import annotations
 
-from hallofframe.trigger import TriggerListener
+import time
+
+import pytest
+
+from hallofframe.trigger import TriggerError, TriggerListener
 
 
 def make_listener(debounce_ms: float = 20.0,
@@ -61,6 +65,42 @@ def test_unknown_keycode_is_ignored():
     listener._dispatch(99, 1, 1000.0)
     assert listener.calls == []
     assert listener._last_trigger_mono == 0.0
+
+
+class _FakeDevice:
+    fd = 0
+
+    def __init__(self, event):
+        self._event = event
+
+    def read_one(self):
+        return self._event
+
+
+def _clock_check_listener(event, monkeypatch):
+    import select
+    listener = TriggerListener.__new__(TriggerListener)
+    listener._device = _FakeDevice(event)
+    monkeypatch.setattr(select, "select", lambda *a, **k: ([0], [], []))
+    return listener
+
+
+def test_clock_domain_mismatch_raises(monkeypatch):
+    class Event:
+        def timestamp(self):
+            return 1000.0  # CLOCK_REALTIME-ish, far from monotonic
+
+    with pytest.raises(TriggerError):
+        _clock_check_listener(Event(), monkeypatch)._verify_clock_domain()
+
+
+def test_clock_domain_match_passes(monkeypatch):
+    class Event:
+        def timestamp(self):
+            return time.monotonic()
+
+    # No exception.
+    _clock_check_listener(Event(), monkeypatch)._verify_clock_domain()
 
 
 def test_timestamp_is_used_verbatim():

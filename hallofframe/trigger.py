@@ -61,6 +61,14 @@ class TriggerListener(threading.Thread):
             raise TriggerError(f"cannot open {self.device_path}: {exc}")
 
         self._apply_clock_domain()
+        try:
+            self._verify_clock_domain()
+        except TriggerError:
+            try:
+                self._device.close()
+            except Exception:
+                pass
+            raise
         if self.grab_requested:
             try:
                 self._device.grab()
@@ -106,6 +114,39 @@ class TriggerListener(threading.Thread):
         import time
         fcntl.ioctl(self._device.fd, EVIOCSCLOCKID,
                     struct.pack("i", time.CLOCK_MONOTONIC))
+
+    def _verify_clock_domain(self, timeout: float = 0.3) -> None:
+        """Confirm the device's timestamps are CLOCK_MONOTONIC (spec §6.4).
+
+        The EVIOCSCLOCKID ioctl above is silent when it does not take effect;
+        without this check a CLOCK_REALTIME device leaves ``t_press`` ~56 years
+        from ``Frame.t_recv``, so ``nearest()`` returns the newest frame and every
+        photo is wrong while ``elapsed`` still looks fine. If an event is already
+        pending, compare its kernel timestamp with ``time.monotonic()`` and raise
+        a hard :class:`TriggerError` on a mismatch (which refuses the race and
+        falls back to Qt). No event pending means nothing to compare; the device
+        stays usable."""
+        import select
+        import time
+        if self._device is None:
+            return
+        try:
+            ready, _, _ = select.select([self._device.fd], [], [], timeout)
+        except (OSError, ValueError):
+            return
+        if not ready:
+            return
+        try:
+            event = self._device.read_one()
+        except OSError:
+            return
+        if event is None:
+            return
+        if abs(event.timestamp() - time.monotonic()) >= 1.0:
+            raise TriggerError(
+                "evdev clock domain is not CLOCK_MONOTONIC "
+                f"(event {event.timestamp():.1f} vs monotonic "
+                f"{time.monotonic():.1f}); refusing to start")
 
     def _dispatch(self, code: int, value: int, timestamp: float) -> None:
         if value != 1:
