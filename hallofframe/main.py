@@ -246,10 +246,16 @@ def main(argv=None) -> int:
                 listeners.set_grab(state in (AppState.ARMED, AppState.RECORDING))
             except Exception:
                 pass
-        win.on_state_changed = _sync_grab
+        win.state_changed.connect(_sync_grab)
         # The initial READY was applied before the hook was wired, so fire it
         # once to release any grab taken at construction (§9/Opt A).
         _sync_grab(win._last_state)
+
+    # A race left un-ended by a crash/restart (N4, plan step 3.5): offer to
+    # resume it or mark it finished. Additive; shown non-modally.
+    open_race = core["storage"].open_race()
+    if open_race is not None:
+        win.offer_resume(open_race["id"])
 
     # Bring up the USB tunnel before the reader connects (spec §6.1, §9.3).
     import threading

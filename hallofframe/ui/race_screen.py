@@ -211,7 +211,7 @@ class RaceScreen(QWidget):
 
     def add_capture(self, data: dict) -> None:
         self.log.add(data)
-        self.set_count(len(self.log._rows))
+        self.set_count(self.log.count())
         self.last_capture.set_capture(data["sequence"], data["elapsed_s"])
 
     def update_image(self, sequence: int, path: str) -> None:
@@ -221,7 +221,7 @@ class RaceScreen(QWidget):
 
     def remove_capture(self, sequence: int) -> None:
         self.log.remove(sequence)
-        self.set_count(len(self.log._rows))
+        self.set_count(self.log.count())
 
     def clear_captures(self) -> None:
         self.log.clear()

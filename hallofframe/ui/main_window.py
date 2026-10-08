@@ -16,7 +16,7 @@ from __future__ import annotations
 import shutil
 import time
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtCore import QMimeData
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QLineEdit, QMainWindow,
@@ -27,16 +27,18 @@ from ..controller import (CalibrationError, CaptureController, RaceStateError,
                           calibration_status)
 from ..export import clipboard_data, export_all_html, local_hms
 from ..framebuffer import FrameBuffer
-from ..roster import (Roster, RosterLoad, RosterWriteError, format_display,
-                      race_key, recorded_keys)
+from ..roster import Roster, format_display, race_key, recorded_keys
+from ..session import (KEYBAR_NOTE, KEYMAP, Phase, Session, SessionError,
+                       derive_state)
 from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
 from ..ui.race_screen import RaceScreen
-from ..ui.ready_screen import ReadyScreen, choose_roster_file, roster_path
+from ..ui.ready_screen import ReadyScreen
 from ..ui.review_screen import ReviewScreen
 from ..ui.about_screen import AboutOverlay
-from ..ui.state import AppState, derive_state
+from ..ui.roster_view import RosterView
+from ..ui.state import AppState
 from ..ui.widgets import Banner, BannerHost, KeyBar, StateBand, Toast
 
 
@@ -70,6 +72,10 @@ def keycode_names(codes) -> str:
 
 
 class MainWindow(QMainWindow):
+    # Emitted at the end of every ``_apply_state`` so ``main.py`` can tie the
+    # trigger-device grab to state without the window knowing about evdev (§9).
+    state_changed = Signal(object)
+
     def __init__(self, config, controller: CaptureController,
                  buffer: FrameBuffer, trigger=None, logger=None):
         super().__init__()
@@ -131,11 +137,9 @@ class MainWindow(QMainWindow):
         self.status_timer.start(500)
 
         # --- state fields ---
-        self._armed = False
-        self._race_over = False
-        self._reviewing = False
-        self._review_race_id: int | None = None
-        self._race_over_race_id: int | None = None
+        # The operator's position in the lifecycle lives in one object; the
+        # window only reads ``session.phase`` / ``session.focused_race_id``.
+        self.session = Session()
         self._review_screen: ReviewScreen | None = None
         self._cal_ok = True
         self._cal_detail = ""
@@ -143,22 +147,26 @@ class MainWindow(QMainWindow):
         self._last_capture: int | None = None
         self._last_state = None
         self._advance_race_default = False
+        self._resume_banner: Banner | None = None
         self.roster = Roster(None)
-        # Set by main.py to keep the trigger device grab tied to state (§9/Opt A).
-        self.on_state_changed = None
+        self.roster_view = RosterView(
+            ready=self.ready, banner_host=self.banner_host, roster=self.roster,
+            storage=self.controller.storage, toast=self._show_toast, parent=self,
+            logger=self._logger, state=lambda: self._last_state,
+            focused_race_id=lambda: (self.session.focused_race_id
+                                     or self.controller.race_id),
+            recompute=self._recompute_state)
 
-        self._load_races()
+        self.roster_view.load()
         self.ready.race_selected.connect(self._on_race_selected)
-        self.ready.add_race_clicked.connect(self._open_add_race)
-        self.ready.skip_clicked.connect(self._toggle_skip)
+        self.ready.add_race_clicked.connect(self.roster_view.open_add_race)
+        self.ready.skip_clicked.connect(self.roster_view.toggle_skip)
         self.ready.set_finish_line(float(self.config.section("ui")["finish_line_x"]))
         self._set_trigger_label()
 
         self._connect_controller()
-        self._install_shortcuts()
-        self._apply_state(derive_state(self.controller, self.buffer,
-                                       self._cal_ok, self._armed,
-                                       self._reviewing, self._race_over))
+        self._install_keymap()
+        self._apply_state(self._derive())
         self._update_status()
 
     # ------------------------------------------------------------------ wiring
@@ -200,36 +208,22 @@ class MainWindow(QMainWindow):
         start = {int(c) for c in trig["start_keycodes"]}
         return bool(cross & start)
 
-    def _install_shortcuts(self) -> None:
-        # ApplicationShortcut context: these never lose to a focused button (§4).
-        def sc(key, fn):
-            return QShortcut(QKeySequence(key), self, activated=fn,
-                             context=Qt.ApplicationShortcut)
-        sc("Ctrl+S", self._arm_start)
-        sc("Ctrl+Z", self.controller.undo_last)
-        sc("Ctrl+Q", self._quit)
-        sc("Esc", self._esc)
-        sc("F12", lambda: self.on_evdev_end(time.monotonic(), 88))
-        sc("F1", self._toggle_about)
-        letters = [sc("C", self._calibrate), sc("E", self._on_e),
-                   sc("L", self._load_selected_race),
-                   sc("D", self._export_html), sc("R", self._on_r),
-                   sc("N", self._next_race), sc("/", self._focus_filter),
-                   sc("End", self._end_unlisted)]
-        sc("Shift+Up", lambda: self._move_selected_race(-1))
-        sc("Shift+Down", lambda: self._move_selected_race(1))
-        race = [sc("Return", lambda: self.on_evdev_start(time.monotonic())),
-                sc("Enter", lambda: self.on_evdev_start(time.monotonic())),
-                sc("Space",
-                   lambda: self.controller.record_crossing(time.monotonic()))]
-        # Beating a focused button (§4) also means beating a focused text field:
-        # every shortcut whose key can be typed has to stand down while a bow
-        # number or race name is being entered, or the character never arrives.
-        self._typable_shortcuts = letters + race
-        # The race controls are unreachable from REVIEW anyway (_arm_start
-        # refuses it) and Enter/Space belong to the review screen there — a real
-        # trigger press still arrives through the evdev bridge, not a shortcut.
-        self._race_shortcuts = race
+    def _install_keymap(self) -> None:
+        """Build one application shortcut per distinct ``KEYMAP`` key (step 3.3).
+
+        ApplicationShortcut context: these never lose to a focused button (§4).
+        Each distinct key maps to one action across every state, so a single
+        QShortcut per key is enough; ``_enable_shortcuts`` turns on exactly the
+        ones the current state lists."""
+        self._shortcuts: dict[str, QShortcut] = {}
+        for keys in KEYMAP.values():
+            for k in keys:
+                if not k.shortcut or k.key in self._shortcuts:
+                    continue
+                sc = QShortcut(QKeySequence(k.key), self,
+                               context=Qt.ApplicationShortcut)
+                sc.activated.connect(getattr(self, k.action))
+                self._shortcuts[k.key] = sc
         app = QApplication.instance()
         if app is not None:
             # Bound method, not a lambda: Qt drops the connection when this
@@ -237,16 +231,65 @@ class MainWindow(QMainWindow):
             app.focusChanged.connect(self._focus_changed)
 
     def _focus_changed(self, _old=None, _new=None) -> None:
-        self._sync_shortcuts()
+        self._enable_shortcuts()
 
-    def _sync_shortcuts(self) -> None:
-        """Silence the typable shortcuts while typing, and in REVIEW."""
+    def _enable_shortcuts(self, state: AppState | None = None) -> None:
+        """Enable exactly the shortcuts the current state lists, and silence the
+        typable ones while a QLineEdit has focus (§4) so bow numbers arrive."""
+        state = self._last_state if state is None else state
         typing = isinstance(QApplication.focusWidget(), QLineEdit)
-        for shortcut in self._typable_shortcuts:
-            shortcut.setEnabled(not typing)
-        for shortcut in self._race_shortcuts:
-            shortcut.setEnabled(not typing and self._last_state
-                                is not AppState.REVIEW)
+        keys = KEYMAP.get(state, [])
+        active = {k.key for k in keys if k.shortcut}
+        typable = {k.key for k in keys if k.shortcut and k.typable}
+        for key, shortcut in self._shortcuts.items():
+            shortcut.setEnabled(key in active and not (typing and key in typable))
+
+    def _rebuild_keybar(self, state: AppState) -> None:
+        kb = self.keybar
+        kb.clear()
+        for k in KEYMAP.get(state, []):
+            if not k.show:
+                continue
+            callback = None if k.action == "_noop" else getattr(self, k.action)
+            kb.add(k.key, k.label, k.hot, callback)
+        note = self._note_for(state)
+        if note:
+            kb.set_note(note)
+
+    def _note_for(self, state: AppState) -> str:
+        if state == AppState.RECORDING:
+            return self._grab_note()
+        if state == AppState.ARMED:
+            end = keycode_names(self.config.section("trigger")["end_keycodes"])
+            return (f"Trigger device grabbed while armed — {end} or Esc disarms "
+                    "and releases it, then quit normally.")
+        return KEYBAR_NOTE.get(state, "")
+
+    def _apply_keymap(self, state: AppState) -> None:
+        self._rebuild_keybar(state)
+        self._enable_shortcuts(state)
+
+    # ---------------------------------------------------------- keymap actions
+    def _noop(self) -> None:
+        """Informational key-bar cap (REVIEW arrows / Tab / Del): no shortcut."""
+
+    def _undo_last(self) -> None:
+        self.controller.undo_last()
+
+    def _end_key(self) -> None:
+        self.on_evdev_end(time.monotonic(), 88)
+
+    def _start_key(self) -> None:
+        self.on_evdev_start(time.monotonic())
+
+    def _crossing_key(self) -> None:
+        self.controller.record_crossing(time.monotonic())
+
+    def _move_up(self) -> None:
+        self.roster_view.move_selected(-1)
+
+    def _move_down(self) -> None:
+        self.roster_view.move_selected(1)
 
     # ---------------------------------------------------------------- state band
     def _health_labels(self) -> list[str]:
@@ -273,6 +316,10 @@ class MainWindow(QMainWindow):
         self._update_health()
         self._recompute_state()
 
+    def _derive(self) -> AppState:
+        alive, _fps, _age = self.buffer.health()
+        return derive_state(self.session, alive, self._cal_ok)
+
     def _recompute_state(self) -> None:
         # Calibration is only gateable in water mode; screen mode cancels
         # latency entirely and needs no calibration file (§5.4, §8).
@@ -282,8 +329,7 @@ class MainWindow(QMainWindow):
         elif time.monotonic() - self._cal_check_at >= 3.0:
             self._cal_check_at = time.monotonic()
             self._cal_ok, self._cal_detail = calibration_status(self.config, self.buffer)
-        state = derive_state(self.controller, self.buffer, self._cal_ok,
-                             self._armed, self._reviewing, self._race_over)
+        state = self._derive()
         if state != self._last_state:
             self._apply_state(state)
         else:
@@ -344,8 +390,7 @@ class MainWindow(QMainWindow):
             self.clock_timer.stop()
 
         self._refresh_band(state)
-        self._apply_keybar(state)
-        self._sync_shortcuts()
+        self._apply_keymap(state)
         if state == AppState.READY:
             if self._advance_race_default:
                 # A race just finished: jump the default to the next race in the
@@ -355,49 +400,7 @@ class MainWindow(QMainWindow):
             self._refresh_race_selector()
             self.ready.set_checks(self._pre_race_checks())
             self.ready.set_lag(self._measure_lag())
-        if self.on_state_changed is not None:
-            self.on_state_changed(state)
-
-    def _apply_keybar(self, state: AppState) -> None:
-        kb = self.keybar
-        kb.clear()
-        if state == AppState.RECORDING:
-            kb.add("SPACE", "Record crossing", True,
-                   lambda: self.controller.record_crossing(time.monotonic()))
-            kb.add("F12", "End race", callback=self._end_race)
-            kb.add("Ctrl+Z", "Undo last", callback=self.controller.undo_last)
-            kb.set_note(self._grab_note())
-        elif state == AppState.ARMED:
-            trig = self.config.section("trigger")
-            end = keycode_names(trig["end_keycodes"])
-            kb.add(end, "Disarm", callback=lambda: self.on_evdev_end(time.monotonic(), 88))
-            kb.add("Esc", "Cancel", callback=self._esc)
-            kb.set_note(f"Trigger device grabbed while armed — {end} or Esc disarms "
-                        "and releases it, then quit normally.")
-        elif state == AppState.REVIEW:
-            kb.add("↑/↓", "Select crossing", True)
-            kb.add("Tab", "Next bow field")
-            kb.add("Del", "Soft-delete")
-            kb.add("E", "Edit race", callback=self._edit_race)
-            kb.add("Esc", "Back to Ready", callback=self._close_review)
-        elif state == AppState.RACE_OVER:
-            kb.add("R", "Review crossings", True, callback=self._open_review)
-            kb.add("E", "Copy as Excel", callback=self._export)
-            kb.add("N", "Next race", callback=self._next_race)
-            kb.add("Ctrl+Q", "Quit", callback=self._quit)
-        elif state == AppState.RECALIBRATE:
-            kb.add("C", "Calibrate", True, callback=self._calibrate)
-            kb.add("Ctrl+Q", "Quit", callback=self._quit)
-        else:  # READY / STREAM_DOWN
-            kb.add("Ctrl+S", "Arm", True, callback=self._arm_start)
-            kb.add("C", "Calibrate", callback=self._calibrate)
-            kb.add("L", "Load race", callback=self._load_selected_race)
-            kb.add("Shift+↑", "Move up", callback=lambda: self._move_selected_race(-1))
-            kb.add("Shift+↓", "Move down", callback=lambda: self._move_selected_race(1))
-            kb.add("D", "Save DB HTML", callback=self._export_html)
-            kb.add("Ctrl+Q", "Quit", callback=self._quit)
-            if state == AppState.STREAM_DOWN:
-                kb.set_note("Stream down — race starts timing-only (no photos)")
+        self.state_changed.emit(state)
 
     def _grab_note(self) -> str:
         trig = self.config.section("trigger")
@@ -439,13 +442,10 @@ class MainWindow(QMainWindow):
 
     # -------------------------------------------------------------------- events
     def _arm_start(self) -> None:
-        if self._armed:
+        if self.session.phase is Phase.ARMED:
             return
-        if self._last_state in (AppState.ARMED, AppState.RECORDING,
-                                AppState.REVIEW):
-            self._show_toast("Can't arm in this state.")
-            return
-        if self._advance_race_default:
+        if self._advance_race_default and self.session.phase in (Phase.IDLE,
+                                                                 Phase.RACE_OVER):
             # A race just finished: advance the default to the next unrecorded
             # race even when arming straight from RACE_OVER (without passing
             # READY, which is where _apply_state would otherwise do this).
@@ -454,15 +454,18 @@ class MainWindow(QMainWindow):
         # With no stream, start_race auto-degrades to timing-only (§6.5), so
         # arming is allowed in STREAM_DOWN. RECALIBRATE (stream up, stale Δ) is
         # still blocked: start_race's calibration gate will refuse it anyway.
-        if self._last_state in (AppState.RECALIBRATE,):
+        if self._last_state == AppState.RECALIBRATE:
             self._show_toast("Calibration no longer matches the stream — "
                              "press C to re-calibrate.")
+            return
+        try:
+            self.session.arm()
+        except SessionError as exc:
+            self._show_toast(str(exc))
             return
         trig = self.config.section("trigger")
         start_keys = keycode_names(trig["start_keycodes"])
         device = trig["device_path"] or "keyboard"
-        self._armed = True
-        self._race_over = False
         self._recompute_state()
         if self._single_key_mode():
             self._show_toast(f"Armed. First press on {start_keys} starts the race; "
@@ -473,9 +476,8 @@ class MainWindow(QMainWindow):
                              f"({device}) to start.", timeout_ms=0)
 
     def on_evdev_start(self, t_press: float) -> None:
-        if not self._armed:
+        if self.session.phase is not Phase.ARMED:
             return
-        self._armed = False
         # WP7: an unlisted race records under a provisional (timestamp) key with
         # null race_no/heat_no, identified once afterwards in review.
         race, is_unlisted = self.ready.current_selection()
@@ -486,34 +488,39 @@ class MainWindow(QMainWindow):
                 heat_no=None if is_unlisted else race.heat_no)
         except (CalibrationError, RaceStateError) as exc:
             # start_race refuses (calibration mismatch, already running, or a
-            # prior race never ended). Surface it without a modal (§7.5).
+            # prior race never ended). Surface it without a modal (§7.5) and
+            # fall back to IDLE, exactly as the pre-Session code disarmed.
             self._show_toast(str(exc))
+            self.session.disarm()
             self._recompute_state()
             return
         if self.controller.running:
-            self._race_over = False
+            self.session.race_started(self.controller.race_id)
             self._last_capture = None
             self.recording.clear_captures()
         self._recompute_state()
 
     def on_evdev_crossing(self, t_press: float, code: int, suspect: bool = False) -> None:
         # Single-key flow (§5.3): when the trigger key is armed, the first press
-        # IS t0 (start). On the main thread via the bridge, so reading _armed
-        # here is safe. Once a race is running, every press is a crossing.
-        if self._armed:
+        # IS t0 (start). On the main thread via the bridge, so reading the
+        # session phase here is safe. Once a race is running, every press is a
+        # crossing.
+        if self.session.phase is Phase.ARMED:
             self.on_evdev_start(t_press)
             return
         self.controller.record_crossing(t_press, debounce_suspect=suspect)
 
     def on_evdev_end(self, t_press: float, code: int = 0) -> None:
-        if self._armed:
+        if self.session.phase is Phase.ARMED:
             # Escape hatch while armed: the trigger keyboard is grabbed, so the
             # Qt shortcuts (Esc / Ctrl+Q) are unreachable. The END key disarms
             # and releases the grab back to READY, where normal quit works.
             # Timing is unaffected — this is the pre-race ARMED state, and the
             # RECORDING end path below is untouched.
-            self._armed = False
-            self._race_over = False
+            try:
+                self.session.disarm()
+            except SessionError:
+                return
             self._recompute_state()
             self._show_toast("Disarmed. Keyboard released.")
             return
@@ -526,10 +533,8 @@ class MainWindow(QMainWindow):
         self.controller.end_race()
 
     def on_race_ended(self, race_id: int) -> None:
-        self._armed = False
-        self._race_over = True
-        self._race_over_race_id = race_id
-        self._reviewing = False
+        if self.session.phase is Phase.RECORDING:
+            self.session.race_ended(race_id)
         caps = self.controller.storage.captures_for_race(race_id)
         self.race_over.set_summary(list(caps), self._start_text(race_id))
         self._advance_race_default = True
@@ -562,45 +567,43 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- review
     def _open_review(self, race_id: int | None = None) -> None:
         if race_id is None:
-            race_id = self._current_race_id()
+            race_id = self.session.focused_race_id or self.controller.race_id
         if race_id is None:
             return
-        self._review_race_id = race_id
+        try:
+            self.session.open_review(race_id)
+        except SessionError as exc:
+            self._show_toast(str(exc))
+            return
         if self._review_screen is None:
             self._review_screen = ReviewScreen(self.controller, self.config.data_root,
                                                race_id=race_id)
             self.center.addWidget(self._review_screen)
-            self._review_screen.edit_race_requested.connect(self._edit_race)
+            self._review_screen.edit_race_requested.connect(self.roster_view.edit_race)
         elif self._review_screen.race_id != race_id:
             self._review_screen.race_id = race_id
         self._review_screen.load_captures()
-        self._reviewing = True
         self._recompute_state()
         self._review_screen.setFocus()
 
     def _close_review(self) -> None:
-        if self._review_race_id is not None:
-            self.controller.storage.mark_race_reviewed(self._review_race_id)
-        self._reviewing = False
-        if self._race_over and self._race_over_race_id is not None:
-            race_id = self._race_over_race_id
+        race_id = self.session.focused_race_id
+        if race_id is not None:
+            self.controller.storage.mark_race_reviewed(race_id)
+        try:
+            self.session.close_review()
+        except SessionError as exc:
+            self._show_toast(str(exc))
+            return
+        if self.session.phase is Phase.RACE_OVER and race_id is not None:
             caps = self.controller.storage.captures_for_race(race_id)
             self.race_over.set_summary(list(caps), self._start_text(race_id))
         self._recompute_state()
 
-    def _current_race_id(self) -> int | None:
-        """The race the operator is currently looking at: the reviewed race, the
-        race shown on the RACE_OVER window, or else the last race run."""
-        if self._reviewing:
-            return self._review_race_id
-        if self._race_over:
-            return self._race_over_race_id
-        return self.controller.race_id
-
     # ---------------------------------------------------------------- actions
     def _on_race_selected(self, row) -> None:
         if self._last_state == AppState.RACE_OVER:
-            self._race_over = False
+            self.session.dismiss()
             self._recompute_state()
 
     def _next_race(self) -> None:
@@ -608,7 +611,7 @@ class MainWindow(QMainWindow):
             self.ready.next_race()
         elif self._last_state == AppState.RACE_OVER:
             self.ready.next_race()
-            self._race_over = False
+            self.session.dismiss()
             self._recompute_state()
         else:
             self._show_toast("Next race only in Ready / Race-over.")
@@ -638,10 +641,11 @@ class MainWindow(QMainWindow):
         if target is None:
             self._show_toast("This race isn't recorded yet — arm and run it first.")
             return
-        self._armed = False
-        self._reviewing = False
-        self._race_over = True
-        self._race_over_race_id = target["id"]
+        try:
+            self.session.load_race(target["id"])
+        except SessionError as exc:
+            self._show_toast(str(exc))
+            return
         caps = self.controller.storage.captures_for_race(target["id"])
         self.race_over.set_summary(list(caps), self._start_text(target["id"]))
         self._recompute_state()
@@ -651,112 +655,9 @@ class MainWindow(QMainWindow):
         if self._last_state == AppState.RACE_OVER:
             self._export()
         elif self._last_state == AppState.REVIEW:
-            self._edit_race()
+            self.roster_view.edit_race()
         else:
-            self._open_rename()
-
-    # ---------------------------------------------------------------- roster editing
-    def _open_add_race(self, race_no: str = "", heat_no: str = "") -> None:
-        if self._last_state in (AppState.ARMED, AppState.RECORDING):
-            self._show_toast("Can't edit the roster while armed or recording.")
-            return
-        if not self.roster.path:
-            self._show_toast("No roster loaded — Load roster… first.")
-            return
-        from ..ui.roster_dialog import AddRaceDialog
-        dlg = AddRaceDialog(self.roster.path, race_no, heat_no,
-                            expected=self.roster.rows, logger=self._logger,
-                            parent=self, after_key=self.ready.selected_key())
-        dlg.result_applied.connect(lambda _r: self._reload_roster())
-        dlg.exec()
-
-    def _open_rename(self) -> None:
-        """E in READY: correct the selected roster row's name (F6)."""
-        if self._last_state in (AppState.ARMED, AppState.RECORDING):
-            self._show_toast("Can't rename while armed or recording.")
-            return
-        if not self.roster.path:
-            self._show_toast("No roster loaded — Load roster… first.")
-            return
-        if self.ready.selected_is_unlisted():
-            self._show_toast("Nothing to rename on an unlisted race.")
-            return
-        race, _ = self.ready.current_selection()
-        if race is not None:
-            self._rename_dialog(race.race_no, race.heat_no, race.name)
-
-    def _edit_race(self) -> None:
-        """Review-side *Edit race* (step 2.6): an unlisted race gets its number
-        after the fact via ``storage.identify_race``; a listed race is renamed.
-        The dialog also offers to append the row to the roster."""
-        if self._last_state in (AppState.ARMED, AppState.RECORDING):
-            self._show_toast("Can't edit the roster while armed or recording.")
-            return
-        race_id = self._review_race_id or self.controller.race_id
-        if race_id is None:
-            return
-        row = self.controller.storage.get_race(race_id)
-        if row is None:
-            return
-        if not (row["race_no"] or ""):
-            self._rename_dialog(row["race_no"] or "", row["heat_no"] or "",
-                                row["name"] or "", editable=True,
-                                race_id=race_id)
-        else:
-            self._rename_dialog(row["race_no"], row["heat_no"], row["name"])
-        self._reload_roster()
-        self._recompute_state()
-
-    def _rename_dialog(self, race_no, heat_no, name, *, editable=False,
-                       race_id=None) -> None:
-        from ..ui.roster_dialog import RenameDialog
-        dlg = RenameDialog(self.roster.path, race_no, heat_no, name,
-                           recorded_keys(self.controller.storage),
-                           self.controller.storage,
-                           expected=self.roster.rows, logger=self._logger,
-                           parent=self, editable_numbers=editable,
-                           race_id=race_id, roster=self.roster)
-        dlg.result_applied.connect(lambda _r: self._reload_roster())
-        dlg.exec()
-
-    def _move_selected_race(self, delta: int) -> None:
-        """Shift+↑/↓ in READY: move the selected row one place in file order
-        (plan step 2.4). The file is never re-sorted; the moved row stays
-        selected."""
-        if self._last_state not in (AppState.READY, AppState.STREAM_DOWN,
-                                    AppState.RECALIBRATE):
-            return
-        key = self.ready.selected_key()
-        if key is None:
-            return
-        try:
-            self.roster.move(key, delta)
-        except RosterWriteError as exc:
-            self._show_toast(f"Could not move race: {exc}")
-            return
-        self._render_roster()
-        self.ready.select_key(key)
-
-    def _toggle_skip(self) -> None:
-        if self._last_state in (AppState.ARMED, AppState.RECORDING):
-            self._show_toast("Can't skip while armed or recording.")
-            return
-        if self.ready.selected_is_unlisted():
-            return
-        race, _ = self.ready.current_selection()
-        if race is None or not self.roster.path:
-            return
-        skipping = race.key not in self.roster.skipped_keys()
-        try:
-            self.roster.skip(race.key, skip=skipping)
-        except Exception as exc:
-            self._show_toast(f"Could not update roster: {exc}")
-            return
-        if self._logger is not None:
-            self._logger.info("roster", "skip" if skipping else "unskip",
-                              key=str(race.key), name=race.name,
-                              file=self.roster.path)
-        self._render_roster()
+            self.roster_view.open_rename()
 
     def _toggle_about(self) -> None:
         # The trigger keyboard is grabbed while armed or recording: nothing may
@@ -773,7 +674,7 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def _export(self) -> None:
-        race_id = self._current_race_id()
+        race_id = self.session.focused_race_id or self.controller.race_id
         if race_id is None:
             self._show_toast("No race to export yet.")
             return
@@ -808,13 +709,13 @@ class MainWindow(QMainWindow):
         if self.ready._filter_active:
             self.ready.clear_filter()
             return
-        if self._reviewing:
+        if self.session.phase is Phase.REVIEW:
             self._close_review()
-        elif self._armed:
-            self._armed = False
+        elif self.session.phase is Phase.ARMED:
+            self.session.disarm()
             self._recompute_state()
-        elif self._race_over:
-            self._race_over = False
+        elif self.session.phase is Phase.RACE_OVER:
+            self.session.dismiss()
             self._recompute_state()
         # No fallback: Esc never quits the application. Only Ctrl+Q does.
 
@@ -834,127 +735,32 @@ class MainWindow(QMainWindow):
         if self.about.isVisible():
             self.about.setGeometry(self.centralWidget().rect())
 
-    # ------------------------------------------------------------------ selector
-    def _load_races(self, path: str | None = None) -> None:
-        """Load the roster (startup or a manual Load roster…) and render it.
+    # ----------------------------------------------------------------- resume
+    def offer_resume(self, race_id: int) -> None:
+        """Startup prompt for a race left un-ended (plan step 3.5, N4). Non-modal:
+        the operator may resume timing or discard the incomplete race."""
+        self._resume_banner = Banner(
+            styles.AMBER,
+            f"Race {race_id} was not ended — Resume / Discard",
+            "The app was closed mid-race. Resume continues timing; "
+            "Discard marks the race finished.",
+            [("Resume", lambda: self._resume_race(race_id)),
+             ("Discard", lambda: self._discard_race(race_id))])
+        self.banner_host.add_banner(self._resume_banner)
 
-        A configured-but-missing path never auto-writes an example roster; it is
-        offered as an action instead (BEHAVIOUR §4)."""
-        if path is None:
-            path = roster_path(self.config)
-        self.roster.load(path)
-        self._render_roster()
+    def _clear_resume_banner(self) -> None:
+        if self._resume_banner is not None:
+            self.banner_host.remove(self._resume_banner)
+            self._resume_banner = None
 
-    def _render_roster(self) -> None:
-        """The single render step (plan step 2.4): push ``roster.races``, the
-        recorded keys and the skipped keys into the picker, then rebuild the chip
-        and banners. Display order is file order — never sorted."""
-        result = self.roster.result
-        recorded = recorded_keys(self.controller.storage)
-        self.ready.set_races(self.roster.races, recorded=recorded,
-                             skipped=self.roster.skipped_keys())
-        self._render_roster_chip(result)
-        self._render_roster_banner(result, recorded)
+    def _resume_race(self, race_id: int) -> None:
+        self._clear_resume_banner()
+        self.controller.resume_race(race_id)
+        self.session.arm()
+        self.session.race_started(race_id)
+        self._recompute_state()
 
-    def _render_roster_chip(self, result: RosterLoad) -> None:
-        import os
-        if not result.ok:
-            self.ready.set_roster("", 0, "")
-            return
-        filename = os.path.basename(result.path)
-        self.ready.set_roster(filename, len(result.races), result.loaded_at,
-                              duplicates=len(result.duplicates),
-                              dup_callback=self._show_duplicates)
-
-    def _render_roster_banner(self, result: RosterLoad, recorded: set) -> None:
-        import os
-        self.banner_host.clear()
-        if not result.ok:
-            if result.missing:
-                self.banner_host.add_banner(Banner(
-                    styles.AMBER,
-                    f"No roster at {result.path}",
-                    "Nothing was created. Racing without a roster is allowed.",
-                    [("Load roster…", self._load_roster_dialog),
-                     ("Write an example roster", self._write_example_roster)]))
-            elif result.file_error:
-                self.banner_host.add_banner(Banner(
-                    styles.RED,
-                    f"Roster unreadable · {os.path.basename(result.path)}",
-                    result.file_error,
-                    [("Reload", self._reload_roster),
-                     ("Load another roster…", self._load_roster_dialog)]))
-            elif result.errors:
-                line = result.errors[0][0]
-                self.banner_host.add_banner(Banner(
-                    styles.RED,
-                    f"Roster failed to parse · {os.path.basename(result.path)}"
-                    f" line {line}",
-                    "Expected race_no, heat_no, name. No roster is loaded.",
-                    [("Reload", self._reload_roster),
-                     ("Load another roster…", self._load_roster_dialog)]))
-            return
-        # A roster is loaded: duplicates and/or dropped recorded races.
-        loaded_keys = {r.key for r in result.races}
-        # Only numbered races count as "dropped"; provisional/unlisted races key
-        # on a timestamp name ("name", ...) that can never be in the roster.
-        dropped = sorted(k for k in (recorded - loaded_keys) if k[0] == "num")
-        if result.duplicates:
-            key, l_a, l_b = result.duplicates[0]
-            headline = (f"Duplicate key {self._key_display(key)}"
-                        f" · lines {l_a} and {l_b}")
-            if len(result.duplicates) > 1:
-                headline += f" (+{len(result.duplicates) - 1} more)"
-            self.banner_host.add_banner(Banner(
-                styles.AMBER, headline,
-                "Rows are not silently dropped. Resolve in the file, or keep the first.",
-                [("Show both", self._show_duplicates), ("Reload", self._reload_roster)]))
-        if dropped:
-            self.banner_host.add_banner(Banner(
-                styles.BLUE,
-                f"{len(dropped)} recorded race{'s' if len(dropped) != 1 else ''}"
-                " are not in this roster",
-                "After a reload. Results are untouched; the running order changed.",
-                [("List them", lambda: self._show_dropped(dropped))]))
-
-    @staticmethod
-    def _key_display(key) -> str:
-        if key and key[0] == "num":
-            rn, hn = key[1], key[2]
-            return f"{rn}-H{hn}" if hn else str(rn)
-        return str(key[1]) if key else ""
-
-    def _reload_roster(self) -> None:
-        self.roster.load()
-        self._render_roster()
-
-    def _load_roster_dialog(self) -> None:
-        if self._last_state in (AppState.ARMED, AppState.RECORDING):
-            self._show_toast("Can't load a roster while armed or recording.")
-            return
-        path = choose_roster_file(self, self.config.data_root)
-        if path:
-            self.roster.load(path)
-            self._render_roster()
-
-    def _write_example_roster(self) -> None:
-        if self.roster.path:
-            try:
-                self.roster.write_example()
-            except OSError as exc:
-                self._show_toast(f"Could not write example roster: {exc}")
-                return
-            self._render_roster()
-
-    def _show_duplicates(self) -> None:
-        dupes = self.roster.result.duplicates
-        if not dupes:
-            return
-        parts = [f"{self._key_display(k)} (lines {a}, {b})" for k, a, b in dupes]
-        self._show_toast("Duplicates: " + "; ".join(parts))
-
-    def _show_dropped(self, dropped) -> None:
-        names = " · ".join(self._key_display(d) for d in dropped[:10])
-        if len(dropped) > 10:
-            names += f" … +{len(dropped) - 10} more"
-        self._show_toast(f"Recorded, not in roster: {names}", timeout_ms=12000)
+    def _discard_race(self, race_id: int) -> None:
+        self._clear_resume_banner()
+        self.controller.storage.mark_race_ended(race_id, None)
+        self._refresh_race_selector()

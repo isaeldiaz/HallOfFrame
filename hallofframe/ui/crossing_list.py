@@ -272,6 +272,10 @@ class CrossingLog(QWidget):
         self._rows.clear()
         self._rebuild()
 
+    def count(self) -> int:
+        """Number of live rows (replaces callers poking ``_rows``)."""
+        return len(self._rows)
+
     def _rebuild(self) -> None:
         live = set(self._rows)
         while self._v.count():
@@ -313,6 +317,11 @@ class ReviewList(CrossingLog):
         if edit is not None:
             edit.setFocus()
             edit.selectAll()
+
+    def remove(self, sequence: int) -> None:
+        """Drop a row and its inline edit field (soft-delete in review)."""
+        self._edits.pop(sequence, None)
+        super().remove(sequence)
 
     def refresh_time(self, sequence: int, elapsed_s: float) -> None:
         """Reset a row's time field to the stored value (after commit/revert)."""
