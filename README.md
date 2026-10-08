@@ -20,6 +20,8 @@ keys on the laptop to record boat crossing times.
   (`Ctrl+S`, `ENTER`, `SPACE`, `F12`).
 - Deferred image selection so after-window frames exist before a photo is
   chosen.
+- Crossing lists are always **fastest first** (spec §13.2) on the Race and
+  Review screens; the order is fixed, not configurable.
 - Latency calibration (water mode vs. screen mode).
 - CSV export, a whole-database HTML results page (`D`, photos included), and
   per-race continuous archive.

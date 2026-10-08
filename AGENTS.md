@@ -63,8 +63,10 @@ hallofframe/
                      `KEYBAR_NOTE` key tables.
   ui/                PySide6 widgets: main_window, ready_screen, roster_view,
                      race_screen, review_screen, crossing_list, preview_widget,
-                     calibration_dialog. `ui/state.py` holds only the
-                     `AppState` enum.
+                     images, calibration_dialog. `ui/state.py` holds only the
+                     `AppState` enum. `ui/crossing_list.py` is one `CrossingList`
+                     (fastest-first); `ui/images.load_scaled` is the only image
+                     decoder.
   tools/ingest_soak.py  Soak-test utility for the ingest path.
   tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
                      near-complete DB, plays the final race, verifies integrity/
@@ -102,6 +104,10 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   Qt-free `KEYMAP` table; `MainWindow` builds one `QShortcut` per distinct key
   and enables the subset for the current state. `MainWindow.state_changed` is
   the hook `main.py` uses to sync the trigger grab.
+- **Crossing lists are fastest-first** (ascending `elapsed_s`) on the Race,
+  Race-over and Review screens, with no `order` argument and no config key
+  (spec §7.3/§13.2). A new row while recording must not steal focus from a bow
+  field. Every image view decodes through `ui/images.load_scaled`.
 - **Calibration (`delta`)** is validated at race start against the live stream
   (§8) by the single `Calibration` loader (`calibration.py`): water mode requires
   a calibration file matching live resolution/fps; screen mode needs none. A dead

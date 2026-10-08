@@ -1,17 +1,18 @@
 """Live preview widget (spec §7.2).
 
-Decodes at reduced size using QImageReader.setScaledSize() (DCT-domain
-scaling, roughly an order of magnitude cheaper than a full decode on the
-dual-core i7-6600U), at preview_fps, independent of ingest rate. Draws a
-draggable, persisted finish-line overlay.
+Decodes at reduced size through :func:`images.load_scaled` (DCT-domain scaling,
+roughly an order of magnitude cheaper than a full decode on the dual-core
+i7-6600U), at preview_fps, independent of ingest rate. Draws a draggable,
+persisted finish-line overlay.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, QTimer, Qt, Signal
-from PySide6.QtGui import QImageReader, QPainter, QPen, QColor
+from PySide6.QtCore import QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtWidgets import QWidget
 
 from ..framebuffer import FrameBuffer
+from .images import load_scaled
 
 
 class PreviewWidget(QWidget):
@@ -66,18 +67,11 @@ class PreviewWidget(QWidget):
         if frame.jpeg == self._last_frame:
             return
         self._last_frame = frame.jpeg
-        buf = QBuffer()
-        buf.setData(frame.jpeg)
-        buf.open(QBuffer.ReadOnly)
-        reader = QImageReader(buf)
-        if reader.canRead():
-            target_w = max(1, int(self.width() * 0.7))
-            reader.setScaledSize(reader.size().scaled(
-                target_w, target_w, Qt.KeepAspectRatio))
-            img = reader.read()
-            if not img.isNull():
-                self._pm = img.scaled(self.size(), Qt.KeepAspectRatio,
-                                      Qt.FastTransformation)
+        target_w = max(1, int(self.width() * 0.7))
+        pm = load_scaled(frame.jpeg, QSize(target_w, target_w))
+        if pm is not None:
+            self._pm = pm.scaled(self.size(), Qt.KeepAspectRatio,
+                                 Qt.FastTransformation)
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802

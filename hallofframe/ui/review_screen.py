@@ -23,12 +23,12 @@ import datetime
 import time
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from . import styles
-from .crossing_list import ReviewList
+from .crossing_list import CrossingList
+from .images import load_scaled
 from ..export import local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
@@ -158,12 +158,14 @@ class _Scrubber(QWidget):
 
 
 class _Photo(QLabel):
-    """Letterboxed frame view; rescales the frame to whatever size it is given.
+    """Letterboxed frame view; re-decodes the source for whatever size it gets.
 
-    The pane has to keep the scaled pixmap and the source apart: a QLabel
-    reports its pixmap's size as its minimum size, so scaling to the label's
-    current rect and nothing else both ratchets the pane wider and leaves the
-    photo at the size the pane happened to have when the frame was first shown.
+    The pane keeps the *source* (a path), not a pixmap: a QLabel reports its
+    pixmap's size as its minimum size, so scaling to the label's current rect
+    and nothing else both ratchets the pane wider and leaves the photo at the
+    size the pane happened to have when the frame was first shown. Re-decoding
+    through :func:`images.load_scaled` on every resize keeps the photo at the
+    pane it ends up in (spec §7.2; quality matters here, so ``fast=False``).
     """
 
     def __init__(self, parent=None):
@@ -171,21 +173,27 @@ class _Photo(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumSize(1, 1)
         self.setStyleSheet(f"background:{styles.LETTERBOX};")
-        self._src: QPixmap | None = None
+        self._source: str | bytes | None = None
+        self._empty_text = ""
 
-    def set_frame(self, pixmap: QPixmap | None, empty_text: str = "") -> None:
-        self._src = pixmap
-        if pixmap is None:
+    def set_frame(self, source: str | bytes | None, empty_text: str = "") -> None:
+        self._source = source
+        self._empty_text = empty_text
+        self.clear()
+        if source is None:
             self.setText(empty_text)
             return
         self._render()
 
     def _render(self) -> None:
-        if self._src is None:
+        if self._source is None:
             return
         if self.width() > 1 and self.height() > 1:
-            self.setPixmap(self._src.scaled(self.size(), Qt.KeepAspectRatio,
-                                            Qt.SmoothTransformation))
+            pixmap = load_scaled(self._source, self.size(), fast=False)
+            if pixmap is not None:
+                self.setPixmap(pixmap)
+            else:
+                self.setText(self._empty_text)
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
@@ -290,7 +298,7 @@ class ReviewScreen(QWidget):
         # --- right: crossing list with bow fields ---
         right = QWidget()
         right.setStyleSheet(f"border-left:1px solid {styles.PANEL_BORDER};")
-        self.list = ReviewList()
+        self.list = CrossingList(editable=True)
         self.list.bow_edited.connect(self._bow_edited)
         self.list.time_edited.connect(self._time_edited)
         self.list.delete_requested.connect(self._delete)
@@ -380,11 +388,7 @@ class ReviewScreen(QWidget):
     def _show_frame(self, path: str, offset_ms: float) -> None:
         off = float(offset_ms)
         self.offset_lbl.setText(f"{off:+.0f} ms")
-        img = QImageReader(path).read()
-        if img.isNull():
-            self.photo.set_frame(None, "image unreadable")
-            return
-        self.photo.set_frame(QPixmap.fromImage(img))
+        self.photo.set_frame(path, "image unreadable")
 
     # --- persistence ------------------------------------------------------
     def _save_start_time(self) -> None:
