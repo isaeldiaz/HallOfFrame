@@ -445,7 +445,8 @@ class Storage:
             return cur.lastrowid
 
     def update_capture(self, capture_id, **fields) -> None:
-        allowed = {"bow_number", "primary_image", "image_flag", "deleted", "notes"}
+        allowed = {"bow_number", "primary_image", "image_flag", "deleted", "notes",
+                   "target_ms", "primary_frame_id"}
         sets = []
         vals = []
         for k, v in fields.items():
@@ -492,6 +493,54 @@ class Storage:
             self._touch(row["race_id"])
             self._conn.commit()
             return True
+
+    def restore_capture(self, capture_id: int) -> None:
+        """Undo a soft delete: set ``deleted=0`` (plan step 7.1).
+
+        Deletion is soft (``deleted=1``), so restoring is a plain flip; the row
+        and its sequence were never removed (spec §6.7)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
+            if row is None:
+                return
+            self._conn.execute(
+                "UPDATE capture SET deleted=0, updated_at=? WHERE id=?",
+                (_utcnow(), capture_id))
+            self._touch(row["race_id"])
+            self._conn.commit()
+
+    def clone_capture(self, capture_id: int) -> int | None:
+        """Duplicate a crossing as a NEW row (plan step 7.1, spec §13.2).
+
+        Copies ``t_press``, ``t_press_wall``, ``elapsed_s``, ``delta_used``,
+        ``target_ms``, ``primary_frame_id``, ``primary_image`` and ``image_flag``
+        so the clone shares the parent's frames through ``target_ms``;
+        ``bow_number`` and ``notes`` are left empty and ``debounce_suspect`` is
+        reset. The new ``sequence`` is ``MAX(sequence)+1`` for the race including
+        soft-deleted rows, so numbers are never reused (§6.7). Returns the new
+        id, or None when the source is unknown."""
+        with self._lock:
+            src = self._conn.execute(
+                "SELECT * FROM capture WHERE id=?", (capture_id,)).fetchone()
+            if src is None:
+                return None
+            race_id = src["race_id"]
+            seq = self._conn.execute(
+                "SELECT COALESCE(MAX(sequence),0)+1 AS n FROM capture WHERE race_id=?",
+                (race_id,)).fetchone()["n"]
+            now = _utcnow()
+            cur = self._conn.execute(
+                "INSERT INTO capture (race_id, sequence, t_press, t_press_wall, "
+                "elapsed_s, delta_used, target_ms, primary_frame_id, primary_image, "
+                "image_flag, bow_number, notes, debounce_suspect, deleted, "
+                "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (race_id, seq, src["t_press"], src["t_press_wall"], src["elapsed_s"],
+                 src["delta_used"], src["target_ms"], src["primary_frame_id"],
+                 src["primary_image"], src["image_flag"], None, None, 0, 0, now))
+            self._touch(race_id)
+            self._conn.commit()
+            return cur.lastrowid
 
     def capture(self, capture_id: int):
         with self._lock:

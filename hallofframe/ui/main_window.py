@@ -602,6 +602,22 @@ class MainWindow(QMainWindow):
             self.race_over.set_summary(list(caps), self._start_text(race_id))
         self._recompute_state()
 
+    # Review keybar caps forward to the review screen's selected crossing
+    # (plan step 7.2). The keys themselves are handled by the screen's
+    # keyPressEvent, so these exist for the clickable key-bar caps and to keep
+    # every KEYMAP action resolving to a real MainWindow method.
+    def _review_remove(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.remove_selected()
+
+    def _review_restore(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.restore_selected()
+
+    def _review_clone(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.clone_selected()
+
     # ---------------------------------------------------------------- actions
     def _on_race_selected(self, row) -> None:
         if self._last_state == AppState.RACE_OVER:

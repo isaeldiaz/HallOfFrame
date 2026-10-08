@@ -6,10 +6,14 @@ list with an inline bow field per row on the right. ``↑/↓`` select a crossin
 ``Shift+←/→`` step frames, ``Tab`` saves the selected frame as the crossing's
 primary photo and focuses its bow field so the bow can be typed in the same
 view, then ``Enter``/``Tab`` in the field commits the bow and moves to the next
-crossing. ``Del`` soft-deletes, ``Esc`` returns to READY. Navigation keys keep
-working from a focused bow field: ``Shift+←/→`` step that crossing's frames and
-``↑/↓`` jump to the adjacent crossing's bow, so the operator is never locked
-out of frame review once a field has focus.
+crossing. ``Del`` soft-deletes the selected row, ``Shift+Del`` or ``U`` restores
+it, and ``Ins`` or ``Shift+D`` clones it (the clone lands beside its parent
+because both sort by ``elapsed_s``); ``Esc`` returns to READY. Deleted rows are
+not hidden here — they stay in the list struck through and dimmed so they can be
+restored (plan step 7.2). Navigation keys keep working from a focused bow field:
+``Shift+←/→`` step that crossing's frames and ``↑/↓`` jump to the adjacent
+crossing's bow, so the operator is never locked out of frame review once a field
+has focus.
 
 Two Qt constraints shape the key handling. ``Tab`` is spent by
 ``QWidget::event()`` on focus navigation *before* ``keyPressEvent()`` runs, so it
@@ -319,9 +323,14 @@ class ReviewScreen(QWidget):
         # dict(), not the sqlite3.Row it came from: _commit_selected_frame()
         # writes the new primary_image back into these rows, and a Row is
         # read-only (it raised TypeError on every Tab/Enter save).
+        #
+        # Review keeps soft-deleted rows visible and struck through (plan step
+        # 7.2) so ``U``/``Shift+Del`` can restore them; the race and race-over
+        # screens call captures_for_race() without include_deleted and keep
+        # hiding them.
         self._captures = [dict(c) for c in
-                          self.controller.storage.captures_for_race(self.race_id)
-                          if not c["deleted"]]
+                          self.controller.storage.captures_for_race(
+                              self.race_id, include_deleted=True)]
         row = self.controller.storage.get_race(self.race_id)
         self._t0_wall = row["t0_wall"] if row else None
         self.start_edit.setText(
@@ -336,9 +345,14 @@ class ReviewScreen(QWidget):
                 "image_flag": c["image_flag"],
                 "suspect": bool(c["debounce_suspect"]),
                 "bow": c["bow_number"] or "",
+                "deleted": bool(c["deleted"]),
             })
         if self._captures:
-            self._select(self._captures[0]["sequence"])
+            # Select the first live crossing; fall back to the first row when
+            # every crossing has been deleted.
+            target = next((c["sequence"] for c in self._captures
+                           if not c["deleted"]), self._captures[0]["sequence"])
+            self._select(target)
 
     def _select(self, sequence: int) -> None:
         self._selected_seq = sequence
@@ -378,7 +392,12 @@ class ReviewScreen(QWidget):
             return
         frames = self._frame_paths.get(cap["id"], [])
         if not frames:
-            self.photo.set_frame(None, "no window frames")
+            # After a time edit the controller flags a crossing with no frames in
+            # its new window as ``missing`` and clears the primary; the photo
+            # pane says so explicitly so the operator knows to re-pick (7.2).
+            empty = ("no frames at this time"
+                     if cap.get("image_flag") == "missing" else "no window frames")
+            self.photo.set_frame(None, empty)
             self.scrubber.set_frames([], 0)
             self.offset_lbl.setText("")
             return
@@ -428,7 +447,13 @@ class ReviewScreen(QWidget):
             self.controller.set_bow_number(cap["id"], value or None)
 
     def _time_edited(self, sequence: int, raw: str) -> None:
-        """Parse and persist an edited elapsed time; revert invalid input."""
+        """Parse and persist an edited elapsed time; revert invalid input.
+
+        A successful edit can move the crossing's target to a time with no
+        frames; the controller then flags it ``missing`` and clears the primary
+        (step 7.1). Re-read the row so the flag column and the photo pane both
+        show the new state.
+        """
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
         if cap is None:
             return
@@ -436,18 +461,65 @@ class ReviewScreen(QWidget):
         if elapsed is None:
             self.list.refresh_time(sequence, cap["elapsed_s"])
             return
-        if self.controller.update_crossing_time(cap["id"], elapsed):
-            cap["elapsed_s"] = elapsed
-            self.list.refresh_time(sequence, elapsed)
+        if not self.controller.update_crossing_time(cap["id"], elapsed):
+            self.list.refresh_time(sequence, cap["elapsed_s"])
+            return
+        cap["elapsed_s"] = elapsed
+        self.list.refresh_time(sequence, elapsed)
+        fresh = self.controller.storage.capture(cap["id"])
+        if fresh is not None:
+            cap["image_flag"] = fresh["image_flag"]
+            cap["primary_image"] = fresh["primary_image"]
+            cap["primary_frame_id"] = fresh["primary_frame_id"]
+            cap["target_ms"] = fresh["target_ms"]
+        self.list.refresh_flag(sequence, cap["image_flag"],
+                               bool(cap.get("debounce_suspect")))
+        if self._selected_seq == sequence:
+            self._show_capture(sequence)
+            self._show_primary()
+
+    # --- remove / restore / clone ----------------------------------------
+    def _selected_capture(self) -> dict | None:
+        if self._selected_seq is None:
+            return None
+        return next((c for c in self._captures
+                     if c["sequence"] == self._selected_seq), None)
+
+    def remove_selected(self) -> None:
+        """Soft-delete the selected crossing (``Del``); it stays in the list."""
+        if self._selected_seq is not None:
+            self._delete(self._selected_seq)
+
+    def restore_selected(self) -> None:
+        """Undo the soft delete on the selected row (``Shift+Del`` / ``U``)."""
+        cap = self._selected_capture()
+        if cap is None or not cap.get("deleted"):
+            return
+        self.controller.restore(cap["id"])
+        cap["deleted"] = 0
+        self.list.set_deleted(cap["sequence"], False)
+
+    def clone_selected(self) -> None:
+        """Duplicate the selected crossing (``Ins`` / ``Shift+D``).
+
+        The clone copies the parent's ``elapsed_s`` so it sorts right beside it;
+        reloading picks up the new ``MAX(sequence)+1`` row (spec §6.7)."""
+        cap = self._selected_capture()
+        if cap is None:
+            return
+        new = self.controller.clone(cap["id"])
+        self.load_captures()
+        if new is not None and getattr(new, "sequence", None) is not None:
+            self._select(new.sequence)
 
     def _delete(self, sequence: int) -> None:
+        """Soft-delete one row in place; the row is struck through, not removed."""
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
-        if cap:
-            self.controller.soft_delete(cap["id"])
-        self._captures = [c for c in self._captures if c["sequence"] != sequence]
-        self.list.remove(sequence)
-        if self._captures:
-            self._select(self._captures[0]["sequence"])
+        if cap is None or cap.get("deleted"):
+            return
+        self.controller.remove(cap["id"])
+        cap["deleted"] = 1
+        self.list.set_deleted(sequence, True)
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
@@ -501,8 +573,21 @@ class ReviewScreen(QWidget):
             self._save_and_advance()
             return
         if key == Qt.Key_Delete:
-            if self._selected_seq is not None:
-                self._delete(self._selected_seq)
+            # Shift+Del restores; plain Del soft-deletes (plan step 7.2).
+            if mods & Qt.ShiftModifier:
+                self.restore_selected()
+            else:
+                self.remove_selected()
+            return
+        if key == Qt.Key_Insert:
+            self.clone_selected()
+            return
+        if key == Qt.Key_U and not (mods & (Qt.ShiftModifier | Qt.ControlModifier
+                                            | Qt.AltModifier | Qt.MetaModifier)):
+            self.restore_selected()
+            return
+        if key == Qt.Key_D and mods & Qt.ShiftModifier:
+            self.clone_selected()
             return
         super().keyPressEvent(event)
 

@@ -250,6 +250,71 @@ class TestController(Base):
         self.assertAlmostEqual(row["t_press"], t0 + 12.345, places=3)
         self.assertAlmostEqual(row["t_press_wall"], t0_wall + 12.345, places=3)
 
+    # --- plan step 7.1: remove / restore / clone / time-edit re-target -----
+    def test_clone_copies_fields_and_uses_max_sequence_including_deleted(self):
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        self.controller.record_crossing(1000.0 + 5.0)
+        self.controller.record_crossing(1000.0 + 6.0)
+        self.settle()
+        rows = self.storage.captures_for_race(race_id)
+        src, other = rows[0], rows[1]
+        # A deleted row still holds sequence 2; MAX(sequence)+1 must skip past it.
+        self.controller.remove(other["id"])
+        events = []
+        self.controller.events = lambda kind, payload: events.append(
+            (kind, payload))
+        clone = self.controller.clone(src["id"])
+        self.assertIsInstance(clone, Capture)
+        new = self.storage.capture(clone.id)
+        self.assertEqual(new["sequence"], 3)
+        for field in ("t_press", "t_press_wall", "elapsed_s", "delta_used",
+                      "target_ms", "primary_frame_id", "primary_image",
+                      "image_flag"):
+            self.assertEqual(new[field], src[field], field)
+        self.assertIsNone(new["bow_number"])
+        self.assertIsNone(new["notes"])
+        self.assertEqual(new["debounce_suspect"], 0)
+        self.assertEqual(new["deleted"], 0)
+        self.assertEqual(events, [("capture_added", {"capture": clone})])
+
+    def test_remove_then_restore_round_trips_and_emits(self):
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        self.controller.record_crossing(1000.0 + 5.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        events = []
+        self.controller.events = lambda kind, payload: events.append(
+            (kind, payload))
+        self.controller.remove(cap_id)
+        self.assertEqual(self.storage.capture(cap_id)["deleted"], 1)
+        self.assertEqual(self.storage.captures_for_race(race_id), [])
+        self.assertEqual(events, [("capture_deleted", {"sequence": 1})])
+        restored = self.controller.restore(cap_id)
+        self.assertEqual(self.storage.capture(cap_id)["deleted"], 0)
+        self.assertEqual(len(self.storage.captures_for_race(race_id)), 1)
+        self.assertIsInstance(restored, Capture)
+        self.assertEqual(events[1], ("capture_added", {"capture": restored}))
+
+    def test_time_edit_without_frames_flags_missing_and_clears_primary(self):
+        self.seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        self.assertIsNotNone(self.storage.capture(cap_id)["primary_image"])
+        self.assertTrue(self.controller.update_crossing_time(cap_id, 120.0))
+        row = self.storage.capture(cap_id)
+        self.assertEqual(row["image_flag"], "missing")
+        self.assertIsNone(row["primary_frame_id"])
+        self.assertIsNone(row["primary_image"])
+        self.assertEqual(
+            row["target_ms"],
+            round((row["t_press"] - row["delta_used"] - t0) * 1000))
+        self.assertEqual(self.storage.frames_for_capture(cap_id), [])
+
     def test_unlisted_race_creates_provisional_key(self):
         # WP7: an unlisted race is created with a timestamp name and null
         # race_no/heat_no, identified once afterwards in review.

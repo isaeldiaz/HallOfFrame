@@ -74,6 +74,9 @@ hallofframe/
                      (fastest-first); `ui/images.load_scaled` is the only image
                      decoder.
   tools/ingest_soak.py  Soak-test utility for the ingest path.
+  tools/fake_camera.py  MJPEG server over a folder of JPEGs (`--folder --fps
+                     --port [--loop] [--counter]`); lets a full race run with no
+                     phone. `[transport] enabled = false` skips the USB tunnel.
   tools/late_regatta_soak.py  "Almost the whole day is over" soak: seeds a
                      near-complete DB, plays the final race, verifies integrity/
                      exports/latency/memory. Shared with tests/test_late_regatta.py.
@@ -220,6 +223,16 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   (`meta.db_updated_at` / per-race `updated_at`). HTML carries an `ETag` and
   answers `304` on a matching `If-None-Match`; `/img/` is immutable-cached and
   race-page images are `loading="lazy"`.
+- **Review editing (phase 7).** In REVIEW, `Del` soft-deletes the selected
+  crossing (row stays, struck through, `U`/`Shift+Del` restores), and
+  `Ins`/`Shift+D` clones it (`sequence = MAX+1`, same `target_ms` so frames are
+  shared). A time edit that lands where no frames exist flags `missing` and
+  clears the primary. Export excludes deleted rows; clones are ordinary rows.
+- **Fake camera (phase 7).** `python -m hallofframe.tools.fake_camera --folder
+  DIR --fps 30 --port 8081` serves the folder as MJPEG; set `[stream] url` at it
+  and `[transport] enabled = false`. `tests/test_e2e.py` (`slow`) drives a full
+  race through it. A `[voice]` block (`enabled = false`) is already in the
+  config format for phase 8.
 - **Refactor note (phase 3).** The plan's target of `ui/main_window.py` under
   350 lines was not reached (it is ~766). Roster rendering was extracted to
   `ui/roster_view.py`; the remaining bulk is the evdev/session orchestration and

@@ -14,9 +14,10 @@ Flags use words, not punctuation: ``NO IMAGE`` (missing), ``APPROX``
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout,
+                               QLabel, QLineEdit, QScrollArea, QVBoxLayout,
+                               QWidget)
 
 from ..render import flag_word as flag_text, format_elapsed
 from . import styles
@@ -135,6 +136,7 @@ class _Row(QWidget):
         self.sequence = data["sequence"]
         self.elapsed_s = data["elapsed_s"]
         self.editable = editable
+        self.deleted = bool(data.get("deleted"))
         self._data = data
         self._base_border = "transparent"
         self.lay = QHBoxLayout(self)
@@ -203,6 +205,49 @@ class _Row(QWidget):
                 f" font-family:'{styles.FONT_MONO}'; font-size:24px;"
                 " text-align:center; padding:4px;}")
             self.lay.addWidget(self.bow_edit)
+
+        self.apply_deleted_style()
+
+    # --- soft-delete presentation ----------------------------------------
+    def _strike_widgets(self) -> list:
+        """The row's text widgets, which get a strike-through font when deleted."""
+        ws = [self.seq_lbl, self.flag_lbl]
+        if hasattr(self, "time_edit"):
+            ws.append(self.time_edit)
+        elif hasattr(self, "time_lbl"):
+            ws.append(self.time_lbl)
+        if hasattr(self, "bow_edit"):
+            ws.append(self.bow_edit)
+        return ws
+
+    def apply_deleted_style(self) -> None:
+        """Render a soft-deleted row struck through and dimmed in place.
+
+        Deleted crossings are never hidden in review (plan step 7.2): the row
+        stays selectable so ``U`` / ``Shift+Del`` can restore it. The opacity
+        effect dims the whole row; the strike-out font marks it as void.
+        """
+        for w in self._strike_widgets():
+            f = QFont(w.font())
+            f.setStrikeOut(self.deleted)
+            w.setFont(f)
+        if self.deleted:
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.45)
+            self.setGraphicsEffect(effect)
+        else:
+            self.setGraphicsEffect(None)
+
+    def set_deleted(self, deleted: bool) -> None:
+        self.deleted = deleted
+        self.apply_deleted_style()
+
+    def set_flag(self, image_flag: str | None, suspect: bool) -> None:
+        word, colour = flag_word(image_flag, suspect)
+        self.flag_lbl.setText(word)
+        self.flag_lbl.setStyleSheet(
+            f"font-family:'{styles.FONT_MONO}'; font-size:14px;"
+            f" letter-spacing:.08em; color:{colour};")
 
     def set_highlight(self, on: bool) -> None:
         border = styles.BLUE if on else self._base_border
@@ -315,6 +360,22 @@ class CrossingList(QWidget):
             row.set_highlight(seq == sequence)
             if seq in self._edits:
                 self._edits[seq].setStyleSheet(self._input_style(seq == sequence))
+            # setStyleSheet may reset the bow field's font, so the deleted
+            # strike-through is re-applied after the highlight style.
+            row.apply_deleted_style()
+
+    def set_deleted(self, sequence: int, deleted: bool) -> None:
+        """Mark a row deleted/restored in place (plan step 7.2)."""
+        row = self._rows.get(sequence)
+        if row is not None:
+            row.set_deleted(deleted)
+
+    def refresh_flag(self, sequence: int, image_flag: str | None,
+                     suspect: bool) -> None:
+        """Update a row's flag column after a time edit changed the image."""
+        row = self._rows.get(sequence)
+        if row is not None:
+            row.set_flag(image_flag, suspect)
 
     def focus_bow(self, sequence: int) -> None:
         edit = self._edits.get(sequence)
