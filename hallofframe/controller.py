@@ -278,6 +278,9 @@ class CaptureController:
         self._queue.put(("capture", {
             "race_id": self.race_id,
             "race_dir": self.race_dir,
+            "t0": self.t0,
+            "store": self.store,
+            "image_off": self.image_off,
             "t_press": t_press,
             "elapsed_s": elapsed,
             "target": target,
@@ -296,12 +299,24 @@ class CaptureController:
                     self._handle_capture(payload)
                 elif kind == "stop":
                     break
+            except Exception as exc:
+                # Never let one bad capture kill the writer: a dead writer means
+                # every later crossing is queued but never persisted, silently
+                # losing the primary datum. Log and keep serving the queue.
+                if self.logger:
+                    self.logger.warning("controller", "capture_failed",
+                                        reason=str(exc))
+                self._emit("warning",
+                           message=f"crossing not saved: {exc}")
             finally:
                 self._queue.task_done()
 
     def _handle_capture(self, payload: dict) -> None:
         race_id = payload["race_id"]
         race_dir = payload["race_dir"]
+        t0 = payload["t0"]
+        store = payload["store"]
+        image_off = payload["image_off"]
         t_press = payload["t_press"]
         elapsed = payload["elapsed_s"]
         target = payload["target"]
@@ -309,7 +324,7 @@ class CaptureController:
 
         # Does the buffer have any frames yet? (§6.5 edge cases)
         span = self.buffer.span()
-        if self.image_off:
+        if image_off:
             # Timing-only race: never attach an image, regardless of the buffer.
             image_flag = "missing"
         elif span is None:
@@ -326,7 +341,7 @@ class CaptureController:
             race_id, sequence, t_press, time.time(), elapsed,
             payload["delta_used"], image_flag=image_flag,
             debounce_suspect=int(payload["debounce_suspect"]),
-            target_ms=round((target - self.t0) * 1000))
+            target_ms=round((target - t0) * 1000))
 
         cap = Capture(capture_id, sequence, t_press, elapsed,
                       payload["delta_used"], image_flag,
@@ -337,13 +352,14 @@ class CaptureController:
         # after-window frames exist (spec §6.5). The timer removes itself from
         # the set when it fires so the set does not grow for every capture.
         # Skipped entirely in a timing-only race — no images to attach.
-        if not self.image_off:
+        if not image_off:
             delay = self.window_after_s + self._margin_s
 
             def _fire() -> None:
                 with self._timers_lock:
                     self._timers.discard(timer)
-                self._select_images(capture_id, sequence, target, race_dir)
+                self._select_images(capture_id, sequence, target, race_dir,
+                                    store, t0)
 
             if self._scheduler is not None:
                 timer = self._scheduler(delay, _fire)
@@ -364,7 +380,7 @@ class CaptureController:
                              debounce_suspect=int(payload["debounce_suspect"]))
 
     def _select_images(self, capture_id: int, sequence: int, target: float,
-                       race_dir) -> None:
+                       race_dir, store=None, t0=None) -> None:
         """Deferred selection: persist the window frames and pick the primary.
 
         The window is saved once per race through the gun-indexed frame store
@@ -372,12 +388,19 @@ class CaptureController:
         shared by every crossing whose window covers it, so no per-crossing
         ``captures/`` copies are written. The primary is the stored frame nearest
         the selection target; ``image_flag`` keeps its existing meaning.
+
+        *store* and *t0* are the press's snapshot, passed by the timer thread so
+        a crossing is always attributed to the race that owned it — never to a
+        race that started after the press (``record_crossing``'s comment). They
+        default to the live values for the in-race ``update_crossing_time`` call.
         """
-        if race_dir is None or self.store is None:
+        store = self.store if store is None else store
+        t0 = self.t0 if t0 is None else t0
+        if race_dir is None or store is None or t0 is None:
             return
         frames = self.buffer.window(target, self.window_before_s, self.window_after_s)
-        rows = self.store.save(frames)
-        target_ms = round((target - self.t0) * 1000)
+        rows = store.save(frames)
+        target_ms = round((target - t0) * 1000)
         primary = nearest(rows, target_ms)
 
         # The insertion-time flag reflected the buffer state *before* the deferred

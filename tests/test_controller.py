@@ -396,6 +396,51 @@ class TestController(Base):
         self.assertIn("capture_added", kinds)
         self.assertIn("image_ready", kinds)
 
+    def test_deferred_selection_attributes_to_the_press_race(self):
+        # The deferred selector must use the race that owned the press even when
+        # the next race has already started (record_crossing snapshots it).
+        # Before the fix it used the live store/t0, so the photo was lost and the
+        # crossing was mislabelled ``missing``.
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer, t0=1000.0, seconds=6.0)
+        race_a = self.controller.start_race(1000.0, name="A")
+        self.controller.record_crossing(1000.5)
+        self.commit()  # committed, selection still pending
+        self.controller.end_race(1001.0)
+        race_b = self.controller.start_race(1100.0, name="B")
+        self.scheduler.advance(0.6)  # fire A's timer while B is live
+
+        cap = self.storage.captures_for_race(race_a)[0]
+        self.assertIsNone(cap["image_flag"])
+        self.assertIsNotNone(cap["primary_image"])
+        self.assertTrue(self.controller.frames_for_capture(cap["id"]))
+        # and nothing leaked into race B's frame table
+        rows_b = self.storage._conn.execute(
+            "SELECT COUNT(*) FROM frame WHERE race_id=?", (race_b,)).fetchone()[0]
+        self.assertEqual(rows_b, 0)
+
+    def test_writer_thread_survives_a_failed_commit(self):
+        # A single failed commit (disk full, sequence collision) must not kill
+        # the persistence writer; later crossings must still be saved.
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="Race-T")
+        original = self.storage.insert_capture
+        state = {"n": 0}
+
+        def flaky(*args, **kwargs):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise RuntimeError("simulated disk failure")
+            return original(*args, **kwargs)
+
+        self.storage.insert_capture = flaky
+        self.controller.record_crossing(1000.0 + 1.0)
+        self.controller.record_crossing(1000.0 + 2.0)
+        self.controller._queue.join()
+        self.assertTrue(self.controller._writer_thread.is_alive())
+        self.assertEqual(len(self.storage.captures_for_race(race_id)), 1)
+
 
 @pytest.mark.usefixtures("controller_env")
 class TestCalibrationValidation(Base):
