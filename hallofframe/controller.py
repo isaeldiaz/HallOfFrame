@@ -245,6 +245,9 @@ class CaptureController:
         t_end = time.monotonic() if t_end is None else t_end
         self.running = False
         self.ended_at_mono = t_end
+        # Commit any press still in the queue before counting, so the race-over
+        # summary does not omit the last crossing(s) under disk pressure.
+        self._drain_queue()
         rows = self.storage.captures_for_race(race_id)
         self.ended_capture_count = len(rows)
 
@@ -325,6 +328,15 @@ class CaptureController:
                            message=f"crossing not saved: {exc}")
             finally:
                 self._queue.task_done()
+
+    def _drain_queue(self, timeout: float = 2.0) -> None:
+        """Wait (bounded) for the writer to commit everything already queued.
+
+        Used by ``end_race`` so its crossing count includes presses still in the
+        queue under disk pressure; bounded so the GUI thread can never hang."""
+        deadline = time.monotonic() + timeout
+        while self._queue.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.002)
 
     def _handle_capture(self, payload: dict) -> None:
         race_id = payload["race_id"]
@@ -561,6 +573,8 @@ class CaptureController:
                 t.cancel()
                 self._timers.discard(t)
         self._queue.put(("stop", None))
+        # Wait (bounded) for queued captures to commit before the process exits.
+        self._writer_thread.join(timeout=2.0)
 
 
 def timing_viewing(config) -> str:

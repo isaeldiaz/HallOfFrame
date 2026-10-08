@@ -497,6 +497,23 @@ class TestController(Base):
         finally:
             fresh.stop()
 
+    def test_end_race_counts_a_press_still_being_written(self):
+        # end_race must drain the writer queue so a crossing in flight is not
+        # omitted from the race-over count.
+        self.seed_buffer(self.buffer)
+        race_id = self.controller.start_race(1000.0, name="R")
+        original = self.storage.insert_capture
+
+        def slow(*args, **kwargs):
+            time.sleep(0.05)
+            return original(*args, **kwargs)
+
+        self.storage.insert_capture = slow
+        self.controller.record_crossing(1000.0 + 1.0)
+        self.controller.end_race(1001.5)
+        self.assertEqual(self.controller.ended_capture_count, 1)
+        self.assertEqual(len(self.storage.captures_for_race(race_id)), 1)
+
     def test_writer_thread_survives_a_failed_commit(self):
         # A single failed commit (disk full, sequence collision) must not kill
         # the persistence writer; later crossings must still be saved.
