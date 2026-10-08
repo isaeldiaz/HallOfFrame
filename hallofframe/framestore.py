@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from pathlib import Path
 
 from .storage import Storage
@@ -49,9 +50,20 @@ class FrameStore:
             frames_dir.mkdir(parents=True, exist_ok=True)
             for ms, frame in new:
                 dest = frames_dir / f"{ms:08d}.jpg"
-                tmp = dest.with_name(dest.name + ".tmp")
-                tmp.write_bytes(frame.jpeg)
-                os.replace(tmp, dest)
+                # Unique temp name: overlapping crossings are saved by separate
+                # timer threads, so a fixed ".tmp" per t_ms let two threads write
+                # the same temp and tear each other's file.
+                tmp = dest.with_name(
+                    f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                try:
+                    tmp.write_bytes(frame.jpeg)
+                    os.replace(tmp, dest)
+                except BaseException:
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+                    raise
 
         rows = []
         for ms, frame in by_ms.items():

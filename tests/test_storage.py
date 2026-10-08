@@ -264,6 +264,8 @@ def test_migration_from_old_schema(data_root):
         cap = st.capture(cap_id)
         assert cap["target_ms"] == 1950
         assert cap["primary_frame_id"] == frames[1]["id"]
+        # primary_image is the denormalised copy of the chosen frame's path (§6.7)
+        assert cap["primary_image"] == frames[1]["path"]
 
         race = st.get_race(race_id)
         assert race["window_before_ms"] == 500

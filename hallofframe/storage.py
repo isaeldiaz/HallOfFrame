@@ -215,12 +215,17 @@ class Storage:
                 continue
             t_ms = round((row["t_recv"] - row["t0_monotonic"]) * 1000)
             frame = self._conn.execute(
-                "SELECT id FROM frame WHERE race_id=? AND t_ms=?",
+                "SELECT id, path FROM frame WHERE race_id=? AND t_ms=?",
                 (row["race_id"], t_ms)).fetchone()
             if frame is not None:
+                # primary_image stays a denormalised copy of the chosen frame's
+                # path (§6.7). Two old windows can share a t_ms, so the frame's
+                # path (the first seen) may differ from this capture's old
+                # primary_image; sync it so the two never diverge.
                 self._conn.execute(
-                    "UPDATE capture SET primary_frame_id=? WHERE id=?",
-                    (frame["id"], row["capture_id"]))
+                    "UPDATE capture SET primary_frame_id=?, primary_image=? "
+                    "WHERE id=?",
+                    (frame["id"], frame["path"], row["capture_id"]))
 
         self._conn.execute("DROP TABLE capture_frame")
 
