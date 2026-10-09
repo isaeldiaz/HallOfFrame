@@ -108,3 +108,61 @@ def test_timestamp_is_used_verbatim():
     listener._dispatch(57, 1, 12345.678)
     assert listener.calls == [(12345.678, 57, False)]
     assert listener._last_trigger_mono == 12345.678
+
+
+import sys
+import types
+
+from hallofframe.trigger import device_identity, is_internal_keyboard
+
+_NAMES = {}
+
+
+class _Dev:
+    def __init__(self, path):
+        self.name, self.phys = _NAMES["name"], _NAMES["phys"]
+
+    def close(self):
+        pass
+
+
+def _fake_evdev(monkeypatch, name, phys):
+    _NAMES["name"], _NAMES["phys"] = name, phys
+    monkeypatch.setitem(sys.modules, "evdev",
+                        types.SimpleNamespace(InputDevice=_Dev))
+
+
+def test_internal_keyboard_by_name(monkeypatch):
+    _fake_evdev(monkeypatch, "AT Translated Set 2 keyboard",
+                "isa0060/serio0/input0")
+    assert is_internal_keyboard("/dev/input/event3") is True
+
+
+def test_internal_keyboard_by_phys_only(monkeypatch):
+    _fake_evdev(monkeypatch, "Other", "isa0060/serio0/input0")
+    assert is_internal_keyboard("/dev/input/event3") is True
+
+
+def test_external_button(monkeypatch):
+    _fake_evdev(monkeypatch, "SayoDevice", "usb-0000:00:14.0-1/input0")
+    assert is_internal_keyboard("/dev/input/event3") is False
+
+
+def test_no_evdev_is_false(monkeypatch):
+    monkeypatch.setitem(sys.modules, "evdev", None)
+    assert device_identity("/dev/input/event3") == ("", "")
+    assert is_internal_keyboard("/dev/input/event3") is False
+
+
+def test_unopenable_is_false(monkeypatch):
+    def _raise(path):
+        raise OSError("cannot open")
+
+    monkeypatch.setitem(sys.modules, "evdev",
+                        types.SimpleNamespace(InputDevice=_raise))
+    assert is_internal_keyboard("/dev/input/event3") is False
+
+
+def test_empty_path():
+    assert device_identity("") == ("", "")
+    assert is_internal_keyboard("") is False

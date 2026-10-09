@@ -17,9 +17,43 @@ from typing import Callable
 
 EVIOCSCLOCKID = 0x400445A0  # _IOW('E', 0xA0, int)
 
+INTERNAL_KEYBOARD_NAMES = ("AT Translated Set 2 keyboard",)
+INTERNAL_KEYBOARD_PHYS_PREFIXES = ("isa0060/",)
+
 
 class TriggerError(Exception):
     pass
+
+
+def device_identity(device_path: str) -> tuple[str, str]:
+    """(name, phys) of an evdev device; ("", "") when evdev is missing, the path is empty, or it cannot be opened. Closes the device. Never raises."""
+    if not device_path:
+        return ("", "")
+    try:
+        import evdev
+    except ImportError:
+        return ("", "")
+    try:
+        device = evdev.InputDevice(device_path)
+    except Exception:
+        return ("", "")
+    try:
+        return (device.name, device.phys)
+    finally:
+        try:
+            device.close()
+        except Exception:
+            pass
+
+
+def is_internal_keyboard(device_path: str) -> bool:
+    """True when device_identity() matches INTERNAL_KEYBOARD_NAMES exactly or phys starts with one of INTERNAL_KEYBOARD_PHYS_PREFIXES."""
+    name, phys = device_identity(device_path)
+    if name in INTERNAL_KEYBOARD_NAMES:
+        return True
+    # the T460s i8042 keyboard reports name "AT Translated Set 2 keyboard", phys isa0060/serio0/input0 (system-environment.md §2.8, verified 2026-10-09); external USB devices report usb-… phys
+    return any(phys.startswith(prefix)
+               for prefix in INTERNAL_KEYBOARD_PHYS_PREFIXES)
 
 
 class TriggerListener(threading.Thread):
