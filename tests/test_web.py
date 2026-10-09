@@ -76,8 +76,13 @@ class TestWebPages(unittest.TestCase):
         page = build_race_page(self.storage, self.race_id)
         self.assertIn("RACE 101", page)
         self.assertIn("TEST_EVENT", page)  # event name visible in the header
-        # images served through the /img/ base, URL-quoted
-        self.assertIn('src="/img/races/101%20H1/c.jpg"', page)
+        # Deferred photos: no image is sent by default (spec §13.3); the card
+        # carries the /thumb/ and /img/ URLs for the JS viewer.
+        self.assertNotIn('<img src="/img/', page)
+        self.assertIn('data-thumb="/thumb/races/101%20H1/c.jpg"', page)
+        self.assertIn('data-full="/img/races/101%20H1/c.jpg"', page)
+        self.assertIn('id="show-photos"', page)
+        self.assertIn('id="viewer"', page)
         self.assertNotIn(str(self.data_root), page)
         # fastest first: bow 04 before bow 09
         self.assertLess(page.index("0:03.00"), page.index("0:10.00"))
@@ -87,6 +92,21 @@ class TestWebPages(unittest.TestCase):
         self.assertIn("navigator.clipboard", page)
         self.assertIn("fetch('/excel/' + id)", page)
         self.assertNotIn(f'/excel/{self.race_id}.xls', page)
+
+    def test_race_page_defers_photos_and_has_viewer(self):
+        self._add_captures()
+        page = build_race_page(self.storage, self.race_id)
+        self.assertIn('data-thumb="/thumb/', page)
+        self.assertIn('id="viewer"', page)
+        self.assertIn('id="show-photos"', page)
+        self.assertIn("Photos load on request to save data.", page)
+
+    def test_offline_export_keeps_inline_images(self):
+        from hallofframe.render.html import build_all_html
+        self._add_captures()
+        page = build_all_html(self.storage)
+        self.assertIn('<img src="races/', page)
+        self.assertNotIn('data-thumb', page)
 
     def test_race_page_unknown_id_is_none(self):
         self.assertIsNone(build_race_page(self.storage, 9999))
@@ -113,10 +133,12 @@ class TestWebPages(unittest.TestCase):
     def test_index_note_points_to_race_pages(self):
         self.assertIn("Photos are on each race page.", build_index(self.storage))
 
-    def test_race_page_images_are_lazy(self):
+    def test_race_page_has_deferred_photo_viewer(self):
         self._add_captures()
-        self.assertIn('loading="lazy"', build_race_page(self.storage,
-                                                        self.race_id))
+        page = build_race_page(self.storage, self.race_id)
+        self.assertIn('id="show-photos"', page)
+        self.assertIn('id="viewer"', page)
+        self.assertIn('data-thumb="/thumb/', page)
 
     def test_excel_filename_sanitizes(self):
         self.assertIn(".xls", _excel_filename(self.storage, self.race_id))
@@ -218,9 +240,10 @@ class TestConditionalRequests(unittest.TestCase):
                                   {"If-None-Match": headers["ETag"]})
         self.assertEqual(status2, 304)
 
-    def test_race_page_lazy_images(self):
+    def test_race_page_defers_images(self):
         _, _, body = self._get(f"/race/{self.race_id}")
-        self.assertIn(b'loading="lazy"', body)
+        self.assertNotIn(b'<img src="/img/', body)
+        self.assertIn(b'data-thumb="/thumb/', body)
 
     def test_index_note(self):
         _, _, body = self._get("/")

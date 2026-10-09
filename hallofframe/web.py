@@ -18,6 +18,8 @@ Routes:
                          (HTML table; fallback for browsers/users that prefer a
                          file over the clipboard copy)
   GET /img/<relpath>     a captured frame by its stored relative path
+  GET /thumb/<relpath>   a ≤ thumb_width-px cached JPEG thumbnail of a frame
+                         (the race page loads these on request, spec §13.3)
 
 Conditional requests (step 6.4): HTML is ``Cache-Control: no-cache`` and carries
 an ``ETag``/``Last-Modified`` derived from the relevant ``updated_at``; a
@@ -34,7 +36,9 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import io
 import json
+import os
 import sys
 import threading
 from email.utils import formatdate
@@ -42,11 +46,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
+from PIL import Image
+
 from .config import load_config
 from .render import local_hms
 from .render.clipboard import clipboard_data
-from .render.html import (_about_footer, _esc, _race_html, _row_value,
-                          _updated_hms, page)
+from .render.html import (_PHOTO_CSS, _PHOTO_JS, _about_footer, _esc,
+                          _race_html, _row_value, _updated_hms, _viewer_html,
+                          page)
 from .storage import Storage
 
 _IMG_TYPES = {
@@ -100,6 +107,97 @@ def resolve_image_file(data_root: Path, rel: str) -> Path | None:
     if not target.is_file():
         return None
     return target
+
+
+def thumbnail_bytes(src: Path, width: int, quality: int) -> bytes:
+    """A ≤ *width*-px JPEG thumbnail of *src*, generated in the DCT domain.
+
+    ``Image.draft`` asks libjpeg to decode at a reduced scale (the same idea as
+    the app preview, spec §7.2) before ``thumbnail`` does the residual resize,
+    so a 1080p frame never fully decodes for a 480-px thumb."""
+    with Image.open(src) as im:
+        im.draft("RGB", (width, width))
+        im.thumbnail((width, 10 ** 6))
+        rgb = im.convert("RGB")
+        out = io.BytesIO()
+        rgb.save(out, "JPEG", quality=quality, optimize=True)
+        return out.getvalue()
+
+
+class ThumbCache:
+    """Server-side thumbnail cache for deferred race-page photos (spec §13.3).
+
+    Generates and stores thumbnails under ``<root>/thumbs/<width>/<rel>.jpg``.
+    Frames never change once written, so a cached file is reused; the source
+    mtime is returned with the bytes for the cache headers. If the cache
+    directory is not writable (read-only disk or permissions) the bytes are
+    served from an in-memory dict instead. Generation is serialized per ``rel``
+    so two simultaneous viewers never resize the same frame twice. The web
+    process makes its own thumbnails and writes no SQLite."""
+
+    def __init__(self, root: Path, width: int, quality: int):
+        self.root = Path(root)
+        self.width = int(width)
+        self.quality = int(quality)
+        self._mem: dict[str, tuple[bytes, float]] = {}
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        self._warned = False
+
+    def _lock_for(self, rel: str) -> threading.Lock:
+        with self._locks_guard:
+            lock = self._locks.get(rel)
+            if lock is None:
+                lock = threading.Lock()
+                self._locks[rel] = lock
+            return lock
+
+    def _cache_path(self, rel: str) -> Path:
+        return self.root / "thumbs" / str(self.width) / rel
+
+    def get(self, data_root: Path, rel: str) -> tuple[bytes, float] | None:
+        src = resolve_image_file(data_root, rel)
+        if src is None:
+            return None
+        try:
+            mtime = src.stat().st_mtime
+        except OSError:
+            return None
+        cached = self._mem.get(rel)
+        if cached is not None and cached[1] == mtime:
+            return cached
+        with self._lock_for(rel):
+            cached = self._mem.get(rel)
+            if cached is not None and cached[1] == mtime:
+                return cached
+            data = self._read_cache(rel)
+            if data is None:
+                data = thumbnail_bytes(src, self.width, self.quality)
+                self._write_cache(rel, data)
+            self._mem[rel] = (data, mtime)
+            return (data, mtime)
+
+    def _read_cache(self, rel: str) -> bytes | None:
+        try:
+            path = self._cache_path(rel)
+            if path.is_file():
+                return path.read_bytes()
+        except OSError:
+            return None
+        return None
+
+    def _write_cache(self, rel: str, data: bytes) -> None:
+        path = self._cache_path(rel)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
+        except OSError as exc:
+            if not self._warned:
+                self._warned = True
+                print(f"thumbnail cache not writable ({exc}); serving from "
+                      "memory", file=sys.stderr)
 
 
 def build_index(storage: Storage) -> str:
@@ -165,38 +263,49 @@ def build_index(storage: Storage) -> str:
 
 
 def build_race_page(storage: Storage, race_id: int) -> str | None:
-    """One race as a full page (cards with frames + Copy as Excel). None if the
-    race id is unknown."""
+    """One race as a full page (cards with deferred frames + Copy as Excel).
+
+    Photos are not sent by default (spec §13.3): each card carries a /thumb/
+    and /img/ URL and the operator presses Show photos. None if the race id is
+    unknown."""
     race = storage.get_race(race_id)
     if race is None:
         return None
     captures = storage.captures_for_race(race_id, include_deleted=False)
     captures = sorted(captures, key=lambda c: c["elapsed_s"])
-    body = _race_html(race, captures, img_base="/img/", excel_id=race_id)
+    body = _race_html(race, captures, img_base="/img/", excel_id=race_id,
+                      deferred_photos=True)
     event = storage.event_name or ""
     updated = _updated_hms(storage.last_updated(race_id))
     header = (
         '<header class="racepage-head">'
         '<a href="/" class="back-link">&larr; All races</a>'
         f'<span class="event">{_esc(event)}</span>'
-        f'<span class="counts">Results updated {_esc(updated)}</span></header>'
+        f'<span class="counts">Results updated {_esc(updated)}</span>'
+        '<button type="button" id="show-photos" class="excel-btn">'
+        'Show photos</button></header>'
     )
-    footer = f'<footer class="race-footer">{_about_footer()}</footer>'
+    footer = ('<footer class="race-footer">Photos load on request to save '
+              f'data. · {_about_footer()}</footer>')
     title = (f"{event} — Race "
              f"{race['race_no'] or race['name'] or race_id} — HallOfFrame")
-    return page(title, header + f'<main class="main-race">{body}</main>',
-                width_px=1120, footer=footer)
+    return page(title, header + f'<main class="main-race">{body}</main>'
+                + _viewer_html(), width_px=1120, footer=footer,
+                scripts=_PHOTO_JS, style=_PHOTO_CSS)
 
 
 class WebServer(ThreadingHTTPServer):
     """HTTP server carrying shared state (its own read-only Storage)."""
 
     def __init__(self, server_address, storage: Storage, data_root: Path,
-                 copy_heading: bool = True):
+                 copy_heading: bool = True, thumbs: ThumbCache | None = None):
         super().__init__(server_address, WebHandler)
         self.storage = storage
         self.data_root = data_root
         self.copy_heading = copy_heading
+        if thumbs is None:
+            thumbs = ThumbCache(Path(data_root) / "web-cache", 480, 75)
+        self.thumbs = thumbs
 
 
 class WebHandler(BaseHTTPRequestHandler):
@@ -222,16 +331,19 @@ class WebHandler(BaseHTTPRequestHandler):
         self._send(code, body.encode("utf-8"), "text/html; charset=utf-8", extra)
 
     def _cache(self, updated_iso: str | None = None, mtime: float | None = None,
-               immutable: bool = False) -> tuple[dict[str, str], bool]:
+               immutable: bool = False,
+               etag_suffix: str = "") -> tuple[dict[str, str], bool]:
         """Build ETag/Last-Modified/Cache-Control and decide on a 304.
 
         ``updated_iso`` is the relevant ``updated_at`` (DB-wide or per race);
-        ``mtime`` is used for image files (which never change once written)."""
+        ``mtime`` is used for image files (which never change once written).
+        ``etag_suffix`` lets the thumbnail route fold ``thumb_width`` into the
+        ETag so a config change invalidates clients."""
         if updated_iso is not None:
             etag = f'"{updated_iso}"'
             last_modified = _http_date(updated_iso)
         elif mtime is not None:
-            etag = f'"{int(mtime)}"'
+            etag = f'"{int(mtime)}{etag_suffix}"'
             last_modified = formatdate(mtime, usegmt=True)
         else:
             return {}, False
@@ -273,6 +385,9 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/img/"):
             self._img(path)
+            return
+        if path.startswith("/thumb/"):
+            self._thumb(path)
             return
         self._html(404, "<h1>404</h1><p>Not found.</p>")
 
@@ -351,6 +466,21 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         self._send(200, target.read_bytes(), ctype, headers)
 
+    def _thumb(self, path: str) -> None:
+        rel = unquote(path[len("/thumb/"):])
+        result = self.server.thumbs.get(self.server.data_root, rel)
+        if result is None:
+            self._send(404, b"", "image/jpeg")
+            return
+        data, mtime = result
+        headers, not_modified = self._cache(
+            mtime=mtime, immutable=True,
+            etag_suffix=f"-{self.server.thumbs.width}")
+        if not_modified:
+            self._send(304, b"", "image/jpeg", headers)
+            return
+        self._send(200, data, "image/jpeg", headers)
+
     def log_message(self, fmt, *args):  # keep console quiet during a race
         return
 
@@ -380,8 +510,13 @@ def main(argv=None) -> int:
     host = str(web.get("host", "127.0.0.1"))
     port = int(web.get("port", 8080))
     copy_heading = bool(web.get("copy_heading", True))
+    cache_dir = Path(str(web.get("cache_dir", "web-cache")))
+    if not cache_dir.is_absolute():
+        cache_dir = config.data_root / cache_dir
+    thumbs = ThumbCache(cache_dir, int(web.get("thumb_width", 480)),
+                        int(web.get("thumb_quality", 75)))
     server = WebServer((host, port), storage, config.data_root,
-                       copy_heading=copy_heading)
+                       copy_heading=copy_heading, thumbs=thumbs)
     print(f"HallOfFrame results server on http://{host}:{port}/")
     try:
         server.serve_forever()
