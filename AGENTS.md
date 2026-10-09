@@ -251,8 +251,7 @@ If the **same** keycode is listed in both `crossing_keycodes` and
 - **Live results freshness (phase 6).** The web index and each race page show a
   "Results updated HH:MM:SS" line derived from `storage.last_updated()`
   (`meta.db_updated_at` / per-race `updated_at`). HTML carries an `ETag` and
-  answers `304` on a matching `If-None-Match`; `/img/` is immutable-cached and
-  race-page images are `loading="lazy"`.
+  answers `304` on a matching `If-None-Match`; `/img/` is immutable-cached.
 - **ROI zoom + finish line (2026-10-09).** In READY / STREAM_DOWN, `Z` starts
   draw-zoom mode (next left-drag draws a rectangle locked to the pixmap aspect
   and calls `images.set_view_roi`), `Shift+Z` resets to the full frame, `Esc`

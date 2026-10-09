@@ -1301,7 +1301,9 @@ platform plugin.
   line the operator aligns with the real finish line during setup. This is a
   small feature with outsized practical value: it gives the operator a
   consistent visual reference and gives the jury a reference in the saved
-  images (the line position is stored in config and can be drawn on exported
+  images (the line position is stored in the SQLite `meta` table — key
+  `ui.finish_line_x`, with `[ui] finish_line_x` as the fresh-database fallback —
+  and can be drawn on exported
   images). The position is stored **full-frame image-normalised** (0..1 across
   the camera image, not the widget), so it matches the web renderer's 50 % =
   image centre and stays on the same scene feature when the ROI zoom changes
