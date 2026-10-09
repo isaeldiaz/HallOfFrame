@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import scratchpad
 from . import storage as storage_mod
 from .calibration import CALIBRATION_FILENAME, Calibration, calibration_path
 from .framebuffer import FrameBuffer
@@ -83,6 +84,8 @@ class CaptureController:
         # Per-race flag: True when this race records time only (config "off" or
         # a dead stream at start). Set in start_race(); fixed for the race.
         self.image_off = self.image_mode == "off"
+
+        self.scratchpad_enabled = bool(config.section("scratchpad")["enabled"])
 
         # Unbounded on purpose: bounding it would let `record_crossing` drop the
         # primary datum under disk pressure. A human press rate cannot outrun the
@@ -219,6 +222,7 @@ class CaptureController:
         self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
 
         self._emit("race_started", race_id=race_id)
+        self.enqueue(lambda: self._recompute_scratch(race_id))
         return race_id
 
     def resume_race(self, race_id: int) -> None:
@@ -248,6 +252,7 @@ class CaptureController:
         # Recreate the frame store for the resumed race (plan step 5.3): it needs
         # the race's t0 and directory, both now known.
         self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
+        self.enqueue(lambda: self._recompute_scratch(race_id))
 
     def end_race(self, t_end: float | None = None) -> int | None:
         """Finish the current race (spec: an explicit End-Race so the operator
@@ -264,6 +269,7 @@ class CaptureController:
         t_end = time.monotonic() if t_end is None else t_end
         self.running = False
         self.ended_at_mono = t_end
+        self.enqueue(lambda: self._recompute_scratch(race_id))
         # Commit any press still in the queue before counting, so the race-over
         # summary does not omit the last crossing(s) under disk pressure.
         self._drain_queue()
@@ -327,24 +333,69 @@ class CaptureController:
         # UI row appended off-thread once committed.
         return None
 
+    # --- scratchpad -------------------------------------------------------
+    def add_scratch(self, text: str) -> bool:
+        """Queue one typed bow number for the running race. False (nothing queued)
+        when no race is running or normalize(text) is None."""
+        if not self.running or self.race_id is None:
+            return False
+        t = scratchpad.normalize(text)
+        if t is None:
+            return False
+        rid, t_wall = self.race_id, time.time()          # snapshot NOW, never inside the job
+        def _job():
+            self.storage.insert_scratch(rid, t, t_wall)
+            self._recompute_scratch(rid)
+        self.enqueue(_job)
+        return True
+
+    def undo_scratch(self) -> None:
+        """Soft-delete the last typed number of the running race, then recompute. No-op when not running.
+        Enqueued (never synchronous) so it runs AFTER any insert still in the queue."""
+        if not self.running or self.race_id is None:
+            return
+        rid = self.race_id
+        def _job():
+            self.storage.delete_last_scratch(rid)
+            self._recompute_scratch(rid)
+        self.enqueue(_job)
+
+    def _recompute_scratch(self, race_id: int) -> None:
+        if not self.scratchpad_enabled:  # runs on the persistence writer thread
+            return
+        entries = [r["text"] for r in self.storage.scratch_entries(race_id)]
+        caps = self.storage.captures_for_race(race_id)          # non-deleted, by sequence
+        changes = scratchpad.assign(entries, [(c["id"], c["bow_number"], c["bow_source"]) for c in caps])
+        if changes:
+            self.storage.apply_bows(changes)
+        typed, crossings = self.storage.scratch_counts(race_id)
+        bows = {c["sequence"]: c["bow_number"] for c in self.storage.captures_for_race(race_id)}
+        self._emit("scratch_changed", race_id=race_id, typed=typed, crossings=crossings, bows=bows)
+
     # --- writer thread ----------------------------------------------------
+    def enqueue(self, fn) -> None:
+        """Run fn() on the persistence writer thread, after everything already queued."""
+        self._queue.put(("call", fn))
+
     def _writer_loop(self) -> None:
         while True:
             kind, payload = self._queue.get()
             try:
                 if kind == "capture":
                     self._handle_capture(payload)
+                elif kind == "call":
+                    payload()
                 elif kind == "stop":
                     break
             except Exception as exc:
-                # Never let one bad capture kill the writer: a dead writer means
+                # Never let one bad job kill the writer: a dead writer means
                 # every later crossing is queued but never persisted, silently
                 # losing the primary datum. Log and keep serving the queue.
                 if self.logger:
-                    self.logger.warning("controller", "capture_failed",
+                    self.logger.warning("controller", "job_failed",
                                         reason=str(exc))
                 self._emit("warning",
-                           message=f"crossing not saved: {exc}")
+                           message=f"write failed: {exc}")
             finally:
                 self._queue.task_done()
 
@@ -394,6 +445,7 @@ class CaptureController:
                       payload["delta_used"], image_flag,
                       bool(payload["debounce_suspect"]))
         self._emit_capture(cap)
+        self._recompute_scratch(race_id)
 
         # Deferred image selection: schedule after window_after + margin so the
         # after-window frames exist (spec §6.5). The timer removes itself from
@@ -496,8 +548,9 @@ class CaptureController:
         ``primary_frame_id``."""
         return self.storage.frames_for_capture(capture_id)
 
-    def set_bow_number(self, capture_id: int, value: str | None) -> None:
-        self.storage.update_capture(capture_id, bow_number=value)
+    def set_bow_number(self, capture_id: int, value: str | None,
+                       source: str = "manual") -> None:
+        self.storage.set_bow(capture_id, value, source)
 
     def update_crossing_time(self, capture_id: int, elapsed_s: float) -> bool:
         """Rewrite a crossing's published time from a typed value (``manual``).
@@ -627,6 +680,9 @@ class CaptureController:
         self.storage.update_capture(capture_id, deleted=1)
         if cap is not None:
             self._emit("capture_deleted", sequence=cap["sequence"])
+        if cap is not None and self.running and cap["race_id"] == self.race_id:
+            rid = self.race_id
+            self.enqueue(lambda: self._recompute_scratch(rid))
 
     def restore(self, capture_id: int) -> Capture | None:
         """Undo a soft delete and announce the crossing as (re)added."""
@@ -662,6 +718,9 @@ class CaptureController:
         cap = rows[-1]
         self.storage.update_capture(cap["id"], deleted=1)
         self._emit("capture_deleted", sequence=cap["sequence"])
+        if self.running and cap["race_id"] == self.race_id:
+            rid = self.race_id
+            self.enqueue(lambda: self._recompute_scratch(rid))
 
     def stop(self) -> None:
         with self._timers_lock:
