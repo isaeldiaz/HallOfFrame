@@ -290,6 +290,40 @@ class Storage:
                 "SELECT updated_at FROM race WHERE id=?", (race_id,)).fetchone()
             return row["updated_at"] if row else None
 
+    # --- UI settings (spec §13.3) -----------------------------------------
+    def get_setting(self, key: str) -> str | None:
+        """Read a UI setting from the ``meta`` table, or None.
+
+        Only ``ui.``-prefixed keys are reachable so the reserved
+        ``db_updated_at`` row (and any future bookkeeping key) cannot be read
+        through this path. Works on a read-only connection (the web process
+        never calls it, but the guard keeps the API honest)."""
+        if not key.startswith("ui."):
+            raise ValueError(f"setting key must be prefixed 'ui.': {key!r}")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        """Write (or with ``value=None`` delete) a UI setting in ``meta``.
+
+        Deliberately does NOT call ``_touch``: a display-only setting is not a
+        results change, and bumping ``meta['db_updated_at']`` would change the
+        web server's ETag and invalidate every viewer's cached index for a
+        cosmetic edit. Keys must be ``ui.``-prefixed."""
+        if not key.startswith("ui."):
+            raise ValueError(f"setting key must be prefixed 'ui.': {key!r}")
+        with self._lock:
+            if value is None:
+                self._conn.execute("DELETE FROM meta WHERE key=?", (key,))
+            else:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, value))
+            self._conn.commit()
+
     # --- race -------------------------------------------------------------
     def create_race(self, name, t0_monotonic, t0_wall, start_mode, radio_delay_ms,
                     delta_used, viewing_mode, fps_nominal=None, boot_id=None,
