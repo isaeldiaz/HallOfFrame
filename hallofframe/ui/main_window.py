@@ -120,6 +120,14 @@ class MainWindow(QMainWindow):
         self.ready.finish_line_changed.connect(self._finish_line_changed)
         self.armed = ArmedScreen(on_start=lambda: self._armed_start_clicked())
         self.recording = RaceScreen()
+        self.scratchpad = None
+        self._scratch_last = None
+        if bool(config.section("scratchpad")["enabled"]):
+            from ..ui.scratchpad_widget import ScratchpadWidget
+            self.scratchpad = ScratchpadWidget()
+            self.recording.set_scratchpad(self.scratchpad)
+            self.scratchpad.committed.connect(self._scratch_commit)
+            self.scratchpad.undo_requested.connect(self.controller.undo_scratch)
         self.race_over = RaceOverScreen()
         self.center.addWidget(self.ready)
         self.center.addWidget(self.armed)
@@ -204,8 +212,21 @@ class MainWindow(QMainWindow):
             self.on_image_ready(payload["sequence"], payload["path"])
         elif kind == "race_ended":
             self.on_race_ended(payload["race_id"])
+        elif kind == "scratch_changed":
+            self.on_scratch_changed(payload)
         elif kind == "warning":
             self._show_toast(payload["message"])
+
+    def _scratch_commit(self, text: str) -> None:
+        if not self.controller.add_scratch(text):
+            self.scratchpad.flash()
+
+    def on_scratch_changed(self, payload: dict) -> None:
+        if self.scratchpad is None:
+            return
+        self._scratch_last = payload
+        self.scratchpad.set_counts(payload["typed"], payload["crossings"])
+        self.recording.set_bows(payload["bows"])
 
     def _restore_ui_settings(self) -> None:
         """Restore the persisted ROI and finish line (spec §13.3).
@@ -450,6 +471,7 @@ class MainWindow(QMainWindow):
         if state == AppState.RECORDING:
             self.recording.begin(self.controller.t0)
             self.clock_timer.start(50)
+            self.recording.focus_scratchpad()
         else:
             self.recording.end()
             self.clock_timer.stop()
@@ -523,6 +545,12 @@ class MainWindow(QMainWindow):
             self._show_toast("Calibration no longer matches the stream — "
                              "press C to re-calibrate.")
             return
+        if self.scratchpad is not None:
+            from ..trigger import is_internal_keyboard
+            if is_internal_keyboard(self.config.section("trigger")["device_path"]):
+                self._show_toast("Scratchpad needs the external trigger button: "
+                                 "[trigger] device_path is the laptop keyboard (§13.3).")
+                return
         try:
             self.session.arm()
         except SessionError as exc:
@@ -608,6 +636,12 @@ class MainWindow(QMainWindow):
         self.ready.reset_provisional()
         self._refresh_race_selector()
         self._recompute_state()
+        if self.scratchpad is not None and self.scratchpad.mismatch():
+            typed = self._scratch_last["typed"]
+            crossings = self._scratch_last["crossings"]
+            self._show_toast(
+                f"Scratchpad: {typed} typed / {crossings} crossings — "
+                "fix bow numbers in review", timeout_ms=0)
 
     def _start_text(self, race_id: int) -> str:
         row = self.controller.storage.get_race(race_id)

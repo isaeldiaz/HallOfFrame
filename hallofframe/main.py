@@ -29,6 +29,7 @@ class _TriggerBridge(QObject):
     capture = Signal(object)        # (Capture)
     image_ready = Signal(int, str)  # (sequence, primary_path_rel)
     capture_deleted = Signal(int)   # (sequence)
+    scratch_changed = Signal(object)  # (payload dict)
 
 
 class _NullTransport:
@@ -241,6 +242,7 @@ def main(argv=None) -> int:
     bridge.capture.connect(win.on_capture)
     bridge.image_ready.connect(win.on_image_ready)
     bridge.capture_deleted.connect(win.on_capture_deleted)
+    bridge.scratch_changed.connect(win.on_scratch_changed)
     # The controller emits capture-added / image-ready from its persistence or
     # deferred-timer threads; reroute them through the bridge instead of pointing
     # them straight at Qt widgets. race_ended is emitted from end_race(), which
@@ -255,6 +257,8 @@ def main(argv=None) -> int:
             bridge.image_ready.emit(payload["sequence"], payload["path"])
         elif kind == "race_ended":
             win.on_race_ended(payload["race_id"])
+        elif kind == "scratch_changed":
+            bridge.scratch_changed.emit(payload)
         elif kind == "warning":
             win._show_toast(payload["message"])
 
