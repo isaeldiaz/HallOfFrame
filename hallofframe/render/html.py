@@ -283,6 +283,8 @@ _PHOTO_CSS = """
   background: rgba(0,0,0,.92); align-items: center; justify-content: center;
 }
 #viewer img { max-width: 92vw; max-height: 80vh; object-fit: contain; }
+.viewer-img { position: relative; display: flex; align-items: center;
+  justify-content: center; }
 .viewer-btn {
   font-family: 'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
   font-size: 20px; color: #f2f6f8;
@@ -409,7 +411,8 @@ def _viewer_html() -> str:
         'aria-label="Close">&times;</button>'
         '<button type="button" id="viewer-prev" class="viewer-btn" '
         'aria-label="Previous">&lsaquo;</button>'
-        '<div id="viewer-img" class="viewer-img"></div>'
+        '<div id="viewer-img" class="viewer-img">'
+        '<span class="finish-line"></span></div>'
         '<button type="button" id="viewer-next" class="viewer-btn" '
         'aria-label="Next">&rsaquo;</button>'
         '<div class="viewer-bar">'

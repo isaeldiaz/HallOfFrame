@@ -41,6 +41,7 @@ import json
 import os
 import sys
 import threading
+import weakref
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -127,7 +128,8 @@ def thumbnail_bytes(src: Path, width: int, quality: int) -> bytes:
 class ThumbCache:
     """Server-side thumbnail cache for deferred race-page photos (spec §13.3).
 
-    Generates and stores thumbnails under ``<root>/thumbs/<width>/<rel>.jpg``.
+    Generates and stores thumbnails under
+    ``<root>/thumbs/<width>/<quality>/<rel>.jpg``.
     Frames never change once written, so a cached file is reused; the source
     mtime is returned with the bytes for the cache headers. If the cache
     directory is not writable (read-only disk or permissions) the bytes are
@@ -140,7 +142,11 @@ class ThumbCache:
         self.width = int(width)
         self.quality = int(quality)
         self._mem: dict[str, tuple[bytes, float]] = {}
-        self._locks: dict[str, threading.Lock] = {}
+        # Weak values: a per-rel lock only needs to exist while a thread is
+        # generating or waiting on that frame, so the entry vanishes once
+        # generation finishes rather than accumulating for the process life.
+        self._locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary())
         self._locks_guard = threading.Lock()
         self._warned = False
 
@@ -153,7 +159,10 @@ class ThumbCache:
             return lock
 
     def _cache_path(self, rel: str) -> Path:
-        return self.root / "thumbs" / str(self.width) / rel
+        # Quality is part of the path: raising it must not keep serving the old
+        # (lower-quality) files. Width is the directory level so the cache
+        # layout stays ``thumbs/<width>/<quality>/``.
+        return self.root / "thumbs" / str(self.width) / str(self.quality) / rel
 
     def get(self, data_root: Path, rel: str) -> tuple[bytes, float] | None:
         src = resolve_image_file(data_root, rel)
@@ -183,8 +192,12 @@ class ThumbCache:
                 except Exception:
                     # An unreadable/corrupt frame is a 404, not a crash.
                     return None
-                self._write_cache(key, data)
-            self._mem[key] = (data, mtime)
+                # The disk file is the real cache; only fall back to keeping
+                # the bytes in memory when the disk write failed (unwritable
+                # cache dir), so _mem can never grow without bound over a
+                # multi-day regatta.
+                if not self._write_cache(key, data):
+                    self._mem[key] = (data, mtime)
             return (data, mtime)
 
     def _read_cache(self, rel: str) -> bytes | None:
@@ -196,18 +209,20 @@ class ThumbCache:
             return None
         return None
 
-    def _write_cache(self, rel: str, data: bytes) -> None:
+    def _write_cache(self, rel: str, data: bytes) -> bool:
         path = self._cache_path(rel)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
             tmp.write_bytes(data)
             os.replace(tmp, path)
+            return True
         except OSError as exc:
             if not self._warned:
                 self._warned = True
                 print(f"thumbnail cache not writable ({exc}); serving from "
                       "memory", file=sys.stderr)
+            return False
 
 
 def build_index(storage: Storage) -> str:
@@ -349,8 +364,8 @@ class WebHandler(BaseHTTPRequestHandler):
 
         ``updated_iso`` is the relevant ``updated_at`` (DB-wide or per race);
         ``mtime`` is used for image files (which never change once written).
-        ``etag_suffix`` lets the thumbnail route fold ``thumb_width`` into the
-        ETag so a config change invalidates clients."""
+        ``etag_suffix`` lets the thumbnail route fold ``thumb_width`` and
+        ``thumb_quality`` into the ETag so a config change invalidates clients."""
         if updated_iso is not None:
             etag = f'"{updated_iso}"'
             last_modified = _http_date(updated_iso)
@@ -491,7 +506,8 @@ class WebHandler(BaseHTTPRequestHandler):
         data, mtime = result
         headers, not_modified = self._cache(
             mtime=mtime, immutable=True,
-            etag_suffix=f"-{self.server.thumbs.width}")
+            etag_suffix=(f"-{self.server.thumbs.width}"
+                         f"-{self.server.thumbs.quality}"))
         if not_modified:
             self._send(304, b"", "image/jpeg", headers)
             return

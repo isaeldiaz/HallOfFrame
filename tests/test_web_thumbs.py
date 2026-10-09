@@ -91,8 +91,25 @@ class TestThumbRoute(unittest.TestCase):
                          "public, max-age=31536000, immutable")
         img = Image.open(io.BytesIO(body))
         self.assertEqual(img.size, (480, 270))
-        cache_file = (self.cache_root / "thumbs" / "480" / self.rel)
+        cache_file = (self.cache_root / "thumbs" / "480" / "75" / self.rel)
         self.assertTrue(cache_file.is_file())
+
+    def test_memory_cache_is_empty_after_disk_write(self):
+        # The disk file is the real cache; a successful write must not also pin
+        # the bytes in memory, or _mem grows for the life of the process.
+        thumbs = ThumbCache(self.cache_root, 480, 75)
+        result = thumbs.get(self.data_root, self.rel)
+        self.assertIsNotNone(result)
+        self.assertEqual(thumbs._mem, {})
+
+    def test_per_rel_locks_are_not_retained(self):
+        # Per-rel locks are weakly held: once generation finishes no thread
+        # references the lock, so it is collected instead of accumulating.
+        thumbs = ThumbCache(self.cache_root, 480, 75)
+        lock = thumbs._lock_for(self.rel)
+        self.assertIs(thumbs._lock_for(self.rel), lock)  # shared while held
+        del lock
+        self.assertEqual(len(thumbs._locks), 0)
 
     def test_thumb_conditional_304(self):
         _, headers, _ = self._get(f"/thumb/{self.quoted}")

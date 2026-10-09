@@ -51,8 +51,14 @@ class PreviewWidget(QWidget):
 
     # --- finish line ------------------------------------------------------
     def nudge(self, delta: float) -> None:
-        """Move the finish line by a fraction (0..1). Arrow keys call this."""
-        self.set_finish_line(self.finish_line_x + delta)
+        """Move the finish line by a fraction of the *displayed* width.
+
+        ``delta`` is in full-frame units, but at 2× zoom the ROI is half the
+        frame, so a press must move half as far in full-frame terms to travel
+        the same distance on screen. Scale by the ROI width."""
+        roi = self._roi
+        scale = roi[2] if roi else 1.0
+        self.set_finish_line(self.finish_line_x + delta * scale)
         self.finish_line_moved.emit(self.finish_line_x)
 
     def keyPressEvent(self, event):  # noqa: N802

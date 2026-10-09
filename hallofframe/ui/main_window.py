@@ -821,18 +821,29 @@ class MainWindow(QMainWindow):
             self._recompute_state()
         # No fallback: Esc never quits the application. Only Ctrl+Q does.
 
+    def _persist_setting(self, key: str, value) -> None:
+        """Best-effort UI-setting write (spec §13.3).
+
+        A cosmetic setting is never worth crashing on: a momentarily locked DB
+        (e.g. an export in flight) reports once via the banner and leaves the
+        on-screen value in place, matching ``_restore_ui_settings``."""
+        try:
+            self.controller.storage.set_setting(key, value)
+        except Exception as exc:
+            self._show_toast(f"Couldn't save {key.split('.')[-1]} setting: {exc}")
+
     def _finish_line_changed(self, x: float) -> None:
         # Persist to the meta table (spec §13.3); no _touch, so the web ETag
         # does not churn for a cosmetic setting.
-        self.controller.storage.set_setting("ui.finish_line_x", f"{x:.4f}")
+        self._persist_setting("ui.finish_line_x", f"{x:.4f}")
 
     def _roi_changed(self, roi) -> None:
         """Persist the zoom ROI; display-only, so no results timestamp moves."""
-        storage = self.controller.storage
         if roi is None:
-            storage.set_setting("ui.roi", None)
+            self._persist_setting("ui.roi", None)
         else:
-            storage.set_setting("ui.roi", ",".join(f"{v:.4f}" for v in roi))
+            self._persist_setting(
+                "ui.roi", ",".join(f"{v:.4f}" for v in roi))
         # A zoom change is only editable in READY/STREAM_DOWN, where the race
         # and review screens are not visible; the next show re-decodes through
         # load_view. A repaint is enough to keep anything already on screen

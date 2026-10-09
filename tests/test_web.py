@@ -163,6 +163,10 @@ class TestWebPages(unittest.TestCase):
         self.assertIn('id="show-photos"', page)
         self.assertIn('id="viewer"', page)
         self.assertIn('data-thumb="/thumb/', page)
+        # The viewer overlay carries a 50 % finish-line marker for judging.
+        self.assertIn(
+            '<div id="viewer-img" class="viewer-img">'
+            '<span class="finish-line"></span></div>', page)
 
     def test_excel_filename_sanitizes(self):
         self.assertIn(".xls", _excel_filename(self.storage, self.race_id))

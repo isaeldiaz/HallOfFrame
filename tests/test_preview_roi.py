@@ -107,6 +107,19 @@ def test_finish_line_maps_through_roi(qapp, tmp_path):
     assert w.finish_line_x == pytest.approx(0.375, abs=0.01)
 
 
+def test_nudge_scales_with_roi_width(qapp, tmp_path):
+    # A press must travel the same distance on screen at any zoom, so the
+    # full-frame delta is scaled by the ROI width.
+    w = _widget(qapp, tmp_path)
+    w.set_finish_line(0.5)
+    w.nudge(0.01)
+    assert w.finish_line_x == pytest.approx(0.51, abs=1e-6)
+    w.set_roi((0.0, 0.0, 0.5, 1.0))
+    w.set_finish_line(0.5)
+    w.nudge(0.01)
+    assert w.finish_line_x == pytest.approx(0.505, abs=1e-6)
+
+
 def test_reset_zoom_clears_and_signals(qapp, tmp_path):
     w = _widget(qapp, tmp_path)
     w.set_roi((0.25, 0.25, 0.5, 0.5))

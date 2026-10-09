@@ -143,7 +143,7 @@ class ReadyScreen(QWidget):
             " padding:5px 12px;")
         header.addWidget(self.lag_chip)
         header.addStretch(1)
-        self.zoom_label = QLabel("Zoom 100 %")
+        self.zoom_label = QLabel("Zoom 1.0×")
         self.zoom_label.setStyleSheet(
             f"color:{styles.TEXT_SECONDARY}; font-size:15px;")
         header.addWidget(self.zoom_label)
@@ -198,10 +198,11 @@ class ReadyScreen(QWidget):
 
     def _update_zoom_label(self, roi) -> None:
         if roi is None:
-            self.zoom_label.setText("Zoom 100 %")
+            self.zoom_label.setText("Zoom 1.0×")
             return
-        pct = int(round(roi[2] * 100))
-        self.zoom_label.setText(f"Zoom {pct} % · ({roi[0]:.2f},{roi[1]:.2f})")
+        mag = 1.0 / roi[2] if roi[2] else 1.0
+        self.zoom_label.setText(
+            f"Zoom {mag:.1f}× · ({roi[0]:.2f},{roi[1]:.2f})")
 
     def set_roi(self, roi) -> None:
         """Restore a persisted ROI at startup (no signal)."""
