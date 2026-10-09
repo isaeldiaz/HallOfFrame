@@ -42,6 +42,8 @@ hallofframe/
                      Emits through ONE `events(kind, payload)` hook (no
                      `signal_*` attributes); `start_race` returns int or raises
                      `RaceStateError`/`CalibrationError`.
+  scratchpad.py      Live bow-number rules (§13.3): `normalize` + `assign` map
+                     the k-th typed number to the k-th non-manual capture.
   trigger.py         evdev key-listener (kernel timestamps, debounce, device grab).
   transport.py       iproxy USB tunnel lifecycle (host→device, TCP-only).
   mjpeg.py           MJPEG parse loop; emits timestamped Frame objects.
@@ -71,7 +73,8 @@ hallofframe/
                      `KEYBAR_NOTE` key tables.
   ui/                PySide6 widgets: main_window, ready_screen, roster_view,
                      race_screen, review_screen, crossing_list, preview_widget,
-                     images, calibration_dialog. `ui/state.py` holds only the
+                     images, calibration_dialog, scratchpad_widget. `ui/state.py`
+                     holds only the
                      `AppState` enum. `ui/crossing_list.py` is one `CrossingList`
                      (fastest-first); `ui/images.load_view` is the only image
                      decoder that honours the view ROI (`load_scaled` remains
@@ -149,6 +152,11 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
 - **`start_race` refuses by raising** `RaceStateError` (already running, or a
   prior race has no `ended_at`) or `CalibrationError` (mismatch); it never
   returns a stale `race_id`.
+- **Scratchpad (§13.3)**: `controller.add_scratch` queues;
+  `_recompute_scratch` runs on the writer thread after every capture/entry/undo
+  and at race end; `bow_source` `live` is overwritable, `manual` never;
+  `enqueue(fn)` is the only way to run code on the writer thread; UI gets one
+  `scratch_changed` event.
 
 ## Data & config (the single source of truth)
 

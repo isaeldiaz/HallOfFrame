@@ -340,6 +340,19 @@ URL-quoted, never absolute; every race appears (including ones with no
 crossings); soft-deleted crossings are absent; and flagged crossings (`APPROX`,
 `NO IMAGE`) and HTML-escaped race names render correctly.
 
+### T13 — Scratchpad replay
+
+**Proves:** spec §13.3 (F4 live bow-number capture). Pure controller test plus a
+bench procedure.
+
+```bash
+~/regatta/venv/bin/python -m pytest \
+  tests/test_controller_scratch.py::TestControllerScratch::test_worked_example -v
+```
+
+Bench procedure (external button + keyboard): 4 presses, type 14, 7, 3; expect
+rows 14, 7, 3, blank and counters 3 / 4 red; fix in review.
+
 ---
 
 ## 4. Tests requiring the iPhone
@@ -669,6 +682,7 @@ This table is the **single source of truth** for what each test needs.
 | T10 Acceptance      | yes | yes | **N2**       | yes | yes |
 | T11 Offline         | yes | yes | N3           | no  | yes |
 | T12 Cold start      | yes | yes | N5           | no  | yes |
+| T13 Scratchpad replay | no | yes | §13.3       | no  | no  |
 | DR Dress rehearsal  | yes | yes | end-to-end   | n/a | **yes** |
 
 v1.1 had a single "Blocker if failed" column and marked T7 "no (degraded)" —

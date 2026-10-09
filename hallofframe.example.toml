@@ -103,6 +103,9 @@ thumb_width = 480            # deferred-photo thumbnail width in px (spec §13.3
 thumb_quality = 75           # JPEG quality for the generated thumbnails
 cache_dir = "web-cache"      # thumbnail cache, relative to data_root (absolute allowed)
 
+[scratchpad]
+enabled = false              # §13.3 live bow-number scratchpad; needs an external trigger device
+
 [voice]
 # Phase 8 (voice annotation) — optional, off by default. Present now so the
 # config format is stable; the keys are unused until phase 8 lands (plan 8.1).

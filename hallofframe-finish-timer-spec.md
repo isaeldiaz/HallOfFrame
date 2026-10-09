@@ -1,7 +1,7 @@
 # HallOfFrame Finish-Line Timing System — Build Specification
 
-**Document version:** 1.2
-**Status:** Implemented (v1.2)
+**Document version:** 1.3
+**Status:** Implemented (v1.3)
 **Audience:** An AI coding assistant or developer implementing this system from scratch.
 
 > **v1.1 changelog.** Revised against the hardware/software audit in
@@ -53,6 +53,8 @@
 > truncated frames to their EXIF thumbnail); §9.3 and §11 add the physical
 > race-day failure modes (the USB port cannot power the phone, thermal
 > throttling, an unreadable screen in daylight, no paper backup).
+
+> **v1.3 changelog.** §13.3 scratchpad implemented (R1)
 
 > **How to use this document.** This is a complete build specification. Every design
 > decision below has a stated reason. Do not substitute an "obvious" alternative
@@ -1118,11 +1120,21 @@ CREATE TABLE capture (
     deleted         INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
     updated_at      TEXT,               -- last write (§6.7)
-    bow_suggested   TEXT,               -- phase 8
-    bow_source      TEXT,               -- phase 8
+    bow_suggested   TEXT,               -- §13.3.4 ASR suggestion
+    bow_source      TEXT,               -- §13.3: 'live' | 'manual' | 'asr'
     t0_reconstructed INTEGER NOT NULL DEFAULT 0,  -- N4: recorded after a resume
     UNIQUE (race_id, sequence),
     CHECK (image_flag IS NULL OR image_flag IN ('approximate','missing'))
+);
+
+CREATE TABLE scratchpad (
+    id            INTEGER PRIMARY KEY,
+    race_id       INTEGER NOT NULL REFERENCES race(id),
+    ordinal       INTEGER NOT NULL,          -- order typed, 1..n, never reused
+    text          TEXT NOT NULL,
+    t_typed_wall  REAL NOT NULL,
+    deleted       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (race_id, ordinal)
 );
 
 CREATE TABLE frame (
@@ -1276,7 +1288,7 @@ platform plugin.
 │                                      │  │ ▣  3   6:14.90    │  │
 │                                      │  │    bow: [    ]    │  │
 │                                      │  └───────────────────┘  │
-│                                      │                         │
+│                                      │  bow: [    ]  typed 3 / crossings 4  │
 ├──────────────────────────────────────┴─────────────────────────┤
 │ [Start Race]  [Calibrate]  [Export CSV]      Trigger: SPACE    │
 └────────────────────────────────────────────────────────────────┘
@@ -1433,6 +1445,9 @@ copy_heading = true          # include the Race ID/Heat/Category/Gun block when 
 thumb_width = 480            # deferred-photo thumbnail width in px (§13.3)
 thumb_quality = 75           # JPEG quality for the generated thumbnails
 cache_dir = "web-cache"      # thumbnail cache, relative to data_root (absolute allowed)
+
+[scratchpad]
+enabled = false              # §13.3 live bow-number scratchpad; needs an external trigger device
 
 [voice]
 enabled = false              # phase 8 (voice annotation); unused until then
@@ -1616,6 +1631,10 @@ may share a disk — they must not share a directory.
     form. Everything above rides on one ten-year-old laptop with aged batteries;
     a kernel panic, a tripped power strip or a spilled drink ends the regatta
     otherwise, and §13 puts a redundant second laptop out of scope.
+14. Confirm the external button is `[trigger] device_path` (the app refuses to
+    arm with the scratchpad on the laptop keyboard).
+15. Agree that operator 1 calls bow numbers digit by digit ("en-fire" for 14)
+    immediately after each press.
 
 ### 9.4 Race-day laptop hygiene
 
@@ -1713,6 +1732,7 @@ visible immediately rather than discovered during a heat.
 | **`libxcb-cursor0` missing** | *"Could not load the Qt platform plugin xcb"* — the GUI never appears | Qt ≥ 6.5 requires it at runtime and the pip wheel does not bundle it. Installed in §9.1; verified by the Qt platform check in `INSTALL.md` §4 |
 | **Laptop suspends or blanks mid-race** | Stream dies, `usbmuxd` drops, race lost | §9.4 step 2. Verify before the first heat, not after |
 | **CPU governor throttling** | fps sags under sustained load; dropped frames | §9.4 step 3 |
+| **Scratchpad counters differ** | typed ≠ crossings turns red | Operator 2 fixes rows in review; nothing is guessed (§13.3.2) |
 
 ### 11.3 Session type
 
@@ -2160,6 +2180,9 @@ implementation can be planned against the constraints already locked in here.
 
 - **Bow-number capture.** Live scratchpad for a two-operator booth, with
   audio replay and offline ASR as later releases. Specified in §13.3.1–13.3.4.
+  *(Scratchpad implemented 2026-10-09: `scratchpad.py`,
+  `ui/scratchpad_widget.py`, `[scratchpad] enabled`; audio/ASR per §13.3.4
+  pending.)*
 
 - **Play crossing images as a sequence (implemented 2026-10-09).** The web
   results pages (§8) currently
@@ -2285,7 +2308,8 @@ It needs:
   counter labels. It keeps keyboard focus while a race is active and never
   touches storage directly.
 - **Two small controller additions**: a way to run a function on the writer
-  thread (`enqueue`), and a `race_active` flag. `set_bow_number` gains an
+  thread (`enqueue`), and a `race_active` flag (implemented as the existing
+  `controller.running`). `set_bow_number` gains an
   optional `source` argument so review writes stay as they are.
 - **One config key**, `[scratchpad] enabled`, default off, so the stock
   installation is unchanged.
