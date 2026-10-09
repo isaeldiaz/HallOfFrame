@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect,
 
 from ..render import flag_word as flag_text, format_elapsed
 from . import styles
-from .images import load_scaled
+from .images import load_view
 
 # Thumbnail box (w, h): the read-only race-screen list is a little larger than
 # the review list, which has two edit fields competing for the row width.
@@ -182,7 +182,7 @@ class _Row(QWidget):
 
         self.thumb = _Thumb(thumb_w, thumb_h)
         self.thumb.set_thumb(
-            load_scaled(data.get("image_path"), QSize(thumb_w, thumb_h)))
+            load_view(data.get("image_path"), QSize(thumb_w, thumb_h)))
         self.lay.addWidget(self.thumb)
 
         if editable:
@@ -383,7 +383,7 @@ class CrossingList(QWidget):
         """Populate a row's thumbnail once the deferred image is selected."""
         row = self._rows.get(sequence)
         if row is not None:
-            row.thumb.set_thumb(load_scaled(
+            row.thumb.set_thumb(load_view(
                 path, QSize(row.thumb.width(), row.thumb.height())))
 
     def remove(self, sequence: int) -> None:

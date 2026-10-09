@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 
 from . import styles
 from .crossing_list import CrossingList
-from .images import load_scaled
+from .images import load_view
 from ..render import format_elapsed, local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
@@ -171,7 +171,7 @@ class _Photo(QLabel):
     pixmap's size as its minimum size, so scaling to the label's current rect
     and nothing else both ratchets the pane wider and leaves the photo at the
     size the pane happened to have when the frame was first shown. Re-decoding
-    through :func:`images.load_scaled` on every resize keeps the photo at the
+    through :func:`images.load_view` on every resize keeps the photo at the
     pane it ends up in (spec §7.2; quality matters here, so ``fast=False``).
     """
 
@@ -196,7 +196,7 @@ class _Photo(QLabel):
         if self._source is None:
             return
         if self.width() > 1 and self.height() > 1:
-            pixmap = load_scaled(self._source, self.size(), fast=False)
+            pixmap = load_view(self._source, self.size(), fast=False)
             if pixmap is not None:
                 self.setPixmap(pixmap)
             else:

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from ..render import format_elapsed
 from . import styles
 from .crossing_list import CrossingList
-from .images import load_scaled
+from .images import load_view
 
 
 def fmt_clock(secs: float) -> str:
@@ -88,7 +88,7 @@ class LastCapturePanel(QWidget):
         area = self.photo.rect()
         if not (area.width() and area.height()):
             return
-        pm = load_scaled(path, area.size(), fast=False)
+        pm = load_view(path, area.size(), fast=False)
         if pm is not None:
             self.photo.setPixmap(pm)
 
