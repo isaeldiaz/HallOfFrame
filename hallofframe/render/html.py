@@ -271,6 +271,38 @@ def _css() -> str:
 
 CSS = _css()
 
+# Race-page-only CSS (spec §13.3). Kept out of the shared block above so the
+# index and the offline export stay byte-identical (the goldens enforce it);
+# only build_race_page() injects it.
+_PHOTO_CSS = """
+.thumb-deferred { cursor: pointer; }
+.thumb-deferred.photos-on .noimg-title,
+.thumb-deferred.photos-on .noimg-sub { display: none; }
+#viewer {
+  display: none; position: fixed; inset: 0; z-index: 50;
+  background: rgba(0,0,0,.92); align-items: center; justify-content: center;
+}
+#viewer img { max-width: 92vw; max-height: 80vh; object-fit: contain; }
+.viewer-btn {
+  font-family: 'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+  font-size: 20px; color: #f2f6f8;
+  background: rgba(20,26,30,.8); border: 1px solid #2c3942;
+  border-radius: 4px; padding: 10px 16px; cursor: pointer;
+}
+#viewer-prev, #viewer-next { position: absolute; top: 50%; transform: translateY(-50%); }
+#viewer-prev { left: 16px; }
+#viewer-next { right: 16px; }
+#viewer-close { position: absolute; top: 16px; right: 16px; }
+.viewer-bar {
+  position: absolute; bottom: 18px; left: 0; right: 0;
+  display: flex; gap: 18px; align-items: center; justify-content: center;
+  flex-wrap: wrap; color: #c6d3da; font-size: 14px;
+}
+.viewer-caption { font-family: 'IBM Plex Mono','SFMono-Regular',Consolas,monospace; color: #f2f6f8; }
+.viewer-pos { color: #5f6f79; }
+#viewer-full { font-size: 14px; }
+"""
+
 _FILTER_JS = """
 (function () {
   var box = document.getElementById('q');
@@ -365,24 +397,280 @@ _COPY_JS = r"""
 """
 
 
-def page(title: str, body: str, *, width_px: int, footer: str) -> str:
+def _viewer_html() -> str:
+    """The overlay viewer shell for the live race page (spec §13.3).
+
+    Hidden by default; ``_PHOTO_JS`` fills it in and toggles it. Only the
+    thumbnail is loaded until the viewer presses Full size, which swaps the
+    image for the /img/ original."""
+    return (
+        '<div id="viewer">'
+        '<button type="button" id="viewer-close" class="viewer-btn" '
+        'aria-label="Close">&times;</button>'
+        '<button type="button" id="viewer-prev" class="viewer-btn" '
+        'aria-label="Previous">&lsaquo;</button>'
+        '<div id="viewer-img" class="viewer-img"></div>'
+        '<button type="button" id="viewer-next" class="viewer-btn" '
+        'aria-label="Next">&rsaquo;</button>'
+        '<div class="viewer-bar">'
+        '<span id="viewer-caption" class="viewer-caption"></span>'
+        '<span id="viewer-pos" class="viewer-pos"></span>'
+        '<button type="button" id="viewer-full" class="viewer-btn">'
+        'Full size</button>'
+        '<button type="button" id="play-seq" class="viewer-btn">Play</button>'
+        '<select id="viewer-interval" class="viewer-select">'
+        '<option value="300">0.3 s</option>'
+        '<option value="500">0.5 s</option>'
+        '<option value="700" selected>0.7 s</option>'
+        '<option value="1000">1 s</option>'
+        '<option value="2000">2 s</option></select>'
+        '<label class="viewer-loop">'
+        '<input type="checkbox" id="viewer-loop"> Loop</label>'
+        '</div></div>'
+    )
+
+
+# Deferred-photo viewer for the live race page (spec §13.3). Plain ES5, no
+# external resources: the cards carry data-thumb / data-full / data-caption and
+# nothing is fetched until the operator asks. With JS disabled the placeholders
+# simply remain (the race-page footer says so).
+_PHOTO_JS = r"""
+(function () {
+  var viewer = document.getElementById('viewer');
+  var btn = document.getElementById('show-photos');
+  function thumbs() {
+    return document.querySelectorAll('.thumb-deferred');
+  }
+  function photosOn() {
+    return !!(btn && btn.textContent === 'Hide photos');
+  }
+  function showPhotos() {
+    var list = thumbs();
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (!t.getAttribute('data-loaded')) {
+        var img = document.createElement('img');
+        img.src = t.getAttribute('data-thumb');
+        img.setAttribute('loading', 'lazy');
+        img.alt = '';
+        t.insertBefore(img, t.firstChild);
+        t.setAttribute('data-loaded', '1');
+      }
+      t.classList.add('photos-on');
+    }
+    try { localStorage.setItem('hof_photos', '1'); } catch (e) {}
+    if (btn) { btn.textContent = 'Hide photos'; }
+  }
+  function hidePhotos() {
+    var list = thumbs();
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      var img = t.querySelector('img');
+      if (img) { t.removeChild(img); }
+      t.removeAttribute('data-loaded');
+      t.classList.remove('photos-on');
+    }
+    try { localStorage.removeItem('hof_photos'); } catch (e) {}
+    if (btn) { btn.textContent = 'Show photos'; }
+  }
+  if (btn) {
+    btn.addEventListener('click', function () {
+      if (photosOn()) { hidePhotos(); } else { showPhotos(); }
+    });
+    try {
+      if (localStorage.getItem('hof_photos') === '1') { showPhotos(); }
+    } catch (e) {}
+  }
+
+  var current = -1;
+  function setViewerSrc(url) {
+    var box = document.getElementById('viewer-img');
+    if (!box) { return; }
+    var img = box.querySelector('img');
+    if (!img) {
+      img = document.createElement('img');
+      img.alt = '';
+      box.appendChild(img);
+    }
+    img.src = url || '';
+  }
+  function openAt(index) {
+    var list = thumbs();
+    if (!list.length) { return; }
+    current = (index + list.length) % list.length;
+    var t = list[current];
+    setViewerSrc(t.getAttribute('data-thumb'));
+    var cap = document.getElementById('viewer-caption');
+    if (cap) { cap.textContent = t.getAttribute('data-caption') || ''; }
+    var pos = document.getElementById('viewer-pos');
+    if (pos) { pos.textContent = (current + 1) + ' / ' + list.length; }
+    if (viewer) { viewer.style.display = 'flex'; }
+    preload(current + 1);
+  }
+  function closeViewer() {
+    stopPlay();
+    if (viewer) { viewer.style.display = 'none'; }
+    current = -1;
+  }
+  function preload(index) {
+    var list = thumbs();
+    if (!list.length) { return; }
+    var url = list[(index + list.length) % list.length]
+      .getAttribute('data-thumb');
+    if (url) { var p = new Image(); p.src = url; }
+  }
+  document.addEventListener('click', function (e) {
+    var node = e.target;
+    while (node && node !== document.body) {
+      if (node.classList && node.classList.contains('thumb-deferred')) {
+        var list = thumbs();
+        for (var i = 0; i < list.length; i++) {
+          if (list[i] === node) { openAt(i); return; }
+        }
+      }
+      node = node.parentNode;
+    }
+  });
+  var closeBtn = document.getElementById('viewer-close');
+  if (closeBtn) { closeBtn.addEventListener('click', closeViewer); }
+  var prevBtn = document.getElementById('viewer-prev');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', function () { openAt(current - 1); });
+  }
+  var nextBtn = document.getElementById('viewer-next');
+  if (nextBtn) {
+    nextBtn.addEventListener('click', function () { openAt(current + 1); });
+  }
+  var fullBtn = document.getElementById('viewer-full');
+  if (fullBtn) {
+    fullBtn.addEventListener('click', function () {
+      var list = thumbs();
+      if (current < 0 || !list.length) { return; }
+      setViewerSrc(list[current].getAttribute('data-full'));
+    });
+  }
+  document.addEventListener('keydown', function (e) {
+    if (!viewer || viewer.style.display !== 'flex') { return; }
+    if (e.key === 'Escape') { stopPlay(); closeViewer(); }
+    else if (e.key === 'ArrowLeft') { stopPlay(); openAt(current - 1); }
+    else if (e.key === 'ArrowRight') { stopPlay(); openAt(current + 1); }
+    else if (e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      togglePlay();
+    }
+  });
+  // --- play crossing images as a sequence (spec §13.3) ---
+  var playBtn = document.getElementById('play-seq');
+  var headerPlay = document.getElementById('play-all');
+  var loopBox = document.getElementById('viewer-loop');
+  var intervalSel = document.getElementById('viewer-interval');
+  var playing = false;
+  var playTimer = null;
+  function setPlayLabel() {
+    if (playBtn) { playBtn.textContent = playing ? 'Pause' : 'Play'; }
+  }
+  function preloadAll() {
+    var list = thumbs();
+    for (var i = 0; i < list.length; i++) {
+      var url = list[i].getAttribute('data-thumb');
+      if (url) { var p = new Image(); p.src = url; }
+    }
+  }
+  function stopPlay() {
+    playing = false;
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    setPlayLabel();
+  }
+  function schedule() {
+    var ms = intervalSel ? parseInt(intervalSel.value, 10) : 700;
+    if (!ms || ms < 50) { ms = 700; }
+    playTimer = setTimeout(step, ms);
+  }
+  function step() {
+    if (!playing) { return; }
+    var list = thumbs();
+    if (!list.length) { stopPlay(); return; }
+    var next = current + 1;
+    if (next >= list.length) {
+      if (loopBox && loopBox.checked) { next = 0; }
+      else { stopPlay(); return; }
+    }
+    var target = list[next].getAttribute('data-thumb');
+    var advance = function () {
+      if (!playing) { return; }
+      current = next;
+      setViewerSrc(target);
+      var cap = document.getElementById('viewer-caption');
+      if (cap) { cap.textContent = list[next].getAttribute('data-caption') || ''; }
+      var pos = document.getElementById('viewer-pos');
+      if (pos) { pos.textContent = (current + 1) + ' / ' + list.length; }
+      schedule();
+    };
+    // Wait for the next frame's load so a slow link never shows a blank frame.
+    var probe = new Image();
+    probe.onload = advance;
+    probe.onerror = advance;
+    probe.src = target;
+  }
+  function startPlay() {
+    if (!thumbs().length) { return; }
+    playing = true;
+    setPlayLabel();
+    preloadAll();
+    schedule();
+  }
+  function togglePlay() {
+    if (playing) { stopPlay(); } else { startPlay(); }
+  }
+  if (playBtn) { playBtn.addEventListener('click', togglePlay); }
+  if (headerPlay) {
+    headerPlay.addEventListener('click', function () {
+      if (!photosOn()) { showPhotos(); }
+      if (viewer) { viewer.style.display = 'flex'; }
+      openAt(0);
+      startPlay();
+    });
+  }
+  var touchX = null;
+  if (viewer) {
+    viewer.addEventListener('touchstart', function (e) {
+      if (e.touches.length === 1) { touchX = e.touches[0].clientX; }
+    });
+    viewer.addEventListener('touchend', function (e) {
+      if (touchX === null || !e.changedTouches.length) { return; }
+      var dx = e.changedTouches[0].clientX - touchX;
+      touchX = null;
+      if (dx > 40) { openAt(current - 1); }
+      else if (dx < -40) { openAt(current + 1); }
+    });
+  }
+})();
+"""
+
+
+def page(title: str, body: str, *, width_px: int, footer: str,
+         scripts: str = "", style: str = "") -> str:
     """One shared HTML skeleton for the export and the web server (step 6.2).
 
     *body* is the page content (header + main); *footer* is the full
     ``<footer>`` element (each page keeps its own padding/classes). Holds the
     doctype, ``<head>``, the single ``CSS`` block and both ``<script>`` tags.
-    """
+    *scripts* is appended after the shared copy/filter scripts and *style* adds
+    a second ``<style>`` block; both default to empty so the index and the
+    offline export stay byte-identical (the live race page uses them for the
+    deferred-photo viewer, spec §13.3)."""
+    style_tag = f"<style>{style}</style>" if style else ""
     return (
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{_esc(title)}</title>"
-        f"<style>{CSS}</style>"
+        f"<style>{CSS}</style>{style_tag}"
         "</head>"
         f'<body><div class="wrap" style="max-width:{int(width_px)}px">'
         f"{body}{footer}"
         "</div>"
-        f"<script>{_COPY_JS}{_FILTER_JS}</script>"
+        f"<script>{_COPY_JS}{_FILTER_JS}{scripts}</script>"
         "</body>\n</html>\n"
     )
 
@@ -431,7 +719,8 @@ def _src(rel_path: str, img_base: str = "") -> str:
 _row_value = row_value
 
 
-def _thumb_html(capture, img_base: str = "") -> str:
+def _thumb_html(capture, position: int = 0, img_base: str = "",
+                *, deferred_photos: bool = False) -> str:
     rel = capture["primary_image"] or ""
     word = flag_word(capture["image_flag"],
                      _row_value(capture, "debounce_suspect", 0))
@@ -440,6 +729,22 @@ def _thumb_html(capture, img_base: str = "") -> str:
         return ('<div class="thumb thumb-empty">'
                 '<span class="noimg-title">NO IMAGE</span>'
                 '<span class="noimg-sub">timing only</span></div>')
+    if deferred_photos:
+        # The live race page sends no images until the viewer asks (spec §13.3):
+        # the card carries the /thumb/ and /img/ URLs for the JS viewer.
+        thumb_src = _src(rel, "/thumb/")
+        full_src = _src(rel, "/img/")
+        elapsed = format_elapsed(capture["elapsed_s"])
+        bow = capture["bow_number"] or ""
+        caption = f"{elapsed} · BOW {bow}" if bow else elapsed
+        return (
+            f'<div class="thumb thumb-deferred" data-thumb="{thumb_src}" '
+            f'data-full="{full_src}" data-pos="{int(position)}" '
+            f'data-caption="{_esc(caption)}">'
+            '<span class="noimg-title">PHOTO</span>'
+            '<span class="noimg-sub">tap Show photos</span>'
+            '<span class="finish-line"></span>'
+            f"{badge}</div>")
     src = _src(rel, img_base)
     return (
         f'<a href="{src}" target="_blank" rel="noopener" class="thumb">'
@@ -454,7 +759,8 @@ def _meta_cell(label: str, value: str) -> str:
             f'<span class="meta-value">{_esc(value)}</span></span>')
 
 
-def _card_html(capture, position: int, img_base: str = "") -> str:
+def _card_html(capture, position: int, img_base: str = "",
+               *, deferred_photos: bool = False) -> str:
     word = flag_word(capture["image_flag"],
                      _row_value(capture, "debounce_suspect", 0))
     bow = capture["bow_number"] or ""
@@ -477,7 +783,7 @@ def _card_html(capture, position: int, img_base: str = "") -> str:
     return (
         f'<div class="card" data-search="{_esc(search)}" data-flag="{_esc(word)}"'
         f' data-photo="{"1" if capture["primary_image"] else "0"}">'
-        f"{_thumb_html(capture, img_base)}"
+        f"{_thumb_html(capture, position, img_base, deferred_photos=deferred_photos)}"
         '<div class="card-body">'
         '<div class="card-top">'
         '<div class="card-left">'
@@ -495,7 +801,8 @@ def _card_html(capture, position: int, img_base: str = "") -> str:
     )
 
 
-def _race_html(race, captures, img_base: str = "", excel_id: int | None = None) -> str:
+def _race_html(race, captures, img_base: str = "", excel_id: int | None = None,
+               *, deferred_photos: bool = False) -> str:
     t0_wall = race["t0_wall"]
     gun = local_hms(t0_wall) if t0_wall is not None else "—"
     mode = _row_value(race, "viewing_mode", "") or "—"
@@ -515,7 +822,7 @@ def _race_html(race, captures, img_base: str = "", excel_id: int | None = None) 
     search = " ".join(str(v) for v in (race["race_no"] or "", race["heat_no"] or "",
                                        race["name"] or "", label) if v)
     ordered = sorted(captures, key=lambda c: (c["elapsed_s"], c["sequence"]))
-    body = ("".join(_card_html(c, pos, img_base)
+    body = ("".join(_card_html(c, pos, img_base, deferred_photos=deferred_photos)
                     for pos, c in enumerate(ordered, start=1))
             if ordered else
             '<div class="empty">No crossings recorded.</div>')
