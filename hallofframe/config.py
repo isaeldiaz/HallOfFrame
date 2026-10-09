@@ -97,6 +97,7 @@ DEFAULTS: dict[str, Any] = {
         "transcribe_before_s": 1.0,
         "transcribe_after_s": 4.0,
     },
+    "scratchpad": {"enabled": False},  # §13.3: live bow-number scratchpad (two-operator booth)
 }
 
 

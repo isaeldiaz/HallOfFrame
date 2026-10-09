@@ -69,8 +69,8 @@ CREATE TABLE IF NOT EXISTS capture (
     deleted         INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
     updated_at      TEXT,                          -- last write (§6.7)
-    bow_suggested   TEXT,                          -- phase 8, unused
-    bow_source      TEXT,                          -- phase 8, unused
+    bow_suggested   TEXT,                          -- §13.3.4 ASR suggestion
+    bow_source      TEXT,                          -- §13.3: 'live' | 'manual' | 'asr'
     target_ms       INTEGER,                       -- phase 5: selection target
     primary_frame_id INTEGER REFERENCES frame(id), -- phase 5
     t0_reconstructed INTEGER NOT NULL DEFAULT 0,   -- N4: after a reconstructed resume
@@ -81,6 +81,16 @@ CREATE TABLE IF NOT EXISTS capture (
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS scratchpad (
+    id            INTEGER PRIMARY KEY,
+    race_id       INTEGER NOT NULL REFERENCES race(id),
+    ordinal       INTEGER NOT NULL,          -- order typed, 1..n, never reused
+    text          TEXT NOT NULL,
+    t_typed_wall  REAL NOT NULL,
+    deleted       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (race_id, ordinal)
 );
 
 CREATE INDEX IF NOT EXISTS idx_capture_race ON capture(race_id, sequence);
@@ -521,8 +531,8 @@ class Storage:
             return cur.lastrowid
 
     def update_capture(self, capture_id, **fields) -> None:
-        allowed = {"bow_number", "primary_image", "image_flag", "deleted", "notes",
-                   "target_ms", "primary_frame_id"}
+        allowed = {"bow_number", "bow_source", "primary_image", "image_flag",
+                   "deleted", "notes", "target_ms", "primary_frame_id"}
         sets = []
         vals = []
         for k, v in fields.items():
@@ -633,6 +643,98 @@ class Storage:
         q += " ORDER BY sequence"
         with self._lock:
             return self._conn.execute(q, (race_id,)).fetchall()
+
+    # --- bow scratchpad (spec §13.3) --------------------------------------
+    def insert_scratch(self, race_id: int, text: str, t_typed_wall: float) -> int:
+        """Append a typed scratch entry; returns the new id.
+
+        ``ordinal`` is ``COALESCE(MAX(ordinal),0)+1`` over ALL rows of the race
+        (deleted included), so an ordinal is never reused."""
+        with self._lock:
+            ordinal = self._conn.execute(
+                "SELECT COALESCE(MAX(ordinal),0)+1 AS n FROM scratchpad "
+                "WHERE race_id=?", (race_id,)).fetchone()["n"]
+            cur = self._conn.execute(
+                "INSERT INTO scratchpad (race_id, ordinal, text, t_typed_wall) "
+                "VALUES (?,?,?,?)", (race_id, ordinal, text, t_typed_wall))
+            self._touch(race_id)
+            self._conn.commit()
+            return cur.lastrowid
+
+    def scratch_entries(self, race_id: int, include_deleted: bool = False) -> list:
+        """Rows ordered by ordinal. (No _touch: read only.)"""
+        q = "SELECT * FROM scratchpad WHERE race_id=?"
+        if not include_deleted:
+            q += " AND deleted=0"
+        q += " ORDER BY ordinal"
+        with self._lock:
+            return self._conn.execute(q, (race_id,)).fetchall()
+
+    def delete_last_scratch(self, race_id: int) -> int | None:
+        """Soft-delete the highest-ordinal non-deleted row; its id or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM scratchpad WHERE race_id=? AND deleted=0 "
+                "ORDER BY ordinal DESC LIMIT 1", (race_id,)).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                "UPDATE scratchpad SET deleted=1 WHERE id=?", (row["id"],))
+            self._touch(race_id)
+            self._conn.commit()
+            return row["id"]
+
+    def scratch_counts(self, race_id: int) -> tuple[int, int]:
+        """(non-deleted scratch rows, non-deleted captures) for the race."""
+        with self._lock:
+            scratch = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM scratchpad "
+                "WHERE race_id=? AND deleted=0", (race_id,)).fetchone()["n"]
+            captures = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM capture "
+                "WHERE race_id=? AND deleted=0", (race_id,)).fetchone()["n"]
+        return int(scratch), int(captures)
+
+    def set_bow(self, capture_id: int, value: str | None,
+                source: str | None) -> None:
+        """Set a capture's bow number and source, stamping ``updated_at``."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
+            race_id = row["race_id"] if row else None
+            self._conn.execute(
+                "UPDATE capture SET bow_number=?, bow_source=?, updated_at=? "
+                "WHERE id=?", (value, source, _utcnow(), capture_id))
+            self._touch(race_id)
+            self._conn.commit()
+
+    def apply_bows(self, changes: list[tuple[int, str | None]]) -> int:
+        """Apply many bow writes in one transaction; returns rows updated.
+
+        A non-None value is a ``live`` source; None clears both columns.
+        Each distinct race is touched once. An empty list writes nothing."""
+        if not changes:
+            return 0
+        with self._lock:
+            now = _utcnow()
+            race_ids: set[int] = set()
+            updated = 0
+            for capture_id, value in changes:
+                row = self._conn.execute(
+                    "SELECT race_id FROM capture WHERE id=?",
+                    (capture_id,)).fetchone()
+                if row is None:
+                    continue
+                race_ids.add(row["race_id"])
+                source = "live" if value is not None else None
+                cur = self._conn.execute(
+                    "UPDATE capture SET bow_number=?, bow_source=?, updated_at=? "
+                    "WHERE id=?", (value, source, now, capture_id))
+                updated += cur.rowcount
+            for race_id in race_ids:
+                self._touch(race_id)
+            self._conn.commit()
+            return updated
 
     # --- frame ------------------------------------------------------------
     def frame_times(self, race_id: int, lo: int, hi: int) -> set[int]:
