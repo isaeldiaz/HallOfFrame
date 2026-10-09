@@ -108,6 +108,30 @@ class TestWebPages(unittest.TestCase):
         self.assertIn('<img src="races/', page)
         self.assertNotIn('data-thumb', page)
 
+    def test_race_page_has_player(self):
+        self._add_captures()
+        page = build_race_page(self.storage, self.race_id)
+        self.assertIn('id="play-seq"', page)
+        self.assertIn('id="viewer-interval"', page)
+        self.assertIn("Loop", page)
+        self.assertIn('id="play-all"', page)
+
+    def test_race_page_card_positions_are_finish_order(self):
+        # Both crossings have a photo so both cards carry data-pos.
+        cap_slow = self.storage.insert_capture(
+            self.race_id, 1, 3000.0, 3000.0, 10.0, 0.0, bow_number="09")
+        self.storage.update_capture(cap_slow, primary_image="races/101 H1/a.jpg")
+        cap_fast = self.storage.insert_capture(
+            self.race_id, 2, 2000.0, 2000.0, 3.0, 0.0, bow_number="04")
+        self.storage.update_capture(cap_fast, primary_image="races/101 H1/b.jpg")
+        page = build_race_page(self.storage, self.race_id)
+        pairs = re.findall(r'data-pos="(\d+)" data-caption="([^"]*)"', page)
+        positions = [int(p) for p, _ in pairs]
+        # Playback order is the page's card order: 1..n, fastest first.
+        self.assertEqual(positions, list(range(1, len(positions) + 1)))
+        self.assertTrue(pairs[0][1].startswith("0:03.00"), pairs)
+        self.assertTrue(pairs[1][1].startswith("0:10.00"), pairs)
+
     def test_race_page_unknown_id_is_none(self):
         self.assertIsNone(build_race_page(self.storage, 9999))
 
