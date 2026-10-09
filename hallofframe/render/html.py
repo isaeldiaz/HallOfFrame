@@ -409,7 +409,7 @@ def _viewer_html() -> str:
         'aria-label="Close">&times;</button>'
         '<button type="button" id="viewer-prev" class="viewer-btn" '
         'aria-label="Previous">&lsaquo;</button>'
-        '<img id="viewer-img" src="" alt="">'
+        '<div id="viewer-img" class="viewer-img"></div>'
         '<button type="button" id="viewer-next" class="viewer-btn" '
         'aria-label="Next">&rsaquo;</button>'
         '<div class="viewer-bar">'
@@ -483,13 +483,23 @@ _PHOTO_JS = r"""
   }
 
   var current = -1;
+  function setViewerSrc(url) {
+    var box = document.getElementById('viewer-img');
+    if (!box) { return; }
+    var img = box.querySelector('img');
+    if (!img) {
+      img = document.createElement('img');
+      img.alt = '';
+      box.appendChild(img);
+    }
+    img.src = url || '';
+  }
   function openAt(index) {
     var list = thumbs();
     if (!list.length) { return; }
     current = (index + list.length) % list.length;
     var t = list[current];
-    var img = document.getElementById('viewer-img');
-    if (img) { img.src = t.getAttribute('data-thumb'); }
+    setViewerSrc(t.getAttribute('data-thumb'));
     var cap = document.getElementById('viewer-caption');
     if (cap) { cap.textContent = t.getAttribute('data-caption') || ''; }
     var pos = document.getElementById('viewer-pos');
@@ -536,8 +546,7 @@ _PHOTO_JS = r"""
     fullBtn.addEventListener('click', function () {
       var list = thumbs();
       if (current < 0 || !list.length) { return; }
-      var img = document.getElementById('viewer-img');
-      if (img) { img.src = list[current].getAttribute('data-full'); }
+      setViewerSrc(list[current].getAttribute('data-full'));
     });
   }
   document.addEventListener('keydown', function (e) {
@@ -590,8 +599,7 @@ _PHOTO_JS = r"""
     var advance = function () {
       if (!playing) { return; }
       current = next;
-      var img = document.getElementById('viewer-img');
-      if (img) { img.src = target; }
+      setViewerSrc(target);
       var cap = document.getElementById('viewer-caption');
       if (cap) { cap.textContent = list[next].getAttribute('data-caption') || ''; }
       var pos = document.getElementById('viewer-pos');

@@ -78,7 +78,7 @@ class TestWebPages(unittest.TestCase):
         self.assertIn("TEST_EVENT", page)  # event name visible in the header
         # Deferred photos: no image is sent by default (spec §13.3); the card
         # carries the /thumb/ and /img/ URLs for the JS viewer.
-        self.assertNotIn('<img src="/img/', page)
+        self.assertNotIn("<img", page)
         self.assertIn('data-thumb="/thumb/races/101%20H1/c.jpg"', page)
         self.assertIn('data-full="/img/races/101%20H1/c.jpg"', page)
         self.assertIn('id="show-photos"', page)
@@ -266,7 +266,7 @@ class TestConditionalRequests(unittest.TestCase):
 
     def test_race_page_defers_images(self):
         _, _, body = self._get(f"/race/{self.race_id}")
-        self.assertNotIn(b'<img src="/img/', body)
+        self.assertNotIn(b'<img', body)
         self.assertIn(b'data-thumb="/thumb/', body)
 
     def test_index_note(self):
