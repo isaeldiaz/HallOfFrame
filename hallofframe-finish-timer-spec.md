@@ -2158,55 +2158,8 @@ implementation can be planned against the constraints already locked in here.
   `Z` (draw) / `Shift+Z` (full frame) / `Esc` (cancel) work only in READY /
   STREAM_DOWN. The calibration dialog keeps showing the full frame.
 
-- **Automatic bow-number capture.** Removes the paper-and-pencil step of
-  recording the order in which boat numbers cross. Two candidate mechanisms,
-  not mutually exclusive:
-  - *Audio transcription* — the operator speaks each bow number aloud as the
-    boat crosses. Specified in full as its own item below.
-  - *Keypad crossing capture* — replace the single crossing trigger with a
-    numeric keypad whose individual keys (e.g. 1–6) map to lane numbers. Each
-    crossing is then registered on the lane it crossed and cross-checked against
-    the roster to resolve the boat number. This interacts directly with §6.4's
-    "trigger is global" collision discussion: a dedicated numeric keypad on its
-    own evdev node is already the §6.4 mitigation of choice, so this extends the
-    same hardware instead of adding new requirements.
-
-- **Voice annotation of crossings, with optional local transcription.** The
-  same paper-and-pencil problem as the keypad idea above, approached from the
-  other side: the operator says the bow number aloud as each boat crosses, and
-  the recording is available during review to fill in the bow-number field. Two
-  stages, the second optional and strictly additive to the first.
-
-  - *Stage 1 — record and play back.* Record one continuous audio track per
-    race, started at `t0` and stamped against the same `CLOCK_MONOTONIC`
-    reference as the frames (§5.1), so each crossing's recorded time is also an
-    offset into the track. This is the audio analogue of `archive.py` (§6.6): a
-    dedicated writer thread fed from the capture device, off the evdev trigger
-    path (§5.3) and never blocking it — a full queue drops audio exactly as a
-    full frame queue drops frames. The frame review panel of §7.3 gains a play
-    control that starts a few seconds before the crossing's recorded time and
-    runs a few seconds past it, so the operator hears the spoken number while
-    looking at the frame and types it into the existing bow-number field.
-    Neither the timing path nor the stored images change, and a missing or
-    failed recording degrades to today's manual entry.
-  - *Stage 2 — local transcription.* After the race, transcribe the track with
-    a small speech model running **entirely on the laptop** — no network, since
-    §2.3 assumes a metered mobile link at best and race day cannot depend on it
-    — and pre-fill each crossing's bow-number field from the numbers spoken
-    inside its window. Every value is a *suggestion*: visibly marked as
-    machine-assigned, always editable, and left blank rather than guessed when
-    confidence is too low to disambiguate. Transcription runs after the race,
-    off the trigger thread, and is never a precondition for export (§6.8) — the
-    operator must be able to ignore it entirely and still get results.
-
-  Open points for whoever implements this: the capture device (the laptop mic is
-  the zero-hardware option, a headset mic is far better in wind and crowd
-  noise); whether the storage schema (§6.7) keeps one audio file per race,
-  addressed by each crossing's existing recorded time, rather than per-crossing
-  clips; and whether the web process (§8) serves audio at all, given the
-  data-usage item below. `ffmpeg` is already a §9.1 dependency, so capture and
-  transcode need no new install; a local speech model is a new dependency and
-  must be weighed against §2.2's start-up and reliability constraints.
+- **Bow-number capture.** Live scratchpad for a two-operator booth, with
+  audio replay and offline ASR as later releases. Specified in §13.3.1–13.3.4.
 
 - **Play crossing images as a sequence (implemented 2026-10-09).** The web
   results pages (§8) currently
@@ -2258,6 +2211,132 @@ implementation can be planned against the constraints already locked in here.
   camera, it must still honour the §5 timing model (kernel-clock timestamps, no
   disk on the trigger path) so the timing guarantees are exercised rather than
   bypassed.
+
+#### 13.3.1 Bow-number capture — purpose and operators
+
+Requirement F4 lets the operator annotate each capture with a bow number after
+the fact. In practice this has meant a paper list kept during the heat and
+typed in afterwards. This feature replaces the paper with a live scratchpad,
+and does so without touching the timing model in §5 or the trigger path in §6.4.
+
+The design assumes the **two-operator booth** that is now the normal
+configuration. The spec elsewhere speaks of "the operator"; from here on the two
+are distinct and their duties do not overlap.
+
+|  | Operator 1 — line judge | Operator 2 — recorder |
+| --- | --- | --- |
+| Sits | In line with the finish line, with the external trigger button | Beside operator 1, at the laptop |
+| Watches | The water. Never the screen during a heat | The screen and the scratchpad field |
+| Does during a heat | Presses the trigger once per crossing (§6.4); immediately calls the bow number aloud, digit by digit ("en-fire" for 14), in the language the booth uses | Types each called number into the scratchpad and presses Enter; watches the two counters |
+| Does before a heat | Nothing on the computer | Arms the race (§7.4 `Ctrl+S` → confirm); operator 1's next trigger press is `t0` |
+| Does after a heat | Nothing | Reviews the race (§7.3), corrects any bow number the counters said were out of step, exports |
+| Owns | The time of every crossing | Every other keystroke |
+
+Two consequences follow and are requirements, not advice. First, the trigger
+device must be a separate evdev node from the keyboard operator 2 types on:
+§6.4's exclusive `grab()` applies to the trigger node only, and a scratchpad on
+a grabbed keyboard never receives a key. Second, bow numbers are called digit by
+digit: it is easier for operator 2 to hear and type, and it is what a later
+transcription step (§13.3.4) recognises most reliably.
+
+The scratchpad does not identify boats. Operator 1 reads the bow number with the
+naked eye — bow numbers are legible from the booth but not in the camera frame
+at 50 m — and the system records what operator 2 types, in the order typed.
+Everything downstream is a convenience built on that one ordered list.
+
+#### 13.3.2 How it works
+
+A single text field — the **scratchpad** — sits under the capture list. During
+a heat operator 2 types each bow number as operator 1 calls it and presses
+Enter. The first number typed is attached to the first crossing, the second to
+the second, and so on. Two counters beside the field show *numbers typed* and
+*crossings recorded* and turn red when they differ; that is the only mismatch
+signal. When the race stops, any crossing without a number stays blank, and
+operator 2 fills or corrects rows in review exactly as F4 works today.
+
+Nothing is inferred from timing, lanes or the roster, and a number typed before
+the press simply waits for the next crossing. The typed list is a draft that
+review finishes; the counters tell operator 2 where the draft went out of step.
+
+*Example.* Four boats; operator 1 calls 14, 7, 21, 3; operator 2 misses the 21.
+After the heat rows 1–3 read 14, 7, 3 and row 4 is blank, with the counters
+showing 3 / 4 in red. Operator 2 sees the mismatch, types 21 into row 3 and 3
+into row 4, and the result is correct. Later releases (§13.3.4) make that
+correction step faster; they do not change the mechanism.
+
+#### 13.3.3 How it would be implemented
+
+The feature is small and sits beside the timing system rather than inside it.
+It needs:
+
+- **One table**, `scratchpad(race_id, ordinal, text, t_typed_wall, deleted)`,
+  added by the existing migration pattern in `storage.py`. Ordinals are
+  allocated the way `capture.sequence` already is and are never reused. The
+  existing `capture.bow_number` and `capture.bow_source` columns (§6.7) hold the
+  result, with `bow_source = 'live'` for scratchpad-assigned rows and `'manual'`
+  for rows typed in review.
+- **One recompute function.** Given the race's non-deleted entries in ordinal
+  order and its non-deleted captures in sequence order, assign the k-th to the
+  k-th, skipping captures already marked `'manual'`. It runs through the
+  controller's existing single-writer queue after every commit, every new
+  capture, every deletion and at race stop. Because it recomputes from scratch
+  each time it is idempotent, so there is no state to keep in step.
+- **One widget**: a `QLineEdit` that accepts digits and Enter, plus the two
+  counter labels. It keeps keyboard focus while a race is active and never
+  touches storage directly.
+- **Two small controller additions**: a way to run a function on the writer
+  thread (`enqueue`), and a `race_active` flag. `set_bow_number` gains an
+  optional `source` argument so review writes stay as they are.
+- **One config key**, `[scratchpad] enabled`, default off, so the stock
+  installation is unchanged.
+
+Nothing in §5 is touched: the scratchpad never reads or writes `t0`, `t_press`,
+`Δ` or image selection, and nothing it does runs on the trigger thread.
+
+**Hardware requirement.** Because operator 2 types on the laptop keyboard for
+the whole heat, the trigger must be the external button on its own USB event
+node (§6.4's split-device setup, mandatory when the scratchpad is enabled). The
+application refuses to arm a race if the scratchpad is on and `[trigger]
+device_path` is the internal keyboard.
+
+**Runbook.** Two lines join §9.3: confirm the external button is the trigger
+before the first heat, and agree that operator 1 calls bow numbers digit by
+digit ("en-fire" for 14), immediately after each press. The acceptance test is
+a scripted replay of the example above; the field measure is how many rows
+needed correction in review after a real heat.
+
+#### 13.3.4 Later releases
+
+Two additions are foreseen, each small and independent, neither built until the
+scratchpad has run in a real regatta. Both only shorten operator 2's review; the
+roles in §13.3.1 do not change.
+
+**Audio replay.** Record the booth microphone continuously during each race (one
+WAV per race, 16 kHz mono, ~115 MB/hour; `race.audio_path` /
+`audio_t0_offset_s` in §6.7), and give every crossing in review a play button
+for the few seconds around its `t_press`. Operator 2 resolves a burst by
+listening rather than remembering. Audio position is derived directly from
+monotonic time against the recording's start; no index is needed at this
+precision. The recorder is its own writer thread, off the trigger path, and
+drops audio on a full queue as the frame path drops frames; a missing recording
+degrades to manual entry. A headset mic beats the laptop mic in wind and crowd
+noise. Whether the web process (§8) serves audio at all is open, given its
+metered link.
+
+**ASR suggestion.** A Transcribe button in review runs an offline Norwegian
+Whisper model (`whisper.cpp` with NB-Whisper; Vosk has no Norwegian model) over
+the race audio after the heat, never during one, on a single thread at low
+priority — the machine has two cores and both are busy while racing. Spoken
+numbers are matched to crossings by the same order rule as the scratchpad and
+shown as a suggestion column (`capture.bow_suggested`) next to the typed values;
+rows where the two disagree are highlighted at display time. ASR never writes
+`bow_number`, is never a precondition for export (§6.8), and the operator
+accepts or ignores each suggestion. The model is a new dependency, weighed
+against §2.2's start-up and reliability constraints.
+
+*Not pursued:* a lane keypad (keys 1–6 as per-lane triggers, cross-checked
+against the roster). It infers identity from lanes, which this design
+deliberately avoids.
 
 ---
 
