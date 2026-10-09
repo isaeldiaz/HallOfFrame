@@ -78,6 +78,11 @@ DEFAULTS: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8080,
         "copy_heading": True,  # include the Race ID/Heat/Category/Gun-start block when copying a race table
+        # Deferred-photo thumbnails (spec §13.3): the web process makes and
+        # caches ≤ thumb_width-px thumbnails itself under <cache_dir>/thumbs/.
+        "thumb_width": 480,
+        "thumb_quality": 75,
+        "cache_dir": "web-cache",  # relative to data_root; absolute allowed
     },
     # Phase 8 (voice annotation) config format, added here so a laptop set up for
     # the fake camera can later take a microphone without a config-format change
