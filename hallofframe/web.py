@@ -379,7 +379,6 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         storage = self.server.storage
-
         if path == "/" or path == "/index.html":
             headers, not_modified = self._cache(
                 updated_iso=storage.last_updated())
@@ -402,6 +401,11 @@ class WebHandler(BaseHTTPRequestHandler):
             self._thumb(path)
             return
         self._html(404, "<h1>404</h1><p>Not found.</p>")
+
+    def do_HEAD(self):
+        # HEAD reuses the GET routing; _send suppresses the body for it, so
+        # ``curl -I`` can read the cache/Content-Type headers (spec §13.3).
+        self.do_GET()
 
     def _published(self, storage: Storage, race_id: int) -> bool:
         """True only for a race the operator has closed in review.

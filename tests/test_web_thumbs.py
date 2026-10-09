@@ -67,6 +67,22 @@ class TestThumbRoute(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, dict(exc.headers), exc.read()
 
+    def _head(self, path):
+        req = urllib.request.Request(self.base + path, method="HEAD")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, dict(exc.headers), exc.read()
+
+    def test_head_request_supported(self):
+        status, headers, body = self._head(f"/thumb/{self.quoted}")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "image/jpeg")
+        self.assertEqual(headers["Cache-Control"],
+                         "public, max-age=31536000, immutable")
+        self.assertEqual(body, b"")
+
     def test_thumb_served_and_cached(self):
         status, headers, body = self._get(f"/thumb/{self.quoted}")
         self.assertEqual(status, 200)
