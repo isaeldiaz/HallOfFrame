@@ -8,15 +8,82 @@ roughly an order of magnitude cheaper than a full 1080p decode followed by a
 downscale (spec §7.2). The residual resize uses ``Qt.FastTransformation`` unless
 ``fast=False``.
 
-``roi`` is a normalised ``(x, y, w, h)`` crop applied *before* scaling; it is the
-hook the deferred zoom/ROI nice-to-have (§13.3) needs and is ``None`` everywhere
-in this phase. With ``roi=None`` the behaviour is the pre-existing loader's:
-decode at the requested size, keeping the aspect ratio.
+``roi`` is a normalised ``(x, y, w, h)`` crop applied *before* scaling. The
+zoom/ROI nice-to-have (spec §13.3) keeps one process-wide view ROI: widgets that
+must honour the operator's zoom call :func:`load_view` (which applies it); the
+calibration dialog keeps calling :func:`load_scaled` so it always shows the full
+frame. The crop path clips in the DCT domain (``setClipRect`` then
+``setScaledSize``) and falls back to a full decode + :func:`_crop` when Qt's
+reader does not honour the requested clip/scale within 2 px.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, QSize, Qt
+from PySide6.QtCore import QBuffer, QRect, QSize, Qt
 from PySide6.QtGui import QImage, QImageReader, QPixmap
+
+# The process-wide view ROI: None = full frame. Set by the Ready screen /
+# MainWindow and read by every view that honours the zoom.
+_view_roi: tuple[float, float, float, float] | None = None
+
+
+def _clamp_roi(roi) -> tuple[float, float, float, float] | None:
+    """Validate/clamp a normalised ROI: 0<=x,y, x+w<=1, y+h<=1, w>=0.05."""
+    if roi is None:
+        return None
+    x, y, w, h = (float(v) for v in roi)
+    w = min(1.0, max(0.05, w))
+    h = min(1.0, max(0.05, h))
+    x = min(max(0.0, x), 1.0 - w)
+    y = min(max(0.0, y), 1.0 - h)
+    return (x, y, w, h)
+
+
+def set_view_roi(roi) -> None:
+    """Set the process-wide view ROI (clamped); ``None`` = full frame."""
+    global _view_roi
+    _view_roi = _clamp_roi(roi)
+
+
+def view_roi() -> tuple[float, float, float, float] | None:
+    """The current process-wide view ROI, or None for the full frame."""
+    return _view_roi
+
+
+def load_view(source: str | bytes, size: QSize, *, fast: bool = True
+              ) -> QPixmap | None:
+    """:func:`load_scaled` with the current view ROI applied."""
+    return load_scaled(source, size, fast=fast, roi=_view_roi)
+
+
+def _reader_for(source):
+    """Build a fresh reader for *source*; return ``(reader, keepalive)``.
+
+    A ``QBuffer`` backing a bytes source must outlive the reader, so it is
+    returned as the keepalive; for a path the keepalive is None."""
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        data = bytes(source)
+        if not data:
+            return None, None
+        buf = QBuffer()
+        buf.setData(data)
+        buf.open(QBuffer.ReadOnly)
+        return QImageReader(buf), buf
+    path = str(source)
+    if not path:
+        return None, None
+    return QImageReader(path), None
+
+
+def _clip_rect(natural: QSize,
+               roi: tuple[float, float, float, float]) -> QRect:
+    """The ROI as a natural-pixel rect (rounded, clamped, min 1x1)."""
+    x, y, w, h = roi
+    iw, ih = natural.width(), natural.height()
+    rx = max(0, min(iw - 1, int(round(x * iw))))
+    ry = max(0, min(ih - 1, int(round(y * ih))))
+    rw = max(1, min(iw - rx, int(round(w * iw))))
+    rh = max(1, min(ih - ry, int(round(h * ih))))
+    return QRect(rx, ry, rw, rh)
 
 
 def _crop(img: QImage, roi: tuple[float, float, float, float]) -> QImage:
@@ -42,27 +109,31 @@ def load_scaled(source: str | bytes, size: QSize, *, fast: bool = True,
     """
     if source is None:
         return None
-    buf = None
-    if isinstance(source, (bytes, bytearray, memoryview)):
-        data = bytes(source)
-        if not data:
-            return None
-        buf = QBuffer()
-        buf.setData(data)
-        buf.open(QBuffer.ReadOnly)
-        reader = QImageReader(buf)
-    else:
-        path = str(source)
-        if not path:
-            return None
-        reader = QImageReader(path)
-    if not reader.canRead():
+    reader, _keep = _reader_for(source)
+    if reader is None or not reader.canRead():
         return None
 
     transform = Qt.FastTransformation if fast else Qt.SmoothTransformation
 
     if roi is not None:
-        img = reader.read()
+        natural = reader.size()
+        if natural.isValid() and size.isValid():
+            clip = _clip_rect(natural, roi)
+            target = clip.size().scaled(size, Qt.KeepAspectRatio)
+            # Qt applies clipRect in natural pixels before scaledSize, so the
+            # crop is done in the DCT domain (§7.2). Verify it did.
+            reader.setClipRect(clip)
+            reader.setScaledSize(target)
+            img = reader.read()
+            if (not img.isNull()
+                    and abs(img.width() - target.width()) <= 2
+                    and abs(img.height() - target.height()) <= 2):
+                if img.size() != target:
+                    img = img.scaled(target, Qt.KeepAspectRatio, transform)
+                return QPixmap.fromImage(img)
+        # Fallback: the reader ignored the clip/scale. Full decode, crop, scale.
+        reader2, _keep2 = _reader_for(source)
+        img = reader2.read() if reader2 is not None else QImage()
         if img.isNull():
             return None
         img = _crop(img, roi)

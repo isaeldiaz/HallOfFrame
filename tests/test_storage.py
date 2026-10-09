@@ -358,6 +358,49 @@ def _tables(conn) -> set:
         "SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+# --- UI settings in the meta table (spec §13.3, package A.1) ---------------
+def test_setting_round_trip_and_delete(storage):
+    assert storage.get_setting("ui.roi") is None
+    storage.set_setting("ui.roi", "0.25,0.25,0.5,0.5")
+    assert storage.get_setting("ui.roi") == "0.25,0.25,0.5,0.5"
+    storage.set_setting("ui.finish_line_x", "0.5")
+    assert storage.get_setting("ui.finish_line_x") == "0.5"
+    # None deletes the key.
+    storage.set_setting("ui.roi", None)
+    assert storage.get_setting("ui.roi") is None
+    assert storage.get_setting("ui.finish_line_x") == "0.5"
+
+
+def test_setting_does_not_touch_updated_at(storage, clock):
+    _make_race(storage)
+    before = storage.last_updated()
+    storage.set_setting("ui.roi", "0,0,1,1")
+    storage.set_setting("ui.roi", None)
+    # A UI setting is not a results change: no ETag churn for viewers.
+    assert storage.last_updated() == before
+
+
+def test_setting_rejects_unprefixed_key(storage):
+    with pytest.raises(ValueError):
+        storage.set_setting("db_updated_at", "2030-01-01T00:00:00+00:00")
+    with pytest.raises(ValueError):
+        storage.get_setting("db_updated_at")
+
+
+def test_setting_read_only_reads_but_cannot_write(data_root):
+    writer = storage_mod.Storage(data_root, event_name="event")
+    writer.set_setting("ui.roi", "0,0,1,1")
+    writer.close()
+
+    ro = storage_mod.Storage(data_root, event_name="event", read_only=True)
+    try:
+        assert ro.get_setting("ui.roi") == "0,0,1,1"
+        with pytest.raises(sqlite3.OperationalError):
+            ro.set_setting("ui.roi", "0.5,0.5,0.5,0.5")
+    finally:
+        ro.close()
+
+
 def test_migration_uses_the_configured_windows(data_root):
     db = data_root / "event.db"
     conn = sqlite3.connect(str(db))

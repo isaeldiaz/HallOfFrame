@@ -207,3 +207,17 @@ def test_review_keeps_race_keys_out_of_the_shortcut_map():
     assert "Return" not in review_keys
     assert "Enter" not in review_keys
     assert "Space" not in review_keys
+
+
+def test_zoom_keys_are_ready_only():
+    # Z / Shift+Z draw and reset the ROI, which only exists in READY /
+    # STREAM_DOWN (spec §13.3). They must not leak into a race or review.
+    for state in (AppState.READY, AppState.STREAM_DOWN):
+        keys = {k.key: k.action for k in KEYMAP[state]}
+        assert keys["Z"] == "_zoom_draw"
+        assert keys["Shift+Z"] == "_zoom_reset"
+    for state in (AppState.ARMED, AppState.RECORDING, AppState.REVIEW,
+                  AppState.RACE_OVER, AppState.RECALIBRATE):
+        keys = {k.key for k in KEYMAP[state]}
+        assert "Z" not in keys, state
+        assert "Shift+Z" not in keys, state
