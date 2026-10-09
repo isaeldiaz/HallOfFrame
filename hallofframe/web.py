@@ -283,7 +283,9 @@ def build_race_page(storage: Storage, race_id: int) -> str | None:
         f'<span class="event">{_esc(event)}</span>'
         f'<span class="counts">Results updated {_esc(updated)}</span>'
         '<button type="button" id="show-photos" class="excel-btn">'
-        'Show photos</button></header>'
+        'Show photos</button>'
+        '<button type="button" id="play-all" class="excel-btn">'
+        'Play</button></header>'
     )
     footer = ('<footer class="race-footer">Photos load on request to save '
               f'data. · {_about_footer()}</footer>')

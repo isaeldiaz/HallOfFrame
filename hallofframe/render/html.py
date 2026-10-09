@@ -417,6 +417,15 @@ def _viewer_html() -> str:
         '<span id="viewer-pos" class="viewer-pos"></span>'
         '<button type="button" id="viewer-full" class="viewer-btn">'
         'Full size</button>'
+        '<button type="button" id="play-seq" class="viewer-btn">Play</button>'
+        '<select id="viewer-interval" class="viewer-select">'
+        '<option value="300">0.3 s</option>'
+        '<option value="500">0.5 s</option>'
+        '<option value="700" selected>0.7 s</option>'
+        '<option value="1000">1 s</option>'
+        '<option value="2000">2 s</option></select>'
+        '<label class="viewer-loop">'
+        '<input type="checkbox" id="viewer-loop"> Loop</label>'
         '</div></div>'
     )
 
@@ -489,6 +498,7 @@ _PHOTO_JS = r"""
     preload(current + 1);
   }
   function closeViewer() {
+    stopPlay();
     if (viewer) { viewer.style.display = 'none'; }
     current = -1;
   }
@@ -532,10 +542,87 @@ _PHOTO_JS = r"""
   }
   document.addEventListener('keydown', function (e) {
     if (!viewer || viewer.style.display !== 'flex') { return; }
-    if (e.key === 'Escape') { closeViewer(); }
-    else if (e.key === 'ArrowLeft') { openAt(current - 1); }
-    else if (e.key === 'ArrowRight') { openAt(current + 1); }
+    if (e.key === 'Escape') { stopPlay(); closeViewer(); }
+    else if (e.key === 'ArrowLeft') { stopPlay(); openAt(current - 1); }
+    else if (e.key === 'ArrowRight') { stopPlay(); openAt(current + 1); }
+    else if (e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      togglePlay();
+    }
   });
+  // --- play crossing images as a sequence (spec §13.3) ---
+  var playBtn = document.getElementById('play-seq');
+  var headerPlay = document.getElementById('play-all');
+  var loopBox = document.getElementById('viewer-loop');
+  var intervalSel = document.getElementById('viewer-interval');
+  var playing = false;
+  var playTimer = null;
+  function setPlayLabel() {
+    if (playBtn) { playBtn.textContent = playing ? 'Pause' : 'Play'; }
+  }
+  function preloadAll() {
+    var list = thumbs();
+    for (var i = 0; i < list.length; i++) {
+      var url = list[i].getAttribute('data-thumb');
+      if (url) { var p = new Image(); p.src = url; }
+    }
+  }
+  function stopPlay() {
+    playing = false;
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    setPlayLabel();
+  }
+  function schedule() {
+    var ms = intervalSel ? parseInt(intervalSel.value, 10) : 700;
+    if (!ms || ms < 50) { ms = 700; }
+    playTimer = setTimeout(step, ms);
+  }
+  function step() {
+    if (!playing) { return; }
+    var list = thumbs();
+    if (!list.length) { stopPlay(); return; }
+    var next = current + 1;
+    if (next >= list.length) {
+      if (loopBox && loopBox.checked) { next = 0; }
+      else { stopPlay(); return; }
+    }
+    var target = list[next].getAttribute('data-thumb');
+    var advance = function () {
+      if (!playing) { return; }
+      current = next;
+      var img = document.getElementById('viewer-img');
+      if (img) { img.src = target; }
+      var cap = document.getElementById('viewer-caption');
+      if (cap) { cap.textContent = list[next].getAttribute('data-caption') || ''; }
+      var pos = document.getElementById('viewer-pos');
+      if (pos) { pos.textContent = (current + 1) + ' / ' + list.length; }
+      schedule();
+    };
+    // Wait for the next frame's load so a slow link never shows a blank frame.
+    var probe = new Image();
+    probe.onload = advance;
+    probe.onerror = advance;
+    probe.src = target;
+  }
+  function startPlay() {
+    if (!thumbs().length) { return; }
+    playing = true;
+    setPlayLabel();
+    preloadAll();
+    schedule();
+  }
+  function togglePlay() {
+    if (playing) { stopPlay(); } else { startPlay(); }
+  }
+  if (playBtn) { playBtn.addEventListener('click', togglePlay); }
+  if (headerPlay) {
+    headerPlay.addEventListener('click', function () {
+      if (!photosOn()) { showPhotos(); }
+      if (viewer) { viewer.style.display = 'flex'; }
+      openAt(0);
+      startPlay();
+    });
+  }
   var touchX = null;
   if (viewer) {
     viewer.addEventListener('touchstart', function (e) {
