@@ -115,3 +115,33 @@ def test_reset_zoom_clears_and_signals(qapp, tmp_path):
     w.reset_zoom()
     assert view_roi() is None
     assert seen == [None]
+
+
+def test_set_roi_redecodes_the_current_frame(qapp, tmp_path):
+    # A frozen stream must still pick up the zoom immediately: set_roi has to
+    # force a re-decode (refresh early-returns on an unchanged JPEG).
+    img = Image.new("RGB", (1920, 1080), (255, 0, 0))
+    img.paste(Image.new("RGB", (960, 1080), (0, 0, 255)), (960, 0))
+    path = tmp_path / "two.jpg"
+    img.save(path, "JPEG")
+    buf = FrameBuffer(assumed_fps=30)
+    buf.append(Frame(0.0, 0.0, 1, path.read_bytes()))
+    w = PreviewWidget(buf)
+    w.resize(960, 540)
+    w.refresh()
+    w.set_roi((0.0, 0.0, 0.5, 1.0))  # left half only
+    pm = w._pm
+    c = pm.toImage().pixelColor(pm.width() // 2, pm.height() // 2)
+    assert c.red() > 200 and c.blue() < 60, f"centre was {c.name()}"
+
+
+def test_arming_cancels_pending_zoom_draw(config, storage, buffer, controller,
+                                          qapp):
+    from hallofframe.ui.main_window import MainWindow
+    win = MainWindow(config(), controller, buffer)
+    win.ready.begin_zoom_draw()
+    assert win.ready.preview.is_zoom_draw()
+    win.session.arm()
+    win._recompute_state()
+    # Entering ARMED drops the pending gesture, so the next Esc disarms.
+    assert not win.ready.preview.is_zoom_draw()

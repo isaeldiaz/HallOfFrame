@@ -95,6 +95,40 @@ class TestThumbRoute(unittest.TestCase):
         (self.data_root / "races" / "notes.txt").write_text("x", encoding="utf-8")
         self.assertEqual(self._get("/thumb/races/notes.txt")[0], 404)
 
+    def test_corrupt_image_is_404(self):
+        bad = self.data_root / "races" / "101 H1" / "frames" / "bad.jpg"
+        bad.write_bytes(b"not a jpeg")
+        self.assertEqual(self._get("/thumb/races/101%20H1/frames/bad.jpg")[0], 404)
+
+    def test_absolute_rel_cannot_serve_the_original(self):
+        # A crafted absolute rel still resolves to a real frame, but the cache
+        # key must come from the canonical source path: the response is the
+        # thumbnail, never the full-resolution original.
+        abs_rel = urllib.parse.quote(str(self.src), safe="")
+        status, headers, body = self._get(f"/thumb/{abs_rel}")
+        self.assertEqual(status, 200)
+        img = Image.open(io.BytesIO(body))
+        self.assertEqual(img.size, (480, 270))
+        # The original frame on disk is untouched (1920x1080).
+        self.assertEqual(Image.open(self.src).size, (1920, 1080))
+
+    def test_traversal_write_stays_inside_cache_root(self):
+        cache = ThumbCache(self.cache_root, 480, 75)
+        # A rel that resolves to the real source but whose raw path escapes
+        # cache_root. The cache must not write at the escaped location.
+        crafted = "../" * 5 + str(self.src).lstrip("/")
+        result = cache.get(self.data_root, crafted)
+        if result is None:
+            self.skipTest("crafted rel does not resolve to a frame")
+        # Every cache file the process wrote lives under cache_root/thumbs/480.
+        written = list((self.cache_root / "thumbs" / "480").rglob("*.jpg"))
+        self.assertTrue(written, "expected a cached thumbnail")
+        for path in written:
+            self.assertTrue(
+                path.resolve().is_relative_to(
+                    (self.cache_root / "thumbs").resolve()),
+                f"cache file escaped: {path}")
+
     def test_unwritable_cache_still_serves(self):
         if os.geteuid() == 0:
             self.skipTest("root ignores directory permissions")

@@ -213,9 +213,13 @@ def test_zoom_keys_are_ready_only():
     # Z / Shift+Z draw and reset the ROI, which only exists in READY /
     # STREAM_DOWN (spec §13.3). They must not leak into a race or review.
     for state in (AppState.READY, AppState.STREAM_DOWN):
-        keys = {k.key: k.action for k in KEYMAP[state]}
-        assert keys["Z"] == "_zoom_draw"
-        assert keys["Shift+Z"] == "_zoom_reset"
+        keys = {k.key: k for k in KEYMAP[state]}
+        assert keys["Z"].action == "_zoom_draw"
+        assert keys["Shift+Z"].action == "_zoom_reset"
+        # Both must stand down while a text field has focus (capital Z must
+        # reach the filter box / roster fields).
+        assert keys["Z"].typable
+        assert keys["Shift+Z"].typable
     for state in (AppState.ARMED, AppState.RECORDING, AppState.REVIEW,
                   AppState.RACE_OVER, AppState.RECALIBRATE):
         keys = {k.key for k in KEYMAP[state]}
