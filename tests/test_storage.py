@@ -59,11 +59,13 @@ def test_read_only_does_not_create_a_missing_database(data_root):
         storage_mod.Storage(data_root, event_name="absent", read_only=True)
 
 
-def _make_race(storage, name="R", race_no="101", heat_no="1") -> int:
+def _make_race(storage, name="R", race_no="101", heat_no="1",
+               window_before_ms=None, window_after_ms=None) -> int:
     return storage.create_race(
         name, t0_monotonic=1000.0, t0_wall=1000.0, start_mode="direct",
         radio_delay_ms=0.0, delta_used=0.0, viewing_mode="screen",
-        race_no=race_no, heat_no=heat_no)
+        race_no=race_no, heat_no=heat_no,
+        window_before_ms=window_before_ms, window_after_ms=window_after_ms)
 
 
 def test_last_updated_without_race_id(storage, clock):
@@ -167,6 +169,52 @@ def test_set_primary_bind_time_shifts_elapsed_and_leaves_press(storage, clock):
     assert row["t_press_wall"] == 1000.0
     # Re-affirming the same frame does not move the time.
     assert storage.set_primary(cap, b["id"]) == pytest.approx(5.066)
+
+
+def test_set_primary_refuses_frame_outside_window(storage, clock):
+    rid = _make_race(storage, window_before_ms=500, window_after_ms=500)
+    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 5.0, 0.0,
+                                 target_ms=5000)
+    inside, outside = storage.insert_frames([
+        (rid, 4900, 1004.9, "races/r/a.jpg"),
+        (rid, 9000, 1009.0, "races/r/b.jpg"),
+    ])
+    assert storage.set_primary(cap, inside["id"], bind_time=False) == 5.0
+    before = storage.capture(cap)
+
+    # A same-race frame outside [4500, 5500] is refused with no write at all.
+    assert storage.set_primary(cap, outside["id"]) is None
+    after = storage.capture(cap)
+    for col in ("primary_frame_id", "primary_image", "elapsed_s",
+                "elapsed_source", "updated_at"):
+        assert after[col] == before[col], col
+
+
+def test_set_primary_accepts_frame_on_window_edge(storage, clock):
+    rid = _make_race(storage, window_before_ms=500, window_after_ms=500)
+    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 5.0, 0.0,
+                                 target_ms=5000)
+    before_edge, after_edge, past_after = storage.insert_frames([
+        (rid, 4500, 1004.5, "races/r/before.jpg"),
+        (rid, 5500, 1005.5, "races/r/after.jpg"),
+        (rid, 5501, 1005.501, "races/r/past.jpg"),
+    ])
+    # Both window edges are inclusive; one ms past the after edge is refused.
+    assert storage.set_primary(cap, before_edge["id"], bind_time=False) == 5.0
+    assert storage.set_primary(cap, after_edge["id"], bind_time=False) == 5.0
+    assert storage.capture(cap)["primary_frame_id"] == after_edge["id"]
+    assert storage.set_primary(cap, past_after["id"], bind_time=False) is None
+    assert storage.capture(cap)["primary_frame_id"] == after_edge["id"]
+
+
+def test_set_primary_null_target_skips_window_check(storage, clock):
+    # A pre-frame-store row has no target_ms, so no window is known and only
+    # the same-race check applies (old data stays editable).
+    rid = _make_race(storage, window_before_ms=500, window_after_ms=500)
+    cap = storage.insert_capture(rid, 1, 1000.0, 1000.0, 5.0, 0.0)
+    far = storage.insert_frames([(rid, 9000, 1009.0, "races/r/far.jpg")])[0]
+    assert storage.set_primary(cap, far["id"], bind_time=False) == 5.0
+    assert storage.capture(cap)["primary_frame_id"] == far["id"]
 
 
 def test_set_crossing_time_marks_manual_and_leaves_press(storage, clock):

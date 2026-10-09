@@ -666,11 +666,12 @@ class Storage:
         the selected frame carries the time. ``bind_time=False`` (the automatic
         nearest-frame pick and the "time from press" revert) only moves the
         primary. Returns the resulting ``elapsed_s``, or None for an unknown
-        capture or a frame from another race."""
+        capture, a frame from another race, or a frame outside the capture's
+        selection window (``target_ms ± window_*_ms``)."""
         with self._lock:
             cap = self._conn.execute(
-                "SELECT race_id, elapsed_s, primary_frame_id FROM capture "
-                "WHERE id=?", (capture_id,)).fetchone()
+                "SELECT race_id, elapsed_s, primary_frame_id, target_ms "
+                "FROM capture WHERE id=?", (capture_id,)).fetchone()
             if cap is None:
                 return None
             frame = self._conn.execute(
@@ -678,6 +679,20 @@ class Storage:
                 (frame_id,)).fetchone()
             if frame is None or frame["race_id"] != cap["race_id"]:
                 return None
+            if cap["target_ms"] is not None:
+                # The primary must lie inside the capture's selection window;
+                # a frame from elsewhere in the race would misrepresent the
+                # time. A NULL target_ms (pre-frame-store migration) has no
+                # window, so only the same-race check above applies.
+                race = self._conn.execute(
+                    "SELECT window_before_ms, window_after_ms FROM race "
+                    "WHERE id=?", (cap["race_id"],)).fetchone()
+                if (race is not None and race["window_before_ms"] is not None
+                        and race["window_after_ms"] is not None
+                        and not (cap["target_ms"] - race["window_before_ms"]
+                                 <= frame["t_ms"]
+                                 <= cap["target_ms"] + race["window_after_ms"])):
+                    return None
             elapsed = cap["elapsed_s"]
             source = None
             if bind_time and cap["primary_frame_id"] is not None:

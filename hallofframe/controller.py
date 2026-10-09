@@ -603,8 +603,9 @@ class CaptureController:
         primary_image path relative to ``data_root`` (or None).
         """
         if self.storage.set_primary(capture_id, frame_id) is None:
-            # Unknown capture, or a frame belonging to another race: nothing was
-            # written, so do not report the old path as a successful promotion.
+            # Unknown capture, a frame from another race, or a frame outside the
+            # capture's window: nothing was written, so do not report the old
+            # path as a successful promotion.
             return None
         cap = self.storage.capture(capture_id)
         path = cap["primary_image"] if cap else None
