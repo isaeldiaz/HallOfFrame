@@ -121,6 +121,18 @@ is monotonic-based, but keeps `t_wall` records clean).
 - Nodes are `root:input`, mode `crw-rw----`.
 - A USB footswitch/keypad will enumerate as an additional event device — the settings
   dialog (§6.4) will list them.
+- Internal keyboard identity (`/proc/bus/input/devices`, 2026-10-09) — this is what the
+  scratchpad arm gate (§13.3.3, `trigger.is_internal_keyboard`) must recognise:
+  ```
+  N: Name="AT Translated Set 2 keyboard"
+  P: Phys=isa0060/serio0/input0
+  S: Sysfs=/devices/platform/i8042/serio0/input/input3
+  H: Handlers=sysrq kbd event3 leds
+  ```
+  Other `kbd` handlers on the box (`Sleep Button`, `Power Button`, `ThinkPad Extra
+  Buttons` on `thinkpad_acpi/input0`, `Video Bus`) are not typing keyboards. The
+  `SynPS/2 Synaptics TouchPad` shares the `isa0060/` phys prefix (`serio1`) but is
+  never a trigger candidate. External USB devices report a `usb-…` phys.
 
 ## 3. Operating system and session
 
