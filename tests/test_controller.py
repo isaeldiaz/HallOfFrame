@@ -320,6 +320,29 @@ class TestController(Base):
             round((row["elapsed_s"] - row["delta_used"]) * 1000))
         self.assertEqual(self.storage.frames_for_capture(cap_id), [])
 
+    def test_set_primary_refuses_stale_frame_after_time_edit(self):
+        # After the time moves off the frames, the old window's frame must not
+        # be re-attachable; the crossing stays missing.
+        self.controller.window_before_s = 0.5
+        self.controller.window_after_s = 0.5
+        self.seed_buffer(self.buffer)
+        t0 = 1000.0
+        race_id = self.controller.start_race(t0, name="Race-T")
+        self.controller.record_crossing(t0 + 5.0)
+        self.settle()
+        cap_id = self.storage.captures_for_race(race_id)[0]["id"]
+        old_frames = self.controller.frames_for_capture(cap_id)
+        self.assertTrue(old_frames)
+        stale = old_frames[0]
+
+        self.assertTrue(self.controller.update_crossing_time(cap_id, 120.0))
+        self.assertEqual(self.storage.capture(cap_id)["image_flag"], "missing")
+
+        self.assertIsNone(self.controller.set_primary(cap_id, stale["id"]))
+        row = self.storage.capture(cap_id)
+        self.assertEqual(row["image_flag"], "missing")
+        self.assertIsNone(row["primary_frame_id"])
+
     def test_scrub_then_reset_restores_the_press_time(self):
         self.controller.window_before_s = 0.5
         self.controller.window_after_s = 0.5
