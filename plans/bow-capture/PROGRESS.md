@@ -5,3 +5,4 @@
 05 108fbd9 10 tests (tests/test_scratchpad_widget.py) 439 passed, 4 deselected OK
 06 d3a0ae4 6 tests (tests/test_race_screen_scratch.py) 445 passed, 4 deselected OK
 07 8c8ab2d 9 tests (tests/test_main_window_scratch.py) 454 passed, 4 deselected OK
+08 4513683 0 tests (docs) 454 passed, 4 deselected OK
