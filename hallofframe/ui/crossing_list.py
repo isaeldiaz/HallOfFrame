@@ -208,6 +208,15 @@ class _Row(QWidget):
                 f" font-weight:500; color:{styles.TEXT_PRIMARY};")
             self.lay.addWidget(self.time_lbl)
 
+            self.bow_lbl = QLabel(data.get("bow") or "")
+            self.bow_lbl.setProperty("mono", True)
+            self.bow_lbl.setStyleSheet(
+                f"font-family:'{styles.FONT_MONO}'; font-size:30px;"
+                f" color:{styles.TEXT_PRIMARY};")
+            self.bow_lbl.setFixedWidth(90)
+            self.bow_lbl.setAlignment(Qt.AlignCenter)
+            self.lay.addWidget(self.bow_lbl)
+
         self.src_lbl = QLabel("")
         self.src_lbl.setProperty("mono", True)
         self.src_lbl.setStyleSheet(
@@ -256,6 +265,8 @@ class _Row(QWidget):
             ws.append(self.time_lbl)
         if hasattr(self, "bow_edit"):
             ws.append(self.bow_edit)
+        if hasattr(self, "bow_lbl"):
+            ws.append(self.bow_lbl)
         return ws
 
     def apply_deleted_style(self) -> None:
@@ -291,6 +302,14 @@ class _Row(QWidget):
         """Mark which datum produced the row's time (press / frame / manual)."""
         self.src_lbl.setText(source_suffix(source))
         self.src_lbl.setToolTip(source_tip(source))
+
+    def set_bow(self, text: str | None) -> None:
+        """Update the row's bow number (label or edit field)."""
+        if self.editable:
+            if not self.bow_edit.hasFocus():
+                self.bow_edit.setText(text or "")
+        else:
+            self.bow_lbl.setText(text or "")
 
     def set_highlight(self, on: bool) -> None:
         border = styles.BLUE if on else self._base_border
@@ -423,6 +442,17 @@ class CrossingList(QWidget):
         row = self._rows.get(sequence)
         if row is not None:
             row.set_flag(image_flag, suspect)
+
+    def refresh_bow(self, sequence: int, text: str | None) -> None:
+        """Update one row's bow number (live capture flow)."""
+        row = self._rows.get(sequence)
+        if row is not None:
+            row.set_bow(text)
+
+    def refresh_bows(self, bows: dict[int, str | None]) -> None:
+        """Update the bow number of every known row in *bows*."""
+        for sequence, text in bows.items():
+            self.refresh_bow(sequence, text)
 
     def focus_bow(self, sequence: int) -> None:
         edit = self._edits.get(sequence)

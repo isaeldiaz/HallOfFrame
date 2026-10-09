@@ -176,9 +176,16 @@ class RaceScreen(QWidget):
         root.addWidget(left, 1)
 
         # --- right column ---
+        self._scratchpad = None
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(0)
         self.log = CrossingList(editable=False)
         self.log.setFixedWidth(660)
-        root.addWidget(self.log)
+        rv.addWidget(self.log, 1)
+        self._right_lay = rv
+        root.addWidget(right)
 
         self._clock_timer = QTimer(self)
         self._clock_timer.timeout.connect(self._tick)
@@ -214,6 +221,24 @@ class RaceScreen(QWidget):
         if position is not None:
             self.last_capture.set_capture(data["sequence"], position,
                                           data["elapsed_s"])
+        if self._running:
+            self.focus_scratchpad()
+
+    def set_bows(self, bows: dict) -> None:
+        """Push live bow numbers into the read-only crossing list."""
+        self.log.refresh_bows(bows)
+
+    def set_scratchpad(self, widget: QWidget) -> None:
+        """Host the scratchpad under the crossing list (called at most once)."""
+        if self._scratchpad is not None:
+            return
+        self._scratchpad = widget
+        self._right_lay.addWidget(widget)
+
+    def focus_scratchpad(self) -> None:
+        """Return focus to the scratchpad field, when one is hosted."""
+        if self._scratchpad is not None:
+            self._scratchpad.focus_field()
 
     def update_image(self, sequence: int, path: str) -> None:
         self.log.update_thumb(sequence, path)
