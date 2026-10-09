@@ -32,7 +32,7 @@ from ..framebuffer import FrameBuffer
 from ..roster import Roster, format_display, race_key, recorded_keys
 from ..session import (KEYBAR_NOTE, KEYMAP, Phase, Session, SessionError,
                        derive_state)
-from ..ui import styles
+from ..ui import images, styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
 from ..ui.race_screen import RaceScreen
@@ -179,7 +179,8 @@ class MainWindow(QMainWindow):
         self.ready.race_selected.connect(self._on_race_selected)
         self.ready.add_race_clicked.connect(self.roster_view.open_add_race)
         self.ready.skip_clicked.connect(self.roster_view.toggle_skip)
-        self.ready.set_finish_line(float(self.config.section("ui")["finish_line_x"]))
+        self.ready.roi_changed.connect(self._roi_changed)
+        self._restore_ui_settings()
         self._set_trigger_label()
 
         self._connect_controller()
@@ -205,6 +206,38 @@ class MainWindow(QMainWindow):
             self.on_race_ended(payload["race_id"])
         elif kind == "warning":
             self._show_toast(payload["message"])
+
+    def _restore_ui_settings(self) -> None:
+        """Restore the persisted ROI and finish line (spec §13.3).
+
+        Both are global UI settings in the ``meta`` table; the finish line
+        falls back to ``[ui] finish_line_x`` in config.toml on a fresh DB."""
+        storage = self.controller.storage
+        try:
+            raw = storage.get_setting("ui.roi")
+        except Exception:
+            raw = None
+        self.ready.set_roi(self._parse_roi(raw))
+        try:
+            fl = storage.get_setting("ui.finish_line_x")
+        except Exception:
+            fl = None
+        if fl is None:
+            fl = self.config.section("ui")["finish_line_x"]
+        try:
+            self.ready.set_finish_line(float(fl))
+        except (TypeError, ValueError):
+            self.ready.set_finish_line(0.5)
+
+    @staticmethod
+    def _parse_roi(text):
+        if not text:
+            return None
+        try:
+            x, y, w, h = (float(v) for v in str(text).split(","))
+        except (TypeError, ValueError):
+            return None
+        return (x, y, w, h)
 
     def _set_trigger_label(self) -> None:
         trig = self.config.section("trigger")
@@ -767,6 +800,9 @@ class MainWindow(QMainWindow):
         if self.about.isVisible():
             self.about.close_about()
             return
+        if self.ready.preview.is_zoom_draw():
+            self.ready.preview.cancel_zoom_draw()
+            return
         if self.ready._filter_active:
             self.ready.clear_filter()
             return
@@ -781,7 +817,32 @@ class MainWindow(QMainWindow):
         # No fallback: Esc never quits the application. Only Ctrl+Q does.
 
     def _finish_line_changed(self, x: float) -> None:
-        pass  # value is displayed in ReadyScreen; persistence not required
+        # Persist to the meta table (spec §13.3); no _touch, so the web ETag
+        # does not churn for a cosmetic setting.
+        self.controller.storage.set_setting("ui.finish_line_x", f"{x:.4f}")
+
+    def _roi_changed(self, roi) -> None:
+        """Persist the zoom ROI; display-only, so no results timestamp moves."""
+        storage = self.controller.storage
+        if roi is None:
+            storage.set_setting("ui.roi", None)
+        else:
+            storage.set_setting("ui.roi", ",".join(f"{v:.4f}" for v in roi))
+        # A zoom change is only editable in READY/STREAM_DOWN, where the race
+        # and review screens are not visible; the next show re-decodes through
+        # load_view. A repaint is enough to keep anything already on screen
+        # from showing a stale crop.
+        self.recording.update()
+        if self._review_screen is not None:
+            self._review_screen.update()
+
+    def _zoom_draw(self) -> None:
+        if self._last_state in (AppState.READY, AppState.STREAM_DOWN):
+            self.ready.begin_zoom_draw()
+
+    def _zoom_reset(self) -> None:
+        if self._last_state in (AppState.READY, AppState.STREAM_DOWN):
+            self.ready.reset_zoom()
 
     # -------------------------------------------------------------------- toast
     def _show_toast(self, msg: str, timeout_ms: int = 6000) -> None:

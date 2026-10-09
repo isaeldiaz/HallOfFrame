@@ -101,6 +101,7 @@ class _ForegroundDelegate(QStyledItemDelegate):
 
 class ReadyScreen(QWidget):
     finish_line_changed = Signal(float)
+    roi_changed = Signal(object)  # tuple | None (spec §13.3)
     race_selected = Signal(object)  # the selected _Row
     add_race_clicked = Signal()
     skip_clicked = Signal()
@@ -142,6 +143,10 @@ class ReadyScreen(QWidget):
             " padding:5px 12px;")
         header.addWidget(self.lag_chip)
         header.addStretch(1)
+        self.zoom_label = QLabel("Zoom 100 %")
+        self.zoom_label.setStyleSheet(
+            f"color:{styles.TEXT_SECONDARY}; font-size:15px;")
+        header.addWidget(self.zoom_label)
         self.fl_label = QLabel("")
         self.fl_label.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:15px;")
         header.addWidget(self.fl_label)
@@ -157,6 +162,7 @@ class ReadyScreen(QWidget):
 
         self.preview = PreviewWidget(buffer)
         self.preview.finish_line_moved.connect(self._on_line_moved)
+        self.preview.roi_changed.connect(self._on_roi_changed)
         lv.addWidget(self.preview, 1)
         root.addWidget(left, 1)
 
@@ -184,6 +190,29 @@ class ReadyScreen(QWidget):
     def _on_line_moved(self, x: float) -> None:
         self.set_finish_line(x)
         self.finish_line_changed.emit(x)
+
+    # --- zoom / ROI (spec §13.3) ------------------------------------------
+    def _on_roi_changed(self, roi) -> None:
+        self._update_zoom_label(roi)
+        self.roi_changed.emit(roi)
+
+    def _update_zoom_label(self, roi) -> None:
+        if roi is None:
+            self.zoom_label.setText("Zoom 100 %")
+            return
+        pct = int(round(roi[2] * 100))
+        self.zoom_label.setText(f"Zoom {pct} % · ({roi[0]:.2f},{roi[1]:.2f})")
+
+    def set_roi(self, roi) -> None:
+        """Restore a persisted ROI at startup (no signal)."""
+        self.preview.set_roi(roi)
+        self._update_zoom_label(roi)
+
+    def begin_zoom_draw(self) -> None:
+        self.preview.begin_zoom_draw()
+
+    def reset_zoom(self) -> None:
+        self.preview.reset_zoom()
 
     # --- next race picker -------------------------------------------------
     def _next_race_block(self) -> QVBoxLayout:
