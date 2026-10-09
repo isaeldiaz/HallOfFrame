@@ -196,6 +196,7 @@ Routes:
 | `/race/<id>` | One race — a card per crossing with its captured frame, fastest to slowest, plus a **Copy as Excel** button |
 | `/excel/<id>.xls` | That race as an Excel file (HTML table — Open in Excel to keep the column layout; the same layout the review window copies to clipboard) |
 | `/img/<relpath>` | A captured frame (used by the pages above) |
+| `/thumb/<relpath>` | A cached ≤ `thumb_width`-px JPEG thumbnail of a frame (loaded on request by the race page) |
 
 Configure it in `<data_root>/config.toml` under `[web]`:
 
@@ -204,6 +205,9 @@ Configure it in `<data_root>/config.toml` under `[web]`:
 enabled = true
 host = "127.0.0.1"   # localhost only; set to "0.0.0.0" to expose on the LAN
 port = 8080
+thumb_width = 480    # deferred-photo thumbnail width in px
+thumb_quality = 75   # JPEG quality for the generated thumbnails
+cache_dir = "web-cache"  # thumbnail cache under data_root (absolute allowed)
 ```
 
 Point a browser at `http://<host>:<port>/`. The server reads the same SQLite
@@ -211,6 +215,18 @@ database the app writes (WAL allows concurrent readers), so races appear as they
 are recorded — just refresh. The event name (`[paths] event_name`) is shown in
 the page header, and images are served from the `races/` folder inside the data
 root. Set `enabled = false` to make the server refuse to start.
+
+**Data usage.** A race page is text-only until the viewer presses **Show
+photos** (remembered per browser in `localStorage`): each card then loads a
+server-generated thumbnail (≤ `thumb_width` px, ~15–25 KB) from `/thumb/`, never
+the full frame. Clicking a card opens an in-page viewer (arrows / swipe /
+`Esc`, and a **Full size** button that fetches the `/img/` original only for the
+frame on screen). **Play** steps through the crossing photos in finish order
+using the same thumbnails, with an interval selector and a Loop toggle. The web
+process makes and caches the thumbnails itself under
+`<data_root>/<cache_dir>/thumbs/` — no writes to the app's database — so viewing
+never perturbs the timing thread. The index and the offline `export_<stamp>.html`
+are unchanged.
 
 ## Brand
 

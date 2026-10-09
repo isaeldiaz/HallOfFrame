@@ -58,8 +58,10 @@ hallofframe/
   web.py             SEPARATE-PROCESS HTTP results server (own read-only SQLite
                      connection; never touches the app's locked Storage). Live
                      race pages with per-crossing frames + per-race "Copy as
-                     Excel" (.xls); "Results updated" times, ETag/304 and lazy
-                     images. Run: python -m hallofframe.web --config PATH.
+                     Excel" (.xls); "Results updated" times, ETag/304 and
+                     deferred photos (`/thumb/` cached thumbnails, `web-cache/`)
+                     with an in-page viewer and play-sequence player. Run:
+                     python -m hallofframe.web --config PATH.
   config.py          config.toml load + defaults (never writes the file).
   log.py             Structured JSONL logging.
   calibration.py     Latency calibration helpers plus the single `Calibration`
@@ -71,8 +73,9 @@ hallofframe/
                      race_screen, review_screen, crossing_list, preview_widget,
                      images, calibration_dialog. `ui/state.py` holds only the
                      `AppState` enum. `ui/crossing_list.py` is one `CrossingList`
-                     (fastest-first); `ui/images.load_scaled` is the only image
-                     decoder.
+                     (fastest-first); `ui/images.load_view` is the only image
+                     decoder that honours the view ROI (`load_scaled` remains
+                     for the full-frame calibration dialog).
   tools/ingest_soak.py  Soak-test utility for the ingest path.
   tools/fake_camera.py  MJPEG server over a folder of JPEGs (`--folder --fps
                      --port [--loop] [--counter]`); lets a full race run with no
@@ -250,6 +253,29 @@ If the **same** keycode is listed in both `crossing_keycodes` and
   (`meta.db_updated_at` / per-race `updated_at`). HTML carries an `ETag` and
   answers `304` on a matching `If-None-Match`; `/img/` is immutable-cached and
   race-page images are `loading="lazy"`.
+- **ROI zoom + finish line (2026-10-09).** In READY / STREAM_DOWN, `Z` starts
+  draw-zoom mode (next left-drag draws a rectangle locked to the pixmap aspect
+  and calls `images.set_view_roi`), `Shift+Z` resets to the full frame, `Esc`
+  cancels the draw. The ROI and finish line are global UI settings persisted in
+  the SQLite `meta` table via `Storage.get_setting`/`set_setting` (keys
+  `ui.roi`, `ui.finish_line_x`); these deliberately do **not** call `_touch`,
+  so a cosmetic edit never changes the web ETag. `set_setting` raises
+  `ValueError` for keys not prefixed `ui.`. The finish line is now
+  full-frame image-normalised (not widget-normalised), matching the web
+  renderer; the calibration dialog still shows the full frame (`load_scaled`),
+  every other image view decodes through `load_view`.
+- **Web deferred photos + player (2026-10-09).** Race pages send **no images**
+  by default; each card carries `data-thumb="/thumb/<rel>"` and
+  `data-full="/img/<rel>"`, and the operator presses **Show photos**
+  (remembered in `localStorage`). The web process generates and caches ≤
+  `[web] thumb_width`-px thumbnails itself under `<data_root>/<cache_dir>/thumbs/`
+  (read-only SQLite, no app contention); `/thumb/` is `image/jpeg`, immutable,
+  and folds the width into its ETag. A card opens an in-page viewer overlay
+  (prev/next/Full size/Esc, swipe) and a **Play** button steps through the
+  primaries in finish order using only `/thumb/` requests (interval select +
+  Loop, waits for each image's load). The index and the offline
+  `export_<stamp>.html` are unchanged (goldens enforce it); the race page ships
+  zero static `<img>`.
 - **Review editing (phase 7).** In REVIEW, `Del` soft-deletes the selected
   crossing (row stays, struck through). `U` undoes deletions newest-first
   (multi-level, one press each); `Shift+Del` restores the selected row. `Ins`/

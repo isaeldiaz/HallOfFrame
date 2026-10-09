@@ -1302,7 +1302,10 @@ platform plugin.
   small feature with outsized practical value: it gives the operator a
   consistent visual reference and gives the jury a reference in the saved
   images (the line position is stored in config and can be drawn on exported
-  images).
+  images). The position is stored **full-frame image-normalised** (0..1 across
+  the camera image, not the widget), so it matches the web renderer's 50 % =
+  image centre and stays on the same scene feature when the ROI zoom changes
+  (§13.3).
 - Show the current fps and a connection indicator. If no frame has arrived in
   2 s, turn the indicator red. Do not open a dialog.
 
@@ -1425,6 +1428,9 @@ enabled = true               # optional separate-process results server (§8)
 host = "127.0.0.1"
 port = 8080
 copy_heading = true          # include the Race ID/Heat/Category/Gun block when copying
+thumb_width = 480            # deferred-photo thumbnail width in px (§13.3)
+thumb_quality = 75           # JPEG quality for the generated thumbnails
+cache_dir = "web-cache"      # thumbnail cache, relative to data_root (absolute allowed)
 
 [voice]
 enabled = false              # phase 8 (voice annotation); unused until then
@@ -2132,7 +2138,8 @@ implementation can be planned against the constraints already locked in here.
   arrival is far more precise than a human press (see §6.5). `t_press` stays the
   raw event; "time from press" (`0` in review) restores it.
 
-- **Zoom square / area of interest.** When the app is in the Ready state (no
+- **Zoom square / area of interest (implemented 2026-10-09).** When the app is
+  in the Ready state (no
   armed race), let the operator draw a square on the live preview to define an
   area of interest over the whole camera frame. This ROI is a *display* concern
   only — the stored image file is untouched — and applies everywhere in the main
@@ -2140,6 +2147,14 @@ implementation can be planned against the constraints already locked in here.
   of §7.3). It applies to the **app only**, not the separate web process (§8,
   `web.py`). Must support a reset back to full frame. Because it is display-only
   it must not alter what `framebuffer` stores or what is written to disk.
+  Implemented as a rectangle locked to the live stream's aspect ratio, stored
+  normalised to the full camera frame as `(x,y,w,h)` in `meta['ui.roi']`; the
+  finish line is now full-frame image-normalised in
+  `meta['ui.finish_line_x']` (it was widget-normalised, which was only exact
+  when the pillarbox was symmetric — the web renderer already assumed 50 % =
+  image centre). Both are global settings, restored at startup, and
+  `Z` (draw) / `Shift+Z` (full frame) / `Esc` (cancel) work only in READY /
+  STREAM_DOWN. The calibration dialog keeps showing the full frame.
 
 - **Automatic bow-number capture.** Removes the paper-and-pencil step of
   recording the order in which boat numbers cross. Two candidate mechanisms,
@@ -2191,14 +2206,20 @@ implementation can be planned against the constraints already locked in here.
   transcode need no new install; a local speech model is a new dependency and
   must be weighed against §2.2's start-up and reliability constraints.
 
-- **Play crossing images as a sequence.** The web results pages (§8) currently
+- **Play crossing images as a sequence (implemented 2026-10-09).** The web
+  results pages (§8) currently
   show, for each crossing, its time beside a thumbnail of the saved frame. Add a
   way to play the saved frames back in crossing order as a movie for a better
   appreciation of relative positions. Rendering happens server-side or client-
   side against the already-on-disk per-crossing window frames; it must not
   perturb the app's evdev timing thread (web is a separate process).
+  Implemented client-side in the race-page viewer overlay: one primary image
+  per crossing in finish order (the page's card order), stepped with
+  `setTimeout` using only the cached `/thumb/` images, with an interval select
+  and a Loop toggle; no server-side video, `ffmpeg` or new route.
 
-- **Minimize web data usage.** The results server runs on a metered mobile
+- **Minimize web data usage (implemented 2026-10-09).** The results server runs
+  on a metered mobile
   network for many hours, so data transfer should be minimized. Candidate
   changes, to be considered together with the play-sequence item above:
   - The main page is text-only; images are sent only when explicitly requested.
@@ -2206,6 +2227,12 @@ implementation can be planned against the constraints already locked in here.
     Last-Modified + conditional requests) so only changed records are re-sent.
   This must not add writes on the app's `Storage` — the web process keeps its own
   read-only SQLite connection (§8).
+  Implemented: race pages send no images by default; a `Show photos` button
+  (remembered in `localStorage`) loads server-generated ≤ `[web] thumb_width`-px
+  thumbnails from `/thumb/`, cached by the web process under
+  `<data_root>/<cache_dir>/thumbs/` with no SQLite writes, and `Full size` loads
+  the `/img/` original only on request. The index and the offline export are
+  unchanged.
 
 - **Single image-capture naming from gun start to race end.** *(Implemented
   2026-10-06 — see §6.6, `framestore.py`.)* The old behaviour stored ±N frames

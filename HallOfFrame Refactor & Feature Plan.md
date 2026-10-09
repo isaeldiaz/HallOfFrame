@@ -419,3 +419,40 @@ Each phase is one pull request. Phases 0–4 may be reviewed by diffing behaviou
 - [ ] Phase 5: when migrating an existing database, should the old `captures/*.jpg` files be moved into `frames/` or left in place? *Default: left in place; the `frame.path` column points at them.*
 - [ ] Phase 6: should per-race "updated" also appear on the exported standalone HTML, or only on the live server? *Default: both.*
 - [ ] Phase 7: should a clone inherit the parent's bow number? *Default: no; a clone exists to be edited.*
+
+## Phase 9 — §13.3 nice-to-haves (ROI, web thumbnails, player)
+
+Built 2026-10-09 as three packages on two branches (`feat/roi-zoom`, then
+`feat/web-thumbs-player`), merged A → B+C. The exclusive file-ownership table
+kept the branches disjoint; nothing under `hallofframe/{trigger,mjpeg,
+framebuffer,controller,framestore}.py` is in the diff. The index and the
+offline export stayed byte-identical (goldens enforce it).
+
+- **Package A — Zoom / area of interest (app only).** `Storage.get_setting`/
+  `set_setting` read/write `ui.`-prefixed keys in `meta` without `_touch`, so a
+  cosmetic setting never churns the web ETag. `images.load_view` applies a
+  process-wide ROI via a DCT-domain `setClipRect` + `setScaledSize` crop (with a
+  full-decode fallback); `PreviewWidget` gains draw-zoom mode and a full-frame
+  image-normalised finish line; `Z`/`Shift+Z` are READY-only keymap entries.
+  *Done when:* `grep -n "load_scaled(" hallofframe/ui/*.py` lists only
+  `images.py` and `calibration_dialog.py`; `meta` shows `ui.roi` and
+  `ui.finish_line_x` after a setup session with `db_updated_at` unchanged;
+  `Z` does nothing in ARMED/RECORDING/REVIEW.
+- **Package B — Minimize web data usage.** `[web]` gains `thumb_width`/
+  `thumb_quality`/`cache_dir`; the web process builds and caches thumbnails
+  itself under `<data_root>/web-cache/thumbs/<width>/` (`ThumbCache`, no SQLite
+  writes) and serves them from `/thumb/` with the width folded into the ETag.
+  Race pages send no images by default: cards carry `data-thumb`/`data-full`
+  and a `Show photos` button (state in `localStorage`); the static page has zero
+  `<img>`.
+  *Done when:* `curl -s .../race/<id> | grep -c '<img'` prints `0`; `/thumb/`
+  answers `image/jpeg` ≤ 480 px with `Cache-Control: … immutable`; the index and
+  `export_<stamp>.html` are unchanged.
+- **Package C — Play crossing images as a sequence.** The B viewer overlay gains
+  a `Play`/`Pause` button, interval `<select>` and `Loop`, plus a header `Play`
+  that opens the overlay at card 1; it steps one primary per crossing in finish
+  order (`data-pos` 1..n, fastest first) using only `/thumb/` requests and waits
+  for each image's `load` before scheduling the next. No server-side video, no
+  new route.
+  *Done when:* the player steps through primaries in finish order using only
+  `/thumb/` requests.
