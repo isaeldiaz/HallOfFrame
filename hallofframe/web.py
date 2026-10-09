@@ -161,20 +161,30 @@ class ThumbCache:
             return None
         try:
             mtime = src.stat().st_mtime
-        except OSError:
+            # Key the cache on the CANONICAL source path, never on the raw
+            # request path: a crafted rel (absolute or with `..` segments) must
+            # not be able to write outside the cache directory or make /thumb/
+            # serve the full-resolution original. The canonical path keeps the
+            # stored `races/...` layout under <cache_dir>/thumbs/<width>/.
+            key = str(src.resolve().relative_to(Path(data_root).resolve()))
+        except (OSError, ValueError):
             return None
-        cached = self._mem.get(rel)
+        cached = self._mem.get(key)
         if cached is not None and cached[1] == mtime:
             return cached
-        with self._lock_for(rel):
-            cached = self._mem.get(rel)
+        with self._lock_for(key):
+            cached = self._mem.get(key)
             if cached is not None and cached[1] == mtime:
                 return cached
-            data = self._read_cache(rel)
+            data = self._read_cache(key)
             if data is None:
-                data = thumbnail_bytes(src, self.width, self.quality)
-                self._write_cache(rel, data)
-            self._mem[rel] = (data, mtime)
+                try:
+                    data = thumbnail_bytes(src, self.width, self.quality)
+                except Exception:
+                    # An unreadable/corrupt frame is a 404, not a crash.
+                    return None
+                self._write_cache(key, data)
+            self._mem[key] = (data, mtime)
             return (data, mtime)
 
     def _read_cache(self, rel: str) -> bytes | None:
