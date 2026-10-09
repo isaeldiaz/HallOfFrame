@@ -32,7 +32,7 @@ from ..framebuffer import FrameBuffer
 from ..roster import Roster, format_display, race_key, recorded_keys
 from ..session import (KEYBAR_NOTE, KEYMAP, Phase, Session, SessionError,
                        derive_state)
-from ..ui import images, styles
+from ..ui import styles
 from ..ui.calibration_dialog import CalibrationDialog
 from ..ui.misc_screens import ArmedScreen, RaceOverScreen
 from ..ui.race_screen import RaceScreen
@@ -426,6 +426,11 @@ class MainWindow(QMainWindow):
 
     def _apply_state(self, state: AppState) -> None:
         self._last_state = state
+        # Draw-zoom is a READY-only gesture. If the operator armed/started while
+        # it was pending, drop it so the next Esc is not swallowed by it.
+        if (state not in (AppState.READY, AppState.STREAM_DOWN)
+                and self.ready.preview.is_zoom_draw()):
+            self.ready.preview.cancel_zoom_draw()
         # A state transition means the previous warning's context is gone:
         # drop any sticky toast (e.g. the persistent "Armed…" hint, calibration
         # mismatch) so it can't linger past when it stopped being relevant.

@@ -80,13 +80,13 @@ class PreviewWidget(QWidget):
         """Restore a ROI at startup (no ``roi_changed`` signal)."""
         set_view_roi(roi)
         self._roi = view_roi()
-        self.update()
+        self._reload_frame()
 
     def reset_zoom(self) -> None:
         set_view_roi(None)
         self._roi = None
+        self._reload_frame()
         self.roi_changed.emit(None)
-        self.update()
 
     def begin_zoom_draw(self) -> None:
         self._draw_zoom = True
@@ -122,6 +122,15 @@ class PreviewWidget(QWidget):
         self._img_rect = self._img_geometry()
         self.update()
 
+    def _reload_frame(self) -> None:
+        """Force the next refresh to re-decode through the current ROI.
+
+        ``refresh`` early-returns on an unchanged JPEG, so a zoom/finish-line
+        change would otherwise not apply until a new frame arrives (never, on a
+        frozen test stream)."""
+        self._last_frame = None
+        self.refresh()
+
     def _img_geometry(self) -> QRect:
         if self._pm is None:
             return QRect()
@@ -146,7 +155,8 @@ class PreviewWidget(QWidget):
         roi = self._roi or (0.0, 0.0, 1.0, 1.0)
         fx = self._img_rect.left() + (
             (self.finish_line_x - roi[0]) / roi[2]) * self._img_rect.width()
-        if self._img_rect.left() <= fx <= self._img_rect.right():
+        if (self._img_rect.left() <= fx
+                <= self._img_rect.left() + self._img_rect.width()):
             p.setPen(QPen(QColor(255, 60, 60), 2))
             p.drawLine(int(fx), self._img_rect.top(),
                        int(fx), self._img_rect.bottom())
@@ -235,6 +245,7 @@ class PreviewWidget(QWidget):
             set_view_roi((roi[0] + rx * roi[2], roi[1] + ry * roi[3],
                           rw * roi[2], rh * roi[3]))
             self._roi = view_roi()
+            self._reload_frame()
             self.roi_changed.emit(self._roi)
         self.update()
 

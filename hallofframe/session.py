@@ -153,7 +153,7 @@ _READY_KEYS = [
     _k("Shift+↑", "Move up", "_move_up"),
     _k("Shift+↓", "Move down", "_move_down"),
     _k("Z", "Zoom: draw area", "_zoom_draw", typable=True),
-    _k("Shift+Z", "Zoom: full frame", "_zoom_reset"),
+    _k("Shift+Z", "Zoom: full frame", "_zoom_reset", typable=True),
     _k("D", "Save DB HTML", "_export_html", typable=True),
     _k("Ctrl+Q", "Quit", "_quit"),
     # Active but uncapped in the key bar (kept from the old global shortcuts).
