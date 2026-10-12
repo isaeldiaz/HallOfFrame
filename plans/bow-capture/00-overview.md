@@ -29,6 +29,7 @@ One sheet = one agent run. Do them in numeric order; each assumes the previous o
 | 10 | audio: recorder thread, arecord source, aplay | — | audio.py, tests/test_audio.py |
 | 11 | audio: controller + build_core | tests/test_controller_audio.py | controller.py, main.py |
 | 12 | audio: review play (P) | tests/test_review_audio.py | ui/review_screen.py, session.py, ui/main_window.py, tests/test_session.py |
+| 12b | audio: envelope view + press mark in review | ui/audio_view.py, tests/test_audio_view.py | audio.py, ui/review_screen.py, tests/test_audio.py, tests/test_review_audio.py |
 | 13 | docs R2 + INSTALL | — | INSTALL.md, hallofframe.example.toml, spec, AGENTS.md, TESTING.md |
 | 14 | asr: config keys + Norwegian number words | asr.py, tests/test_asr.py | config.py, hallofframe.example.toml, tests/test_config.py |
 | 15 | asr: whisper JSON parse + utterance grouping | — | asr.py, tests/test_asr.py |
@@ -43,7 +44,7 @@ One sheet = one agent run. Do them in numeric order; each assumes the previous o
 | Release | Steps | Gate before next release |
 |---|---|---|
 | R1 Scratchpad | 01–08 | full suite green; bench replay of the worked example (sheet 08) |
-| R2 Audio replay | 09–13 | full suite green; one real recording plays in review on the laptop |
+| R2 Audio replay | 09–12, 12b, 13 | full suite green; one real recording plays in review on the laptop |
 | R3 ASR suggestion | 14–20 | full suite green; one real race transcribed on the laptop (INSTALL §2b check) |
 
 Spec §13.3.4 says R2/R3 wait for a real regatta with R1. Sheets are written for all three now; the coordinator decides when to hand out 09+.
