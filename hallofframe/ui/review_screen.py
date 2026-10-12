@@ -783,19 +783,33 @@ class ReviewScreen(QWidget):
         if elapsed is None:
             self.notify.emit("No audio recording for this race")
             return
+        try:
+            total_s = wav_duration_s(self._audio_path)
+        except Exception:
+            self.notify.emit("No audio recording for this race")
+            return
         bounds = clip_bounds(elapsed, 0.0, self._audio_offset,
                              float(self._voice["play_before_s"]),
                              float(self._voice["play_after_s"]),
-                             wav_duration_s(self._audio_path))
+                             total_s)
         if bounds is None:
             self.notify.emit("Crossing is outside the recording")
             return
-        pcm = read_clip(self._audio_path, *bounds)
-        if self._player is not None and self._player.poll() is None:
-            self._player.kill()
+        try:
+            pcm = read_clip(self._audio_path, *bounds)
+        except Exception:
+            self.notify.emit("No audio recording for this race")
+            return
+        self.stop_playback()
         self._player = play_clip(pcm)
         if self._player is None:
             self.notify.emit("aplay not available — install alsa-utils")
+
+    def stop_playback(self) -> None:
+        """Stop any clip still playing (called when review is left)."""
+        if self._player is not None and self._player.poll() is None:
+            self._player.kill()
+        self._player = None
 
     def _select_step(self, delta: int) -> None:
         """Move the selection from a bow field (↑/↓), landing in the new bow."""

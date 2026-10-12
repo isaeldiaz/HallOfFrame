@@ -110,9 +110,10 @@ cache_dir = "web-cache"      # thumbnail cache, relative to data_root (absolute 
 enabled = true               # §13.3 live bow-number scratchpad; needs an external trigger device
 
 [voice]
-# Phase 8 (voice annotation) — optional, off by default. Present now so the
-# config format is stable; the keys are unused until phase 8 lands (plan 8.1).
-enabled = false
+# Voice annotation — optional, off by default. R2 implements continuous
+# per-race recording + review playback (spec §13.3.4); the ASR keys
+# (transcribe*/model) are release 3 and unused until then.
+enabled = true
 input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
 play_before_s = 3.0          # review playback window, seconds before the crossing
 play_after_s = 5.0           # ... and after

@@ -84,6 +84,37 @@ def test_audio_failure_is_a_warning(audio_env):
     assert len(env.storage.captures_for_race(rid)) == 1
 
 
+class DummyRecorder:
+    def __init__(self):
+        self.on_ready = None
+        self.on_error = None
+        self.recording = False
+
+    def start(self, race_id, path):
+        self.recording = True
+
+    def stop(self, timeout=1.0):
+        self.recording = False
+
+    def close(self):
+        pass
+
+
+def test_audio_offset_uses_the_races_own_t0(audio_env):
+    # A delayed on_ready from race A must use A's t0, not the t0 of race B that
+    # has since started (regression: a single global _audio_t0).
+    env = audio_env
+    env.controller.attach_recorder(DummyRecorder())
+    rid_a = env.controller.start_race(1000.0, name="A")
+    env.controller.end_race()
+    env.controller.start_race(2000.0, name="B")
+    path = env.data_root / "races" / "late" / "audio.wav"
+    env.controller._audio_ready(rid_a, path, 1000.2)
+    env.controller._queue.join()
+    row = env.storage.get_race(rid_a)
+    assert abs(row["audio_t0_offset_s"] - 0.2) < 1e-6
+
+
 def test_no_recorder_no_op(audio_env):
     env = audio_env
     rid = env.controller.start_race(1000.0, name="Race")
@@ -102,6 +133,45 @@ def test_resume_does_not_record(audio_env):
     rec = attach(env, [b"\x01\x00" * 1600] * 3)
     env.controller.resume_race(rid)
     assert rec.recording is False
+
+
+class _StubSignal:
+    def __init__(self):
+        self.calls = []
+
+    def emit(self, *args):
+        self.calls.append(args)
+
+
+class _StubBridge:
+    def __init__(self):
+        self.capture = _StubSignal()
+        self.capture_deleted = _StubSignal()
+        self.image_ready = _StubSignal()
+        self.scratch_changed = _StubSignal()
+        self.warning = _StubSignal()
+
+
+class _StubWin:
+    def __init__(self):
+        self.ended = []
+
+    def on_race_ended(self, race_id):
+        self.ended.append(race_id)
+
+
+def test_warning_routes_through_bridge():
+    pytest.importorskip("PySide6")
+    from hallofframe.main import route_controller_event
+
+    bridge = _StubBridge()
+    win = _StubWin()
+    route_controller_event(bridge, win, "warning", {"message": "audio: boom"})
+    assert bridge.warning.calls == [("audio: boom",)]
+    route_controller_event(bridge, win, "race_ended", {"race_id": 7})
+    assert win.ended == [7]
+    route_controller_event(bridge, win, "capture_added", {"capture": "C"})
+    assert bridge.capture.calls == [("C",)]
 
 
 def test_build_core_attaches_recorder(data_root, config):

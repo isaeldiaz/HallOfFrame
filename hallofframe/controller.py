@@ -89,7 +89,9 @@ class CaptureController:
         self.scratchpad_enabled = bool(config.section("scratchpad")["enabled"])
 
         self.recorder = None
-        self._audio_t0 = None
+        # Per-race gun time, keyed by race_id: a delayed on_ready callback from a
+        # race that already ended must still use that race's t0, not the next one.
+        self._audio_t0: dict[int, float] = {}
 
         # Unbounded on purpose: bounding it would let `record_crossing` drop the
         # primary datum under disk pressure. A human press rate cannot outrun the
@@ -156,9 +158,14 @@ class CaptureController:
         """
         # t_start is estimated from the first block's arrival (±0.2 s with
         # arecord/PipeWire); replay only, never timing data.
-        rel = Path(path).relative_to(self.storage.data_root).as_posix()
-        t0 = self._audio_t0
-        self.enqueue(lambda: self.storage.set_race_audio(race_id, rel, t_start_mono - t0))
+        try:
+            rel = Path(path).relative_to(self.storage.data_root).as_posix()
+            t0 = self._audio_t0.get(race_id)
+            if t0 is None:
+                return
+            self.enqueue(lambda: self.storage.set_race_audio(race_id, rel, t_start_mono - t0))
+        except Exception as exc:
+            self._warn(f"audio: {exc} — race continues without audio")
 
     # --- race lifecycle ---------------------------------------------------
     def start_race(self, t_press: float, name: str = "Race",
@@ -242,7 +249,7 @@ class CaptureController:
         # directory (plan step 5.3). Built here, after t0 and race_dir are set.
         self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
         if self.recorder is not None:
-            self._audio_t0 = self.t0
+            self._audio_t0[race_id] = self.t0
             self.recorder.start(race_id, self.race_dir / AUDIO_FILENAME)
 
         self._emit("race_started", race_id=race_id)

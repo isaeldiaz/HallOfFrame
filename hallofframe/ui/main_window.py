@@ -735,6 +735,8 @@ class MainWindow(QMainWindow):
         self._review_screen.setFocus()
 
     def _close_review(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.stop_playback()
         race_id = self.session.focused_race_id
         if race_id is not None:
             self.controller.storage.mark_race_reviewed(race_id)

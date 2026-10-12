@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS race (
     t_end_monotonic   REAL,
     image_off         INTEGER NOT NULL DEFAULT 0,  -- timing-only race (§6.5)
     reviewed          INTEGER NOT NULL DEFAULT 0,  -- operator closed review (§6.8)
-    audio_path        TEXT,                        -- phase 8, unused
-    audio_t0_offset_s REAL,                        -- phase 8, unused
+    audio_path        TEXT,                        -- §13.3.4 booth audio (R2)
+    audio_t0_offset_s REAL,                        -- §13.3.4 seconds from t0 to first sample
     window_before_ms  INTEGER,                     -- phase 5: copied from config
     window_after_ms   INTEGER,                     -- phase 5: copied from config
     CHECK (start_mode   IN ('direct','radio','external')),
@@ -492,7 +492,7 @@ class Storage:
             self._conn.commit()
 
     def set_race_audio(self, race_id: int, path, offset) -> None:
-        """Attach a race's recorded voice note (phase 8; unused today).
+        """Attach a race's recorded voice note (§13.3.4).
 
         ``path`` is the WAV's path (relative to the data root) and ``offset`` is
         the seconds from ``t0`` to its first sample."""

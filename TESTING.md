@@ -355,10 +355,11 @@ rows 14, 7, 3, blank and counters 3 / 4 red; fix in review.
 
 ### T14 — Audio replay (manual)
 
-**Proves:** spec §13.3.4. Mic on (`[voice] enabled = true`), race, speak at a
-crossing, end. In review press `R`, select the crossing, press `P`.
+**Proves:** spec §13.3.4. Set `[voice] enabled = true` and restart the app; mic
+on, race, speak at a crossing, end. Press `R` on the race-over screen to open
+review, select the crossing, press `P`.
 
-Pass: `races/<id>/audio.wav` exists and
+Pass: `races/<id>_<name>/audio.wav` exists and
 `SELECT audio_path, audio_t0_offset_s FROM race` returns a small positive offset.
 
 ---

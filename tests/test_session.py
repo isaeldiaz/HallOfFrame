@@ -227,7 +227,7 @@ def test_zoom_keys_are_ready_only():
         assert "Shift+Z" not in keys, state
 
 
-def test_review_has_play_cap():
+def test_session_has_play_cap():
     keys = {k.key: k for k in KEYMAP[AppState.REVIEW]}
     assert keys["P"].action == "_review_play"
     assert keys["P"].shortcut is False

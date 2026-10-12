@@ -98,6 +98,7 @@ class AudioRecorder:
         self._capture.start()
 
     def _capture_run(self, race_id: int, path: Path) -> None:
+        src = None
         try:
             src = self._source = self._source_factory()
             src.open()
@@ -105,34 +106,49 @@ class AudioRecorder:
             self._report(f"audio: {exc} — race continues without audio")
             self.recording = False
             return
+        # The capture thread owns the source: it closes it in ``finally`` even if
+        # stop() ran before ``self._source`` was assigned.
         q = self._queue = queue.Queue(maxsize=self._queue_blocks)
         self._writer = threading.Thread(target=self._writer_run, args=(path,),
                                         name="audio-writer", daemon=True)
         self._writer.start()
-        first = src.read()
-        t_start = self._clock() - BLOCK_FRAMES / RATE
-        if self.on_ready is not None:
-            self.on_ready(race_id, path, t_start)
-        q.put_nowait((0, first))
         pending_drops = 0
-        while True:
-            block = src.read()
-            if block == b"" or self._stop.is_set():
-                break
-            try:
-                q.put_nowait((pending_drops, block))
-                pending_drops = 0
-            except queue.Full:
-                pending_drops += 1
-                self.dropped_blocks += 1
-        q.put((pending_drops, b""))
+        try:
+            first = src.read()
+            t_start = self._clock() - BLOCK_FRAMES / RATE
+            if self.on_ready is not None:
+                try:
+                    self.on_ready(race_id, path, t_start)
+                except Exception:
+                    pass
+            q.put_nowait((0, first))
+            while True:
+                block = src.read()
+                if block == b"" or self._stop.is_set():
+                    break
+                try:
+                    q.put_nowait((pending_drops, block))
+                    pending_drops = 0
+                except queue.Full:
+                    pending_drops += 1
+                    self.dropped_blocks += 1
+        finally:
+            # Always deliver the sentinel so the writer can exit; the writer
+            # never dies (it catches Exception), so this blocking put returns.
+            q.put((pending_drops, b""))
+            self.recording = False
+            if src is not None:
+                try:
+                    src.close()
+                except Exception:
+                    pass
 
     def _writer_run(self, path: Path) -> None:
         sink = None
         reported = False
         try:
             sink = self._sink_factory(path)
-        except OSError as exc:
+        except Exception as exc:
             reported = True
             self._report(f"audio: {exc} — race continues without audio")
         try:
@@ -144,7 +160,7 @@ class AudioRecorder:
                             sink.write(b"\0" * BLOCK_BYTES * ndrop)
                         if block:
                             sink.write(block)
-                    except OSError as exc:
+                    except Exception as exc:
                         if not reported:
                             reported = True
                             self._report(f"audio: {exc} — recording incomplete")
@@ -154,23 +170,29 @@ class AudioRecorder:
             if sink is not None:
                 try:
                     sink.close()
-                except OSError:
+                except Exception:
                     pass
 
     def stop(self, timeout: float = 1.0) -> None:
         """Close the source and join capture then writer within a total budget."""
         self._stop.set()
+        self._close_source()
+        deadline = time.monotonic() + timeout
+        for thread in (self._capture, self._writer):
+            if thread is not None and thread.is_alive():
+                thread.join(max(0.0, deadline - time.monotonic()))
+        # Re-close in case the capture thread assigned the source after our first
+        # attempt (close() is idempotent on every Source).
+        self._close_source()
+        self.recording = False
+
+    def _close_source(self) -> None:
         src = self._source
         if src is not None:
             try:
                 src.close()
             except Exception:
                 pass
-        deadline = time.monotonic() + timeout
-        for thread in (self._capture, self._writer):
-            if thread is not None and thread.is_alive():
-                thread.join(max(0.0, deadline - time.monotonic()))
-        self.recording = False
 
     def close(self) -> None:
         self.stop()
@@ -196,6 +218,8 @@ class ArecordSource:
         self._closed = False
 
     def open(self) -> None:
+        if self._proc is not None:
+            self.close()
         self._proc = subprocess.Popen(self._argv, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL)
         self._closed = False
@@ -222,6 +246,10 @@ class ArecordSource:
                 proc.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
         if proc.stdout is not None:
             try:
                 proc.stdout.close()

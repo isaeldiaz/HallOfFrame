@@ -84,12 +84,11 @@ DEFAULTS: dict[str, Any] = {
         "thumb_quality": 75,
         "cache_dir": "web-cache",  # relative to data_root; absolute allowed
     },
-    # Phase 8 (voice annotation) config format, added here so a laptop set up for
-    # the fake camera can later take a microphone without a config-format change
-    # (plan step 7.4/8.1). Unused until phase 8 lands.
+    # Booth audio (§13.3.4). R2 reads enabled/input/play_before_s/play_after_s;
+    # the transcribe*/model keys are release 3 (ASR) and unused until then.
     "voice": {
         "enabled": False,
-        "input": "default",  # PulseAudio/PipeWire source name
+        "input": "default",  # ALSA PCM for arecord -D
         "play_before_s": 3.0,
         "play_after_s": 5.0,
         "transcribe": False,

@@ -100,11 +100,36 @@ class TestReviewAudio(unittest.TestCase):
     def test_second_press_kills_previous(self):
         screen = self.review()
         screen._select(2)
-        player = mock.Mock()
-        player.poll.return_value = None
+        first, second = mock.Mock(), mock.Mock()
+        first.poll.return_value = None
+        second.poll.return_value = None
         with mock.patch("hallofframe.ui.review_screen.play_clip",
-                        return_value=player) as play:
+                        side_effect=[first, second]) as play:
             self.key(Qt.Key_P)
             self.key(Qt.Key_P)
         assert play.call_count == 2
-        player.kill.assert_called_once()
+        first.kill.assert_called_once()
+        second.kill.assert_not_called()
+
+    def test_reconstructed_crossing_notifies(self):
+        self.storage.insert_capture(self.race_id, 4, 4.0, time.time(), 4.0, 0.0,
+                                    target_ms=4000, t0_reconstructed=1)
+        screen = self.review()
+        screen._select(4)
+        notes = []
+        screen.notify.connect(notes.append)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        play.assert_not_called()
+        assert notes == ["No audio for crossings recorded after a restart"]
+
+    def test_crossing_outside_recording_notifies(self):
+        self.storage.set_race_audio(self.race_id, "races/0001_R/audio.wav", 100.0)
+        screen = self.review()
+        screen._select(2)
+        notes = []
+        screen.notify.connect(notes.append)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        play.assert_not_called()
+        assert notes == ["Crossing is outside the recording"]

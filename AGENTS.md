@@ -304,8 +304,8 @@ If the **same** keycode is listed in both `crossing_keycodes` and
 - **Fake camera (phase 7).** `python -m hallofframe.tools.fake_camera --folder
   DIR --fps 30 --port 8081` serves the folder as MJPEG; set `[stream] url` at it
   and `[transport] enabled = false`. `tests/test_e2e.py` (`slow`) drives a full
-  race through it. A `[voice]` block (`enabled = false`) is already in the
-  config format for phase 8.
+  race through it. A `[voice]` block (`enabled = false`) drives the R2
+  record/replay path (§13.3.4); the ASR keys remain release 3.
 - **Refactor note (phase 3).** The plan's target of `ui/main_window.py` under
   350 lines was not reached (it is ~766). Roster rendering was extracted to
   `ui/roster_view.py`; the remaining bulk is the evdev/session orchestration and

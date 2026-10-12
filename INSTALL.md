@@ -506,8 +506,13 @@ V=~/regatta/venv/bin/python
 [ "$(python3 -c 'import sys;print(sys.version_info[:2]>=(3,10) and sys.version_info[:2]<(3,15))')" = True ] \
   && ok "python in PySide6-supported range" || no "python range" "PySide6 needs >=3.10,<3.15"
 [ "$XDG_SESSION_TYPE" = x11 ] && ok "session type x11" || no "session type" "expected x11, got $XDG_SESSION_TYPE"
-for b in iproxy idevice_id ffplay gcc lsusb sqlite3 arecord aplay; do
+for b in iproxy idevice_id ffplay gcc lsusb sqlite3; do
   command -v $b >/dev/null && ok "binary: $b" || no "binary: $b" "apt install (see §2)"
+done
+# Booth audio is optional (§13.3.4), so these are informational, not fatal.
+for b in arecord aplay; do
+  command -v $b >/dev/null && ok "audio binary: $b" \
+    || echo "  audio binary: $b (absent — only needed with [voice] enabled)"
 done
 ls /usr/include/linux/input-event-codes.h >/dev/null 2>&1 \
   && ok "kernel input headers" || no "kernel input headers" "build-essential"

@@ -11,6 +11,11 @@ V=~/regatta/venv/bin/python
 for b in iproxy idevice_id ffplay gcc lsusb sqlite3; do
   command -v $b >/dev/null && ok "binary: $b" || no "binary: $b" "apt install (see §2)"
 done
+# Booth audio is optional (§13.3.4), so these are informational, not fatal.
+for b in arecord aplay; do
+  command -v $b >/dev/null && ok "audio binary: $b" \
+    || echo "  audio binary: $b (absent — only needed with [voice] enabled)"
+done
 ls /usr/include/linux/input-event-codes.h >/dev/null 2>&1 \
   && ok "kernel input headers" || no "kernel input headers" "build-essential"
 ldconfig -p | grep -q libxcb-cursor  && ok "libxcb-cursor0" || no "libxcb-cursor0" "Qt xcb plugin will not load"

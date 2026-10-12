@@ -62,6 +62,28 @@ class _NullTransport:
         return None
 
 
+def route_controller_event(bridge, win, kind: str, payload: dict) -> None:
+    """Route one controller ``events(kind, payload)`` onto the Qt main thread.
+
+    ``bridge`` is a :class:`_TriggerBridge`; worker-thread events must cross it
+    rather than call widgets directly. ``race_ended`` is emitted on the GUI
+    thread, so it calls the window directly. Module-level so tests can exercise
+    the routing without a full ``run()``.
+    """
+    if kind == "capture_added":
+        bridge.capture.emit(payload["capture"])
+    elif kind == "capture_deleted":
+        bridge.capture_deleted.emit(payload["sequence"])
+    elif kind == "image_ready":
+        bridge.image_ready.emit(payload["sequence"], payload["path"])
+    elif kind == "race_ended":
+        win.on_race_ended(payload["race_id"])
+    elif kind == "scratch_changed":
+        bridge.scratch_changed.emit(payload)
+    elif kind == "warning":
+        bridge.warning.emit(payload["message"])
+
+
 def build_core(config):
     """Construct transport, reader, buffer, storage and controller.
     Returns a dict of the parts so headless tests can reuse it without Qt."""
@@ -256,22 +278,10 @@ def main(argv=None) -> int:
     # them straight at Qt widgets. race_ended is emitted from end_race(), which
     # always runs on the GUI thread (button or queued evdev end), so it can call
     # the window directly. warning also comes from the persistence thread (a
-    # failed write/recompute), so it must cross the bridge like the rest.
-    def _on_controller_event(kind: str, payload: dict) -> None:
-        if kind == "capture_added":
-            bridge.capture.emit(payload["capture"])
-        elif kind == "capture_deleted":
-            bridge.capture_deleted.emit(payload["sequence"])
-        elif kind == "image_ready":
-            bridge.image_ready.emit(payload["sequence"], payload["path"])
-        elif kind == "race_ended":
-            win.on_race_ended(payload["race_id"])
-        elif kind == "scratch_changed":
-            bridge.scratch_changed.emit(payload)
-        elif kind == "warning":
-            bridge.warning.emit(payload["message"])
-
-    core["controller"].events = _on_controller_event
+    # failed write/recompute) and the audio capture thread, so it must cross the
+    # bridge like the rest.
+    core["controller"].events = (
+        lambda kind, payload: route_controller_event(bridge, win, kind, payload))
 
     def _crossing(t_press, code, suspect=False):
         bridge.crossing.emit(t_press, code, suspect)

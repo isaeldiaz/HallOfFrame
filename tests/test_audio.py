@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import array
 import math
+import queue
 import sys
 import threading
 import time
@@ -170,6 +171,7 @@ def test_records_blocks_and_reports_t_start(tmp_path):
     p = tmp_path / "audio.wav"
     rec.start(1, p)
     assert _wait_for(lambda: bool(ready))
+    assert _wait_for(lambda: source.reads == 10)
     rec.stop()
     assert ready == [(1, p, 1000.0)]
     with wave.open(str(p), "rb") as w:
@@ -191,7 +193,43 @@ def test_capture_never_blocks_drops_become_silence(tmp_path):
     sink.gate.set()
     rec.stop()
     assert sink.frames == 60 * 1600
-    assert sink.data.count(0) >= 50 * BLOCK_BYTES
+    # Dropped blocks become silence, and the silence is appended AFTER the data
+    # blocks (the time axis survives) — a writer that puts zeros first, or fills
+    # gaps with anything but zeros, fails this.
+    data_blocks = sink.data.count(1) // 1600
+    assert 0 < data_blocks <= 10
+    assert sink.data[:data_blocks * BLOCK_BYTES] == b"\x01\x00" * (data_blocks * 1600)
+    assert sink.data[data_blocks * BLOCK_BYTES:] == b"\x00" * (
+        len(sink.data) - data_blocks * BLOCK_BYTES)
+
+
+class RecordingSink:
+    def __init__(self, path):
+        self.data = bytearray()
+
+    def write(self, pcm):
+        self.data.extend(pcm)
+
+    def close(self):
+        pass
+
+
+def test_writer_puts_silence_before_the_next_block(tmp_path):
+    # Feed the writer known (ndrop, block) pairs directly: the dropped-block
+    # silence must land before the block that follows it (the time axis).
+    sink = RecordingSink(tmp_path / "a.wav")
+    rec = AudioRecorder(lambda: None, sink_factory=lambda path: sink)
+    rec._queue = queue.Queue()
+    writer = threading.Thread(target=rec._writer_run, args=(tmp_path / "a.wav",),
+                              daemon=True)
+    writer.start()
+    rec._queue.put((0, b"A" * BLOCK_BYTES))
+    rec._queue.put((2, b"B" * BLOCK_BYTES))
+    rec._queue.put((0, b""))
+    writer.join(1.0)
+    assert bytes(sink.data) == (b"A" * BLOCK_BYTES
+                                + b"\0" * (2 * BLOCK_BYTES)
+                                + b"B" * BLOCK_BYTES)
 
 
 def test_source_open_failure_degrades(tmp_path):
@@ -212,15 +250,45 @@ def test_source_open_failure_degrades(tmp_path):
     assert time.monotonic() - started < 1.0
 
 
+class PacedSource:
+    """FakeSource variant that sleeps per read so the queue can actually fill."""
+
+    def __init__(self, count, delay=0.002):
+        self._remaining = count
+        self._delay = delay
+        self.reads = 0
+        self._event = threading.Event()
+
+    def open(self):
+        pass
+
+    def read(self):
+        if self._remaining:
+            self._remaining -= 1
+            self.reads += 1
+            time.sleep(self._delay)
+            return b"\x01\x00" * 1600
+        self._event.wait()
+        return b""
+
+    def close(self):
+        self._event.set()
+
+
 def test_sink_oserror_reports_and_drains(tmp_path):
-    source = FakeSource([b"\x01\x00" * 1600] * 5)
+    # The writer raises on every write but must keep consuming; a full queue
+    # otherwise wedges the capture thread on its blocking sentinel put.
+    source = PacedSource(50)
     errors = []
-    rec = AudioRecorder(lambda: source, clock=FakeClock(0.0), sink_factory=OSErrorSink)
+    rec = AudioRecorder(lambda: source, clock=FakeClock(0.0),
+                        sink_factory=OSErrorSink, queue_blocks=1)
     rec.on_error = errors.append
     rec.start(1, tmp_path / "audio.wav")
+    assert _wait_for(lambda: source.reads == 50)
     started = time.monotonic()
     rec.stop()
     assert time.monotonic() - started < 1.0
+    assert not rec._capture.is_alive()
     assert len(errors) == 1
 
 
@@ -229,7 +297,11 @@ def test_stop_idempotent(tmp_path):
     rec = AudioRecorder(lambda: source, clock=FakeClock(0.0))
     rec.start(1, tmp_path / "audio.wav")
     rec.stop()
+    started = time.monotonic()
     rec.stop()
+    assert time.monotonic() - started < 1.0
+    assert not rec._capture.is_alive()
+    assert not rec._writer.is_alive()
 
 
 def test_arecord_argv():

@@ -1450,7 +1450,7 @@ cache_dir = "web-cache"      # thumbnail cache, relative to data_root (absolute 
 enabled = false              # §13.3 live bow-number scratchpad; needs an external trigger device
 
 [voice]
-enabled = false              # phase 8 (voice annotation); unused until then
+enabled = false              # §13.3.4 booth audio (R2: record + review replay; transcribe* keys are release 3)
 input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
 play_before_s = 3.0
 play_after_s = 5.0
@@ -2181,8 +2181,8 @@ implementation can be planned against the constraints already locked in here.
 - **Bow-number capture.** Live scratchpad for a two-operator booth, with
   audio replay and offline ASR as later releases. Specified in §13.3.1–13.3.4.
   *(Scratchpad implemented 2026-10-09: `scratchpad.py`,
-  `ui/scratchpad_widget.py`, `[scratchpad] enabled`; audio/ASR per §13.3.4
-  pending.)*
+  `ui/scratchpad_widget.py`, `[scratchpad] enabled`; audio replay implemented
+  2026-10-12 per §13.3.4; ASR pending.)*
 
 - **Play crossing images as a sequence (implemented 2026-10-09).** The web
   results pages (§8) currently
