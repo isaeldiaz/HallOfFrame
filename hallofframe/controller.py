@@ -19,6 +19,7 @@ from typing import Callable
 
 from . import scratchpad
 from . import storage as storage_mod
+from .audio import AUDIO_FILENAME
 from .calibration import CALIBRATION_FILENAME, Calibration, calibration_path
 from .framebuffer import FrameBuffer
 from .framestore import FrameStore, nearest
@@ -87,6 +88,9 @@ class CaptureController:
 
         self.scratchpad_enabled = bool(config.section("scratchpad")["enabled"])
 
+        self.recorder = None
+        self._audio_t0 = None
+
         # Unbounded on purpose: bounding it would let `record_crossing` drop the
         # primary datum under disk pressure. A human press rate cannot outrun the
         # writer, and `_writer_loop` now survives a failed commit, so the queue
@@ -138,6 +142,23 @@ class CaptureController:
                        if "t0_reconstructed" in row.keys() else False,
                        row["elapsed_source"]
                        if "elapsed_source" in row.keys() else "press")
+
+    # --- audio ------------------------------------------------------------
+    def attach_recorder(self, recorder) -> None:
+        recorder.on_ready = self._audio_ready
+        recorder.on_error = self._warn
+        self.recorder = recorder
+
+    def _audio_ready(self, race_id: int, path, t_start_mono: float) -> None:
+        """Capture-thread callback → DB write on the writer thread.
+
+        offset = t_start − t0: seconds from the gun to the first sample.
+        """
+        # t_start is estimated from the first block's arrival (±0.2 s with
+        # arecord/PipeWire); replay only, never timing data.
+        rel = Path(path).relative_to(self.storage.data_root).as_posix()
+        t0 = self._audio_t0
+        self.enqueue(lambda: self.storage.set_race_audio(race_id, rel, t_start_mono - t0))
 
     # --- race lifecycle ---------------------------------------------------
     def start_race(self, t_press: float, name: str = "Race",
@@ -220,6 +241,9 @@ class CaptureController:
         # The frame store writes one file per gun-time under this race's frames/
         # directory (plan step 5.3). Built here, after t0 and race_dir are set.
         self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
+        if self.recorder is not None:
+            self._audio_t0 = self.t0
+            self.recorder.start(race_id, self.race_dir / AUDIO_FILENAME)
 
         self._emit("race_started", race_id=race_id)
         self.enqueue(lambda: self._recompute_scratch(race_id))
@@ -253,6 +277,9 @@ class CaptureController:
         # the race's t0 and directory, both now known.
         self.store = FrameStore(self.storage, race_id, self.race_dir, self.t0)
         self.enqueue(lambda: self._recompute_scratch(race_id))
+        # A reconstructed t0 has no audio position; never resume the recorder.
+        if self.logger:
+            self.logger.info("controller", "audio_not_resumed", race_id=race_id)
 
     def end_race(self, t_end: float | None = None) -> int | None:
         """Finish the current race (spec: an explicit End-Race so the operator
@@ -277,6 +304,8 @@ class CaptureController:
         self.ended_capture_count = len(rows)
 
         self.storage.mark_race_ended(race_id, t_end)
+        if self.recorder is not None:
+            self.recorder.stop()
 
         if self.logger:
             self.logger.info("controller", "race_ended",
@@ -729,6 +758,8 @@ class CaptureController:
             self.enqueue(lambda: self._recompute_scratch(rid))
 
     def stop(self) -> None:
+        if self.recorder is not None:
+            self.recorder.close()
         with self._timers_lock:
             for t in list(self._timers):
                 t.cancel()

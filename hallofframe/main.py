@@ -103,6 +103,12 @@ def build_core(config):
 
     controller = CaptureController(config, storage, buffer)
 
+    voice = config.section("voice")
+    if bool(voice["enabled"]):
+        from .audio import ArecordSource, AudioRecorder
+        controller.attach_recorder(
+            AudioRecorder(lambda: ArecordSource(str(voice["input"]))))
+
     auth = None
     if stream["username"]:
         auth = (stream["username"], stream["password"])
