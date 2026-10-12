@@ -657,7 +657,9 @@ class Storage:
             cur = self._conn.execute(
                 "INSERT INTO scratchpad (race_id, ordinal, text, t_typed_wall) "
                 "VALUES (?,?,?,?)", (race_id, ordinal, text, t_typed_wall))
-            self._touch(race_id)
+            # No _touch: the scratchpad table is never web-served, so a keystroke
+            # must not invalidate the index/race ETag. apply_bows touches when a
+            # bow actually changes (which is what the web page renders).
             self._conn.commit()
             return cur.lastrowid
 
@@ -680,7 +682,7 @@ class Storage:
                 return None
             self._conn.execute(
                 "UPDATE scratchpad SET deleted=1 WHERE id=?", (row["id"],))
-            self._touch(race_id)
+            # No _touch (see insert_scratch): the entry is not web-rendered.
             self._conn.commit()
             return row["id"]
 
@@ -698,6 +700,8 @@ class Storage:
     def set_bow(self, capture_id: int, value: str | None,
                 source: str | None) -> None:
         """Set a capture's bow number and source, stamping ``updated_at``."""
+        if source not in (None, "live", "manual", "asr"):
+            raise ValueError(f"unknown bow_source: {source!r}")
         with self._lock:
             row = self._conn.execute(
                 "SELECT race_id FROM capture WHERE id=?", (capture_id,)).fetchone()
@@ -705,7 +709,8 @@ class Storage:
             self._conn.execute(
                 "UPDATE capture SET bow_number=?, bow_source=?, updated_at=? "
                 "WHERE id=?", (value, source, _utcnow(), capture_id))
-            self._touch(race_id)
+            if race_id is not None:  # a stale id writes no row; don't churn the ETag
+                self._touch(race_id)
             self._conn.commit()
 
     def apply_bows(self, changes: list[tuple[int, str | None]]) -> int:

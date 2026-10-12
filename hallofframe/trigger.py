@@ -49,11 +49,11 @@ def device_identity(device_path: str) -> tuple[str, str]:
 def is_internal_keyboard(device_path: str) -> bool:
     """True when device_identity() matches INTERNAL_KEYBOARD_NAMES exactly or phys starts with one of INTERNAL_KEYBOARD_PHYS_PREFIXES."""
     name, phys = device_identity(device_path)
-    if name in INTERNAL_KEYBOARD_NAMES:
+    if name and name in INTERNAL_KEYBOARD_NAMES:
         return True
     # the T460s i8042 keyboard reports name "AT Translated Set 2 keyboard", phys isa0060/serio0/input0 (system-environment.md §2.8, verified 2026-10-09); external USB devices report usb-… phys
-    return any(phys.startswith(prefix)
-               for prefix in INTERNAL_KEYBOARD_PHYS_PREFIXES)
+    return bool(phys) and any(phys.startswith(prefix)
+                              for prefix in INTERNAL_KEYBOARD_PHYS_PREFIXES)
 
 
 class TriggerListener(threading.Thread):
