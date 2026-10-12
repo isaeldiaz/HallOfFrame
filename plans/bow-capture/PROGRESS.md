@@ -7,3 +7,4 @@
 07 8c8ab2d 9 tests (tests/test_main_window_scratch.py) 454 passed, 4 deselected OK
 08 4513683 0 tests (docs) 454 passed, 4 deselected OK
 09 cd66cf1 8 tests (tests/test_audio.py) 474 passed, 4 deselected OK
+10 0ed3a2f 10 tests (tests/test_audio.py) 484 passed, 4 deselected OK
