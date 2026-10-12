@@ -2293,16 +2293,18 @@ The feature is small and sits beside the timing system rather than inside it.
 It needs:
 
 - **One table**, `scratchpad(race_id, ordinal, text, t_typed_wall, deleted)`,
-  added by the existing migration pattern in `storage.py`. Ordinals are
+  created idempotently by `CREATE TABLE IF NOT EXISTS` in `storage.py`'s schema
+  on every open (no separate migration step). Ordinals are
   allocated the way `capture.sequence` already is and are never reused. The
   existing `capture.bow_number` and `capture.bow_source` columns (§6.7) hold the
   result, with `bow_source = 'live'` for scratchpad-assigned rows and `'manual'`
   for rows typed in review.
 - **One recompute function.** Given the race's non-deleted entries in ordinal
-  order and its non-deleted captures in sequence order, assign the k-th to the
-  k-th, skipping captures already marked `'manual'`. It runs through the
-  controller's existing single-writer queue after every commit, every new
-  capture, every deletion and at race stop. Because it recomputes from scratch
+  order and its non-deleted captures in sequence order, assign the k-th entry to
+  the k-th capture; a capture already marked `'manual'`/`'asr'` keeps its value
+  and still holds its position. It runs on the persistence writer thread after
+  every entry/undo and every capture while the race is active, and once at race
+  stop. Because it recomputes from scratch
   each time it is idempotent, so there is no state to keep in step.
 - **One widget**: a `QLineEdit` that accepts digits and Enter, plus the two
   counter labels. It keeps keyboard focus while a race is active and never

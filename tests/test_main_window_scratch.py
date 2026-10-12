@@ -13,6 +13,7 @@ pytest.importorskip("PySide6")   # qt suite skips cleanly when PySide6 is absent
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.controller import CaptureController
 from hallofframe.session import Phase
@@ -29,7 +30,7 @@ def _build(inst, config, storage, buffer, qapp, enabled: bool) -> None:
     inst.config = config(
         scratchpad={"enabled": enabled},
         timing={"viewing_mode": "screen", "image_mode": "off"},
-        trigger={"device_path": "", "grab_device": False},
+        trigger={"device_path": "/dev/input/event-test", "grab_device": False},
     )
     inst.storage = storage
     inst.buffer = buffer
@@ -79,6 +80,11 @@ class TestScratchWiring:
         self.pump()
 
     def test_focus_on_recording(self):
+        rival = QLineEdit(self.win)
+        rival.show()
+        rival.setFocus()
+        self.app.processEvents()
+        assert self.app.focusWidget() is rival
         self.start()
         assert self.win._last_state == AppState.RECORDING
         assert self.app.focusWidget() is self.win.scratchpad.field
@@ -98,9 +104,37 @@ class TestScratchWiring:
 
     def test_new_capture_keeps_focus(self):
         self.start()
+        rival = QLineEdit(self.win)
+        rival.show()
+        rival.setFocus()
+        self.app.processEvents()
+        assert self.app.focusWidget() is rival
         self.controller.record_crossing(1001.0)
         self.pump()
         assert self.app.focusWidget() is self.win.scratchpad.field
+
+    def test_arm_allowed_on_external_device(self, monkeypatch):
+        monkeypatch.setattr("hallofframe.trigger.is_internal_keyboard",
+                            lambda p: False)
+        self.win._arm_start()
+        assert self.win.session.phase is Phase.ARMED
+
+    def test_resume_refused_on_internal_keyboard(self, monkeypatch):
+        monkeypatch.setattr("hallofframe.trigger.is_internal_keyboard",
+                            lambda p: True)
+        self.win._resume_race(1)
+        assert self.win.session.phase is Phase.IDLE
+        assert not self.controller.running
+        assert "external trigger" in self.win.toast._label.text()
+
+    def test_uncommitted_text_cleared_between_races(self):
+        self.start()
+        self.win.scratchpad.field.setText("7")
+        self.controller.record_crossing(1001.0)
+        self.pump()
+        self.controller.end_race()
+        self.pump()
+        assert self.win.scratchpad.field.text() == ""
 
     def test_arm_refused_on_internal_keyboard(self, monkeypatch):
         monkeypatch.setattr("hallofframe.trigger.is_internal_keyboard",

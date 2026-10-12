@@ -71,7 +71,8 @@ def test_no_focus_steal_when_not_running(qapp):
     widget = ScratchpadWidget()
     screen.set_scratchpad(widget)
     screen.show()
-    other = QLineEdit()
+    screen.activateWindow()
+    other = QLineEdit(screen)
     other.show()
     other.setFocus()
     qapp.processEvents()
@@ -81,6 +82,14 @@ def test_no_focus_steal_when_not_running(qapp):
     assert qapp.focusWidget() is other
     other.deleteLater()
     screen.deleteLater()
+
+
+def test_bow_column_hidden_when_disabled(qapp):
+    lst = CrossingList(editable=False, show_bow=False)
+    lst.add(_data(1, 5.0, bow="14"))
+    assert not hasattr(lst._rows[1], "bow_lbl")
+    lst.refresh_bows({1: "14"})   # must be a no-op, not an AttributeError
+    lst.deleteLater()
 
 
 def test_screen_minimum_width_unchanged(qapp):

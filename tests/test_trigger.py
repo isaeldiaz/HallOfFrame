@@ -143,6 +143,11 @@ def test_internal_keyboard_by_phys_only(monkeypatch):
     assert is_internal_keyboard("/dev/input/event3") is True
 
 
+def test_internal_keyboard_handles_none_phys(monkeypatch):
+    _fake_evdev(monkeypatch, "Other", None)
+    assert is_internal_keyboard("/dev/input/event3") is False
+
+
 def test_external_button(monkeypatch):
     _fake_evdev(monkeypatch, "SayoDevice", "usb-0000:00:14.0-1/input0")
     assert is_internal_keyboard("/dev/input/event3") is False

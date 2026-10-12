@@ -116,6 +116,46 @@ def test_apply_bows_touches_race(storage, monkeypatch):
     assert storage.last_updated(rid) != before
 
 
+def test_insert_scratch_does_not_touch_race(storage, monkeypatch):
+    monkeypatch.setattr(storage_mod, "_utcnow", _Clock())
+    rid = _race(storage)
+    before = storage.last_updated(rid)
+    storage.insert_scratch(rid, "14", 1.0)
+    assert storage.last_updated(rid) == before
+
+
+def test_apply_bows_skips_unknown_and_preserves_timing(storage):
+    rid = _race(storage)
+    cap = _cap(storage, rid, 1)
+    before = storage.capture(cap)
+    assert storage.apply_bows([(999999, "x"), (cap, "14")]) == 1
+    after = storage.capture(cap)
+    assert after["t_press"] == before["t_press"]
+    assert after["elapsed_s"] == before["elapsed_s"]
+    assert after["bow_number"] == "14"
+
+
+def test_set_bow_rejects_unknown_source(storage):
+    rid = _race(storage)
+    cap = _cap(storage, rid, 1)
+    with pytest.raises(ValueError):
+        storage.set_bow(cap, "14", "bogus")
+
+
+def test_scratch_table_recreated_when_missing(data_root):
+    st = storage_mod.Storage(data_root)
+    st._conn.execute("DROP TABLE scratchpad")
+    st._conn.commit()
+    st.close()
+    st = storage_mod.Storage(data_root)
+    try:
+        rid = _race(st)
+        st.insert_scratch(rid, "14", 1.0)
+        assert [r["text"] for r in st.scratch_entries(rid)] == ["14"]
+    finally:
+        st.close()
+
+
 def test_update_capture_allows_bow_source(storage):
     rid = _race(storage)
     cap = _cap(storage, rid, 1)

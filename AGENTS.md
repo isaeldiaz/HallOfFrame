@@ -17,7 +17,7 @@ laptop to record boat crossing times. The system must:
 - Never block the trigger path: nothing timing-critical touches disk.
 
 The authoritative requirements are in **`hallofframe-finish-timer-spec.md`**
-(v1.2). Several "obvious" design alternatives (OpenCV `VideoCapture`, RTSP,
+(v1.3). Several "obvious" design alternatives (OpenCV `VideoCapture`, RTSP,
 `time.time()`) break the timing accuracy — **do not swap them without reading
 the spec's reasoning first** (see the "How to use this document" note and §3).
 
@@ -43,7 +43,8 @@ hallofframe/
                      `signal_*` attributes); `start_race` returns int or raises
                      `RaceStateError`/`CalibrationError`.
   scratchpad.py      Live bow-number rules (§13.3): `normalize` + `assign` map
-                     the k-th typed number to the k-th non-manual capture.
+                     the k-th typed number to the k-th capture (a row locked
+                     `manual`/`asr` keeps its value and still holds its position).
   trigger.py         evdev key-listener (kernel timestamps, debounce, device grab).
   transport.py       iproxy USB tunnel lifecycle (host→device, TCP-only).
   mjpeg.py           MJPEG parse loop; emits timestamped Frame objects.

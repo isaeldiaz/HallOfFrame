@@ -166,9 +166,9 @@ class TestControllerScratch(unittest.TestCase):
         ctl.events = lambda k, p: events.append((k, p))
         try:
             rid = ctl.start_race(1000.0, name="R")
-            self.assertTrue(ctl.add_scratch("14"))
+            self.assertFalse(ctl.add_scratch("14"))
             ctl._queue.join()
-            self.assertEqual(len(self.storage.scratch_entries(rid)), 1)
+            self.assertEqual(len(self.storage.scratch_entries(rid)), 0)
             self.assertFalse(any(k == "scratch_changed" for k, _ in events))
             ctl.record_crossing(1000.0 + 1)
             ctl._queue.join()
