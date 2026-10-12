@@ -11,3 +11,5 @@
 11 ca3caa9 5 tests (tests/test_controller_audio.py) 489 passed, 4 deselected OK
 12 646335c 4 tests (tests/test_review_audio.py, tests/test_session.py) 493 passed, 4 deselected OK
 13 b3efd78 0 tests (docs) 493 passed, 4 deselected OK
+12b fbfbd29 10 tests (tests/test_audio_view.py, tests/test_audio.py, tests/test_review_audio.py) 507 passed (+7 Windows host artifacts), 4 deselected OK
+12c 772347f 12 tests (tests/test_audio.py, tests/test_controller_audio.py, tests/test_review_audio.py) 519 passed (+7 Windows host artifacts), 4 deselected OK
