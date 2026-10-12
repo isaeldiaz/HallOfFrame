@@ -1094,8 +1094,8 @@ CREATE TABLE race (
     t_end_monotonic   REAL,
     image_off         INTEGER NOT NULL DEFAULT 0,  -- timing-only race (§6.5)
     reviewed          INTEGER NOT NULL DEFAULT 0,  -- web publishes only reviewed
-    audio_path        TEXT,            -- phase 8
-    audio_t0_offset_s REAL,            -- phase 8
+    audio_path        TEXT,            -- §13.3.4: races/<id>_<name>/audio.wav
+    audio_t0_offset_s REAL,            -- §13.3.4: seconds from t0 to the first sample (±0.2 s, replay only)
     window_before_ms  INTEGER,         -- frozen from config at race start (§6.6)
     window_after_ms   INTEGER,
     CHECK (start_mode   IN ('direct','radio','external')),
@@ -1451,7 +1451,7 @@ enabled = false              # §13.3 live bow-number scratchpad; needs an exter
 
 [voice]
 enabled = false              # phase 8 (voice annotation); unused until then
-input = "default"
+input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
 play_before_s = 3.0
 play_after_s = 5.0
 transcribe = false
@@ -2348,6 +2348,10 @@ drops audio on a full queue as the frame path drops frames; a missing recording
 degrades to manual entry. A headset mic beats the laptop mic in wind and crowd
 noise. Whether the web process (§8) serves audio at all is open, given its
 metered link.
+
+*(Implemented 2026-10-12: `audio.py` — arecord subprocess source, WAV sink with
+per-block header, aplay clip player; recorder starts at `t0`, stops at race end,
+not resumed after a restart; no web serving.)*
 
 **ASR suggestion.** A Transcribe button in review runs an offline Norwegian
 Whisper model (`whisper.cpp` with NB-Whisper; Vosk has no Norwegian model) over

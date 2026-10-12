@@ -353,6 +353,14 @@ bench procedure.
 Bench procedure (external button + keyboard): 4 presses, type 14, 7, 3; expect
 rows 14, 7, 3, blank and counters 3 / 4 red; fix in review.
 
+### T14 — Audio replay (manual)
+
+**Proves:** spec §13.3.4. Mic on (`[voice] enabled = true`), race, speak at a
+crossing, end. In review press `R`, select the crossing, press `P`.
+
+Pass: `races/<id>/audio.wav` exists and
+`SELECT audio_path, audio_t0_offset_s FROM race` returns a small positive offset.
+
 ---
 
 ## 4. Tests requiring the iPhone
@@ -683,6 +691,7 @@ This table is the **single source of truth** for what each test needs.
 | T11 Offline         | yes | yes | N3           | no  | yes |
 | T12 Cold start      | yes | yes | N5           | no  | yes |
 | T13 Scratchpad replay | no | yes | §13.3       | no  | no  |
+| T14 Audio replay    | no  | yes | §13.3.4      | no  | no  |
 | DR Dress rehearsal  | yes | yes | end-to-end   | n/a | **yes** |
 
 v1.1 had a single "Blocker if failed" column and marked T7 "no (degraded)" —

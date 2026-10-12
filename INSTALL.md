@@ -58,7 +58,8 @@ sudo apt install -y \
     libxcb-cursor0 \
     usbutils \
     sqlite3 \
-    ffmpeg
+    ffmpeg \
+    alsa-utils
 ```
 
 What each one is for, so nothing here is cargo cult:
@@ -75,6 +76,7 @@ What each one is for, so nothing here is cargo cult:
 | `usbutils` | audit item 3 | Provides `lsusb`. This is why the audit's `lsusb` printed nothing — the tool was simply absent. The runbook relies on `idevice_id`, so this is diagnostic convenience only. |
 | `sqlite3` | `TESTING.md` T6, §7 | The command-line shell. `TESTING.md` T6's crash-recovery check (`PRAGMA integrity_check`) is the **only** test of requirement N4, and `collect-diagnostics.sh` uses it for `db-tail.txt`. Ubuntu's base system has the *library* but not the CLI, so both would fail with `command not found` — and in the diagnostics script that message lands silently inside a redirect. |
 | `ffmpeg` | §12 step 1, App. B | `ffplay` for the transport smoke test — the gate that proves the USB path before any Python exists. |
+| `alsa-utils` | §13.3.4 | `arecord`/`aplay` for booth audio replay; optional, only with `[voice] enabled = true`. |
 
 Optional, for the CPU governor in §7:
 
@@ -504,7 +506,7 @@ V=~/regatta/venv/bin/python
 [ "$(python3 -c 'import sys;print(sys.version_info[:2]>=(3,10) and sys.version_info[:2]<(3,15))')" = True ] \
   && ok "python in PySide6-supported range" || no "python range" "PySide6 needs >=3.10,<3.15"
 [ "$XDG_SESSION_TYPE" = x11 ] && ok "session type x11" || no "session type" "expected x11, got $XDG_SESSION_TYPE"
-for b in iproxy idevice_id ffplay gcc lsusb sqlite3; do
+for b in iproxy idevice_id ffplay gcc lsusb sqlite3 arecord aplay; do
   command -v $b >/dev/null && ok "binary: $b" || no "binary: $b" "apt install (see §2)"
 done
 ls /usr/include/linux/input-event-codes.h >/dev/null 2>&1 \
@@ -569,7 +571,7 @@ mkdir -p ~/regatta/debs/partial
 sudo apt-get install --reinstall --download-only -y \
     -o Dir::Cache::archives="$HOME/regatta/debs" \
     usbmuxd libimobiledevice-utils python3-pip python3-venv python3-dev \
-    build-essential libxcb-cursor0 usbutils sqlite3 ffmpeg
+    build-essential libxcb-cursor0 usbutils sqlite3 ffmpeg alsa-utils
 sudo chown -R "$USER:$USER" ~/regatta/debs
 ls ~/regatta/debs/*.deb | wc -l      # assert this is plausible, not 0
 ```

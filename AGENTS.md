@@ -46,6 +46,9 @@ hallofframe/
                      the k-th typed number to the k-th capture (a row locked
                      `manual`/`asr` keeps its value and still holds its position).
   trigger.py         evdev key-listener (kernel timestamps, debounce, device grab).
+  audio.py           Booth audio (§13.3.4): `clip_bounds`/`read_clip`/`WavSink`,
+                     `AudioRecorder` (capture→bounded queue→writer),
+                     `ArecordSource`, `play_clip`. Only with `[voice] enabled`.
   transport.py       iproxy USB tunnel lifecycle (host→device, TCP-only).
   mjpeg.py           MJPEG parse loop; emits timestamped Frame objects.
   framebuffer.py     Timestamped ring buffer; window(target, before, after).
@@ -158,6 +161,9 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   and at race end; `bow_source` `live` is overwritable, `manual` never;
   `enqueue(fn)` is the only way to run code on the writer thread; UI gets one
   `scratch_changed` event.
+- **Audio (§13.3.4)**: `AudioRecorder` capture thread → bounded queue → writer
+  thread; drops become silence; `race.audio_t0_offset_s = t_first_sample − t0`;
+  only with `[voice] enabled`; never on the trigger thread.
 
 ## Data & config (the single source of truth)
 

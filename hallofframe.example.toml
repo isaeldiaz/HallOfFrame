@@ -113,9 +113,10 @@ enabled = true               # §13.3 live bow-number scratchpad; needs an exter
 # Phase 8 (voice annotation) — optional, off by default. Present now so the
 # config format is stable; the keys are unused until phase 8 lands (plan 8.1).
 enabled = false
-input = "default"            # PulseAudio/PipeWire source name
+input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
 play_before_s = 3.0          # review playback window, seconds before the crossing
 play_after_s = 5.0           # ... and after
+# transcribe*/model: release 3 (ASR), unused until then
 transcribe = false           # stage 2: local speech-to-text bow suggestions
 model = "base"               # faster-whisper model name
 transcribe_before_s = 1.0    # transcription window, seconds before the crossing
