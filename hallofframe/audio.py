@@ -1,8 +1,13 @@
 """Booth audio: one 16 kHz mono WAV per race, played back around each crossing (spec §13.3.4)."""
 from __future__ import annotations
 
+import queue
+import subprocess
+import threading
+import time
 import wave
 from pathlib import Path
+from typing import Callable, Protocol
 
 RATE = 16000
 CHANNELS = 1
@@ -56,3 +61,193 @@ class WavSink:
         if not self._closed:
             self._closed = True
             self._wav.close()
+
+
+class Source(Protocol):
+    def open(self) -> None: ...
+    def read(self) -> bytes: ...
+    def close(self) -> None: ...
+
+
+class AudioRecorder:
+    """Capture-thread recorder: bounded queue of blocks, writer thread sinks them."""
+
+    def __init__(self, source_factory, *, clock=time.monotonic, sink_factory=WavSink,
+                 queue_blocks: int = QUEUE_BLOCKS):
+        self._source_factory = source_factory
+        self._clock = clock
+        self._sink_factory = sink_factory
+        self._queue_blocks = queue_blocks
+        self.on_ready: Callable[[int, Path, float], None] | None = None
+        self.on_error: Callable[[str], None] | None = None
+        self.recording = False
+        self.dropped_blocks = 0
+        self._source = None
+        self._queue = None
+        self._capture = None
+        self._writer = None
+        self._stop = threading.Event()
+
+    def start(self, race_id: int, path: Path) -> None:
+        """Begin recording; spawns only the audio-capture daemon thread."""
+        self.recording = True
+        self.dropped_blocks = 0
+        self._stop.clear()
+        self._capture = threading.Thread(target=self._capture_run, args=(race_id, path),
+                                         name="audio-capture", daemon=True)
+        self._capture.start()
+
+    def _capture_run(self, race_id: int, path: Path) -> None:
+        try:
+            src = self._source = self._source_factory()
+            src.open()
+        except Exception as exc:
+            self._report(f"audio: {exc} — race continues without audio")
+            self.recording = False
+            return
+        q = self._queue = queue.Queue(maxsize=self._queue_blocks)
+        self._writer = threading.Thread(target=self._writer_run, args=(path,),
+                                        name="audio-writer", daemon=True)
+        self._writer.start()
+        first = src.read()
+        t_start = self._clock() - BLOCK_FRAMES / RATE
+        if self.on_ready is not None:
+            self.on_ready(race_id, path, t_start)
+        q.put_nowait((0, first))
+        pending_drops = 0
+        while True:
+            block = src.read()
+            if block == b"" or self._stop.is_set():
+                break
+            try:
+                q.put_nowait((pending_drops, block))
+                pending_drops = 0
+            except queue.Full:
+                pending_drops += 1
+                self.dropped_blocks += 1
+        q.put((pending_drops, b""))
+
+    def _writer_run(self, path: Path) -> None:
+        sink = None
+        reported = False
+        try:
+            sink = self._sink_factory(path)
+        except OSError as exc:
+            reported = True
+            self._report(f"audio: {exc} — race continues without audio")
+        try:
+            while True:
+                ndrop, block = self._queue.get()
+                if sink is not None:
+                    try:
+                        if ndrop:
+                            sink.write(b"\0" * BLOCK_BYTES * ndrop)
+                        if block:
+                            sink.write(block)
+                    except OSError as exc:
+                        if not reported:
+                            reported = True
+                            self._report(f"audio: {exc} — recording incomplete")
+                if block == b"":
+                    break
+        finally:
+            if sink is not None:
+                try:
+                    sink.close()
+                except OSError:
+                    pass
+
+    def stop(self, timeout: float = 1.0) -> None:
+        """Close the source and join capture then writer within a total budget."""
+        self._stop.set()
+        src = self._source
+        if src is not None:
+            try:
+                src.close()
+            except Exception:
+                pass
+        deadline = time.monotonic() + timeout
+        for thread in (self._capture, self._writer):
+            if thread is not None and thread.is_alive():
+                thread.join(max(0.0, deadline - time.monotonic()))
+        self.recording = False
+
+    def close(self) -> None:
+        self.stop()
+
+    def _report(self, message: str) -> None:
+        if self.on_error is not None:
+            try:
+                self.on_error(message)
+            except Exception:
+                pass
+
+
+def arecord_argv(device: str, binary: str = "arecord") -> list[str]:
+    return [binary, "-q", "-D", device, "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1"]
+
+
+class ArecordSource:
+    """Source over an arecord subprocess reading fixed 100 ms blocks from stdout."""
+
+    def __init__(self, device: str = "default", *, argv: list[str] | None = None):
+        self._argv = argv if argv is not None else arecord_argv(device)
+        self._proc = None
+        self._closed = False
+
+    def open(self) -> None:
+        self._proc = subprocess.Popen(self._argv, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL)
+        self._closed = False
+
+    def read(self) -> bytes:
+        if self._proc is None or self._closed:
+            return b""
+        buf = bytearray()
+        while len(buf) < BLOCK_BYTES:
+            chunk = self._proc.stdout.read(BLOCK_BYTES - len(buf))
+            if not chunk:
+                break
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def close(self) -> None:
+        self._closed = True
+        proc = self._proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+
+
+def aplay_argv(binary: str = "aplay") -> list[str]:
+    return [binary, "-q", "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1", "-"]
+
+
+def play_clip(pcm: bytes, *, argv: list[str] | None = None) -> subprocess.Popen | None:
+    """Play raw PCM through aplay; the pipe is fed from a daemon thread."""
+    args = argv if argv is not None else aplay_argv()
+    try:
+        proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+
+    def feed():
+        try:
+            proc.stdin.write(pcm)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    threading.Thread(target=feed, daemon=True).start()
+    return proc
