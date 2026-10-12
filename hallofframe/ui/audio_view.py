@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -15,6 +15,8 @@ class AudioView(QWidget):
     """Envelope of the clip last played, a press mark, other-crossing ticks, a playhead."""
 
     BINS = 200
+    # Seconds into the clip where the operator clicked; review replays from there.
+    seek_requested = Signal(float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,6 +27,7 @@ class AudioView(QWidget):
         self._press_s = None
         self._others: list[float] = []
         self._play_t0 = None
+        self._play_offset = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(50)
         self._timer.timeout.connect(self.update)
@@ -36,6 +39,11 @@ class AudioView(QWidget):
         self._dur_s = dur_s
         self._press_s = press_s
         self._others = list(others_s)
+        self.set_play_start(0.0)
+
+    def set_play_start(self, offset_s: float) -> None:
+        """(Re)start the wall-clock playhead at ``offset_s`` seconds into the clip."""
+        self._play_offset = max(0.0, offset_s)
         self._play_t0 = time.monotonic()
         self._timer.start()
         self.update()
@@ -46,6 +54,7 @@ class AudioView(QWidget):
         self._dur_s = 0.0
         self._press_s = None
         self._others = []
+        self._play_offset = 0.0
         self.stop_playhead()
         self.update()
 
@@ -54,14 +63,22 @@ class AudioView(QWidget):
         self._play_t0 = None
 
     def playhead_s(self) -> float | None:
-        """Seconds since set_clip, or None when stopped / past dur_s (then the timer is stopped too)."""
+        """Seconds into the clip, or None when stopped / past dur_s (then the timer is stopped too)."""
         if self._play_t0 is None:
             return None
-        p = time.monotonic() - self._play_t0
+        p = self._play_offset + (time.monotonic() - self._play_t0)
         if p > self._dur_s:
             self.stop_playhead()
             return None
         return p
+
+    def mousePressEvent(self, event):  # noqa: N802
+        """Click a point on the envelope to replay the clip from there."""
+        if event.button() == Qt.LeftButton and self._dur_s > 0:
+            w = max(1, self.width() - 1)
+            x = min(max(0.0, event.position().x()), float(w))
+            self.seek_requested.emit(x / w * self._dur_s)
+        super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -79,7 +96,7 @@ class AudioView(QWidget):
             painter.drawText(0, 0, w, h, Qt.AlignCenter, "no clip played")
             return
         # aplay gives no position feedback, so the playhead is wall-clock from
-        # set_clip — approximate on purpose
+        # set_play_start — approximate on purpose
         painter.setPen(Qt.NoPen)
         for i in range(self.BINS):
             x0 = i * w // self.BINS

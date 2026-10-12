@@ -37,7 +37,7 @@ from . import styles
 from .audio_view import AudioView
 from .crossing_list import CrossingList
 from .images import load_view
-from ..audio import (clip_bounds, play_clip, player_error, process_clip,
+from ..audio import (RATE, clip_bounds, play_clip, player_error, process_clip,
                      read_clip, wav_duration_s)
 from ..render import format_elapsed, local_hms, parse_elapsed
 
@@ -239,6 +239,10 @@ class ReviewScreen(QWidget):
         self._audio_path = None
         self._audio_offset = None
         self._player = None
+        # The processed clip behind the envelope, so a click can replay from a
+        # point inside it without re-reading the WAV. Reset when the selection
+        # changes (a clip of another crossing must never be replayed).
+        self._clip: dict | None = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -325,6 +329,7 @@ class ReviewScreen(QWidget):
         self.scrubber = _Scrubber()
         lv.addWidget(self.scrubber)
         self.audio_view = AudioView()
+        self.audio_view.seek_requested.connect(self._seek_audio)
         lv.addWidget(self.audio_view)
         # The photo column yields first on a narrow screen: the crossing list is
         # what the operator is aiming at, and nothing in this column may set a
@@ -408,6 +413,8 @@ class ReviewScreen(QWidget):
             # reviewed race's selection and photo (the screen is reused).
             self._selected_seq = None
             self._current_capture = None
+            self.audio_view.clear()
+            self._clip = None
             self.list.set_selected(None)
             self.counter.setText("")
             self.photo.set_frame(None, "no crossings")
@@ -416,6 +423,8 @@ class ReviewScreen(QWidget):
 
     def _select(self, sequence: int) -> None:
         self.audio_view.clear()
+        self._clip = None
+        self.stop_playback()
         self._selected_seq = sequence
         self.list.set_selected(sequence)
         idx = next((i for i, c in enumerate(self._captures)
@@ -784,36 +793,46 @@ class ReviewScreen(QWidget):
         """Play [press − play_before_s, press + play_after_s] of the race audio."""
         if not bool(self._voice["enabled"]):
             return
+        if self._build_clip() is None:
+            self.stop_playback()
+            return
+        self._play_from(0.0)
+
+    def _build_clip(self) -> dict | None:
+        """Read and filter the selected crossing's clip; cache it for seeking.
+
+        Returns the clip dict (``pcm`` bytes, ``dur_s``, ``sequence``) or None
+        after emitting a toast. The view shows even when ``aplay`` is missing."""
         cap = self._selected_capture()
         if cap is None:
-            return
+            return None
         if self._audio_path is None or self._audio_offset is None:  # `is None`: 0.0 is valid
             self.notify.emit("No audio recording for this race")
-            return
+            return None
         if cap.get("t0_reconstructed"):
             self.notify.emit("No audio for crossings recorded after a restart")
-            return
+            return None
         elapsed = self._press_elapsed(cap)
         if elapsed is None:
             self.notify.emit("No audio recording for this race")
-            return
+            return None
         try:
             total_s = wav_duration_s(self._audio_path)
         except Exception:
             self.notify.emit("No audio recording for this race")
-            return
+            return None
         bounds = clip_bounds(elapsed, 0.0, self._audio_offset,
                              float(self._voice["play_before_s"]),
                              float(self._voice["play_after_s"]),
                              total_s)
         if bounds is None:
             self.notify.emit("Crossing is outside the recording")
-            return
+            return None
         try:
             pcm = read_clip(self._audio_path, *bounds)
         except Exception:
             self.notify.emit("No audio recording for this race")
-            return
+            return None
         start_s, dur_s = bounds
         press_in_clip = (elapsed - self._audio_offset) - start_s
         mute_ms = float(self._voice["press_mute_ms"])
@@ -834,12 +853,40 @@ class ReviewScreen(QWidget):
             if 0.0 <= p <= dur_s:
                 others.append(p)
         self.audio_view.set_clip(pcm, dur_s, press_in_clip, others)
+        self._clip = {"pcm": pcm, "dur_s": dur_s, "sequence": cap["sequence"]}
+        return self._clip
+
+    def _play_from(self, offset_s: float) -> None:
+        """Play the cached clip from ``offset_s`` seconds into it."""
+        clip = self._clip
+        if clip is None:
+            return
+        # Clamp to the actual PCM, not just dur_s: read_clip rounds the frame
+        # count, so a click on the last pixel can land exactly on the end.
+        max_s = len(clip["pcm"]) / (2 * RATE)
+        offset_s = max(0.0, min(offset_s, max_s))
+        pcm = clip["pcm"]
+        if offset_s > 0.0:
+            pcm = pcm[round(offset_s * RATE) * 2:]
         self.stop_playback()
+        if not pcm:
+            return
+        self.audio_view.set_play_start(offset_s)
         self._player = play_clip(pcm, device=str(self._voice["output"]))
         if self._player is None:
             self.notify.emit("aplay not available — install alsa-utils")
             return
         self._play_timer.start()
+
+    def _seek_audio(self, offset_s: float) -> None:
+        """Envelope clicked: replay the selected crossing's clip from that point."""
+        if not bool(self._voice["enabled"]):
+            return
+        if self._clip is None or self._clip.get("sequence") != self._selected_seq:
+            if self._build_clip() is None:
+                self.stop_playback()
+                return
+        self._play_from(offset_s)
 
     def _poll_player(self) -> None:
         """Surface a player that exited with an error (wrong device, card busy)."""

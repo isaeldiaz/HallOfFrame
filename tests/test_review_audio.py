@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.audio import RATE
@@ -202,6 +202,76 @@ class TestReviewAudio(unittest.TestCase):
         assert rms(pcm[30400:33600]) == 0
         assert rms(pcm[33600:38400]) > 10000
         assert rms(pcm[0:28800]) == 0
+
+    def test_seek_replays_from_clicked_point(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        clip = screen._clip
+        assert clip is not None
+        assert len(play.call_args[0][0]) == 2 * RATE * 2
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            screen._seek_audio(1.0)
+        play.assert_called_once()
+        pcm = play.call_args[0][0]
+        assert len(pcm) == RATE * 2
+        assert pcm == clip["pcm"][RATE * 2:]
+        assert screen.audio_view._play_offset == pytest.approx(1.0)
+        assert screen.audio_view._timer.isActive()
+
+    def test_waveform_click_triggers_seek(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip"):
+            self.key(Qt.Key_P)
+        view = screen.audio_view
+        view.resize(401, 72)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            ev = QMouseEvent(QEvent.MouseButtonPress, QPointF(200, 36),
+                             QPointF(200, 36), Qt.LeftButton, Qt.LeftButton,
+                             Qt.NoModifier)
+            view.mousePressEvent(ev)
+        play.assert_called_once()
+        assert len(play.call_args[0][0]) == RATE * 2
+
+    def test_seek_without_prior_play_builds_clip(self):
+        screen = self.review()
+        screen._select(2)
+        assert screen._clip is None
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            screen._seek_audio(0.5)
+        play.assert_called_once()
+        assert len(play.call_args[0][0]) == int(1.5 * RATE) * 2
+
+    def test_selection_resets_cached_clip(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip"):
+            self.key(Qt.Key_P)
+        assert screen._clip is not None
+        screen._select(1)
+        assert screen._clip is None
+
+    def test_seek_at_end_does_not_spawn_player(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip"):
+            self.key(Qt.Key_P)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            screen._seek_audio(screen._clip["dur_s"])
+        play.assert_not_called()
+
+    def test_selecting_stops_playback(self):
+        screen = self.review()
+        screen._select(2)
+        player = mock.Mock()
+        player.poll.return_value = None
+        with mock.patch("hallofframe.ui.review_screen.play_clip",
+                        return_value=player):
+            self.key(Qt.Key_P)
+        screen._select(1)
+        player.kill.assert_called_once()
 
 
 @pytest.mark.usefixtures("review_audio_env")

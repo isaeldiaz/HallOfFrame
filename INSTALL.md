@@ -646,3 +646,20 @@ cannot pair with current iOS.
 **fps sags after several minutes of running**
 CPU governor (§7), or thermal limiting on a 15 W part in a warm boat tent. Check
 `grep MHz /proc/cpuinfo` while the stream runs.
+
+**Review `P` "plays" but nothing is audible (or only on the wrong device)**
+`[voice] input`/`output` are ALSA PCMs. `"default"` is ALSA **card 0**, not the
+PipeWire default, so it can bypass a USB headset and land on a built-in mixer
+that is switched off. Confirm where `default` lands and whether the card is
+muted:
+```bash
+aplay -v -D default -t raw -f S16_LE -r 16000 -c 1 - </dev/zero  # names the HW PCM card
+amixer -c 0 sget Master; amixer -c 0 sget Speaker                # [off] = silence
+wpctl status                                                     # PipeWire default sink/source
+```
+Use `"pulse"` to follow the PipeWire default in each direction — `input` and
+`output` are independent and may name different devices — or
+`"plughw:CARD=<name>,DEV=0"` to pin one. A card owned by PipeWire cannot be
+opened directly: `aplay -D plughw:CARD=H650e,DEV=0` returns `Device or resource
+busy`; go through `pulse` instead. `config.toml` is read only at start-up, so
+restart the app after editing it.

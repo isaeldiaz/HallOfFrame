@@ -362,8 +362,12 @@ review, select the crossing, press `P`.
 Pass: `races/<id>_<name>/audio.wav` exists,
 `SELECT audio_path, audio_t0_offset_s FROM race` returns a small positive offset,
 and `P` (also from a focused bow field, and the "Play audio" button) plays the
-clip through the speakers. A wrong `[voice] output` device shows an
+clip through the speakers; clicking a point on the envelope replays the clip from
+there. A wrong `[voice] output` device shows an
 "aplay failed: …" toast instead of silence; `aplay -L` lists the devices.
+`[voice] input`/`output` are ALSA PCMs and are independent: `"default"` is ALSA
+card 0, *not* the PipeWire default, so a USB headset can be missed (or the built-in
+card is muted) — use `"pulse"` or `plughw:CARD=…`; see INSTALL.md §10.
 With `[voice] enabled = false` the review screen has no Play button and the
 key bar has no `P` cap. With `[voice] mixer = ["Capture 60%", "Mic Boost 0%"]`
 (names from `amixer -c <card> scontrols`) the hiss drops; a bad control name

@@ -8,6 +8,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
+
 from hallofframe.audio import RATE
 from hallofframe.ui import styles
 from hallofframe.ui.audio_view import AudioView
@@ -71,4 +74,52 @@ def test_empty_paint_smoke(qapp):
     v.resize(401, 72)
     img = v.grab()
     assert not img.isNull()
+    v.deleteLater()
+
+
+def test_click_emits_seek_at_position(qapp):
+    v = AudioView()
+    v.resize(401, 72)
+    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.stop_playhead()
+    seen = []
+    v.seek_requested.connect(seen.append)
+    ev = QMouseEvent(QEvent.MouseButtonPress, QPointF(200, 36),
+                     QPointF(200, 36), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    v.mousePressEvent(ev)
+    assert seen == [pytest.approx(1.0, abs=1e-6)]
+    v.deleteLater()
+
+
+def test_click_on_empty_emits_nothing(qapp):
+    v = AudioView()
+    v.resize(401, 72)
+    seen = []
+    v.seek_requested.connect(seen.append)
+    ev = QMouseEvent(QEvent.MouseButtonPress, QPointF(200, 36),
+                     QPointF(200, 36), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    v.mousePressEvent(ev)
+    assert seen == []
+    v.deleteLater()
+
+
+def test_right_click_emits_nothing(qapp):
+    v = AudioView()
+    v.resize(401, 72)
+    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.stop_playhead()
+    seen = []
+    v.seek_requested.connect(seen.append)
+    ev = QMouseEvent(QEvent.MouseButtonPress, QPointF(200, 36),
+                     QPointF(200, 36), Qt.RightButton, Qt.RightButton, Qt.NoModifier)
+    v.mousePressEvent(ev)
+    assert seen == []
+    v.deleteLater()
+
+
+def test_set_play_start_offsets_playhead(qapp):
+    v = AudioView()
+    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.set_play_start(1.5)
+    assert v.playhead_s() == pytest.approx(1.5, abs=0.05)
     v.deleteLater()

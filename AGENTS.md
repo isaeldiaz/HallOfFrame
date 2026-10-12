@@ -170,7 +170,12 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   last stderr line (`audio.player_error`). Capture gain is set once at start-up
   from [voice] mixer (audio.apply_mixer, errors → toast); review playback runs
   audio.process_clip (high-pass → gain → press mute → int16 clip) on the clip
-  bytes only.
+  bytes only. Clicking the `AudioView` envelope re-plays the clip from the
+  clicked point (`seek_requested`), so the operator can scrub by ear; the cached
+  clip is dropped when the crossing selection changes. `[voice] input`/`output`
+  are independent ALSA PCMs for `arecord -D`/`aplay -D` (capture vs. playback, so
+  they may name different devices); use `pulse` for the PipeWire default or
+  `plughw:CARD=…` to pin a specific device.
 
 ## Data & config (the single source of truth)
 
