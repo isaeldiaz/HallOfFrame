@@ -95,6 +95,10 @@ class MainWindow(QMainWindow):
         # caps and shortcuts are then disabled so a click or keypress can never
         # supply a Qt-loop timestamp in place of the kernel one (§5.3, §6.4).
         self.evdev_active = False
+        # True once main.py has built a separate (ungrabbed) end-device
+        # listener: that keyboard's F12 then arrives through evdev, so the Qt
+        # F12 shortcut must stand down or every race ends twice.
+        self.end_evdev_active = False
         self._logger = logger
 
         self.setWindowTitle("HallOfFrame — Finish-Line Timer")
@@ -357,6 +361,8 @@ class MainWindow(QMainWindow):
         self.controller.undo_last()
 
     def _end_key(self) -> None:
+        if self.end_evdev_active:
+            return
         self.on_evdev_end(time.monotonic(), 88)
 
     def _armed_start_clicked(self) -> None:
@@ -554,6 +560,13 @@ class MainWindow(QMainWindow):
         if not device:
             return ("Scratchpad needs the external trigger button: "
                     "[trigger] device_path is empty (§13.3).")
+        if not self.evdev_active:
+            # The path is set but no listener was built (device unplugged,
+            # evdev missing): the Qt fallback's SPACE/Return are typable and
+            # stand down while the field has focus, so no crossing could be
+            # recorded.
+            return ("Scratchpad needs the external trigger button: "
+                    f"{device} could not be opened (Qt fallback) (§13.3).")
         if is_internal_keyboard(device):
             return ("Scratchpad needs the external trigger button: "
                     "[trigger] device_path is the laptop keyboard (§13.3).")

@@ -33,7 +33,10 @@ class _Field(QLineEdit):
                     self._owner.flash()
                 return True
             if key == Qt.Key_Backspace and self.text() == "":
-                self._owner.undo_requested.emit()
+                # One undo per physical press: a held key autorepeats ~30/s
+                # and would otherwise soft-delete the whole typed list.
+                if not event.isAutoRepeat():
+                    self._owner.undo_requested.emit()
                 return True
         elif etype == QEvent.ShortcutOverride:
             # A plain QLineEdit would claim Ctrl+Z as text-undo and swallow the

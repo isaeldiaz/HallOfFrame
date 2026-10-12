@@ -180,6 +180,11 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   - `{event_name}.db` (`[paths] event_name`) — SQLite (`race`, `capture`,
     `frame`). The event name is set in `config.toml` and every piece of
     generated data carries it.
+  - `[scratchpad] enabled` (default `false`) — the §13.3 live bow-number
+    scratchpad (two-operator booth). Arming is refused unless an evdev
+    trigger listener is up and `device_path` is not the internal keyboard;
+    `end_device_path` should be the laptop keyboard so Qt keeps receiving
+    the typed digits.
   - `[web]` — optional live results HTTP server (host, port, enabled). Runs as
     a **separate process** (`python -m hallofframe.web --config PATH`); it opens
     its **own** SQLite read connection (WAL-safe against the app's writer) and

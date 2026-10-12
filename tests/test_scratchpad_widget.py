@@ -76,6 +76,20 @@ def test_backspace_on_empty_requests_undo(qapp):
     w.deleteLater()
 
 
+def test_backspace_autorepeat_ignored(qapp):
+    w = ScratchpadWidget()
+    got = []
+    w.undo_requested.connect(lambda: got.append(True))
+    press(w.field, Qt.Key_Backspace)
+    for _ in range(5):
+        ev = QKeyEvent(QEvent.KeyPress, Qt.Key_Backspace, Qt.NoModifier,
+                       "", True)
+        qapp.sendEvent(w.field, ev)
+    qapp.processEvents()
+    assert got == [True]
+    w.deleteLater()
+
+
 def test_backspace_with_text_edits(qapp):
     w = ScratchpadWidget()
     got = []

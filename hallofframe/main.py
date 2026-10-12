@@ -281,19 +281,22 @@ def main(argv=None) -> int:
     # With an evdev timing device present, the Qt start/crossing fallback is
     # disabled: its time.monotonic() timestamp is not the kernel one (§5.3).
     win.evdev_active = listeners is not None
+    # The end device (laptop keyboard) is ungrabbed, so its F12 reaches both
+    # the evdev end listener and Qt; silence the Qt copy.
+    win.end_evdev_active = bool(extra_listeners)
     if fallback:
         # Qt key-event fallback (§6.4): degraded precision, say so.
         logger.warning("trigger", "qt_fallback")
 
     # Only the timing (primary) device is grabbed from ARM through RACE_OVER
     # (§9/Opt A). A separate end_device (keyboard) is deliberately left ungrabbed
-    # so Qt keeps receiving keys — e.g. future boat-number entry — while the
-    # SayoDevice button is grabbed for crossings.
+    # so Qt keeps receiving keys — the §13.3 scratchpad types bow numbers on
+    # it — while the SayoDevice button is grabbed for crossings.
     if listeners is not None and config.section("trigger")["grab_device"]:
         # Option A: the trigger keyboard is grabbed from ARM through RACE_OVER,
-        # tied directly to state instead of a 250 ms polling timer (§9). Bow
-        # entry moved to REVIEW, so nothing needs the keyboard between arm and
-        # end. Recovery on a freeze is via the separate primary keyboard.
+        # tied directly to state instead of a 250 ms polling timer (§9). Only
+        # the timing device is grabbed; the laptop keyboard stays free for the
+        # scratchpad and for recovery on a freeze.
         from .ui.state import AppState
         def _sync_grab(state):
             try:

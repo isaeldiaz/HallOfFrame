@@ -37,6 +37,8 @@ def _build(inst, config, storage, buffer, qapp, enabled: bool) -> None:
     inst.buffer.health = lambda: (True, 30.0, 0.1)
     inst.controller = CaptureController(inst.config, inst.storage, inst.buffer)
     inst.win = MainWindow(inst.config, inst.controller, inst.buffer)
+    # main.py sets this once an evdev listener is built; the arm gate needs it.
+    inst.win.evdev_active = True
     inst.win.show()
     qapp.processEvents()
     inst.events = []
@@ -135,6 +137,29 @@ class TestScratchWiring:
         self.controller.end_race()
         self.pump()
         assert self.win.scratchpad.field.text() == ""
+
+    def test_arm_refused_on_qt_fallback(self, monkeypatch):
+        # device_path set but no listener built (button unplugged, no evdev):
+        # the Qt fallback's typable SPACE/Return stand down while the field has
+        # focus, so no crossing could be recorded.
+        monkeypatch.setattr("hallofframe.trigger.is_internal_keyboard",
+                            lambda p: False)
+        self.win.evdev_active = False
+        self.win._arm_start()
+        assert self.win.session.phase is Phase.IDLE
+        assert "external trigger" in self.win.toast._label.text()
+
+    def test_qt_f12_stands_down_with_end_listener(self):
+        # The ungrabbed end device (laptop keyboard) delivers F12 through evdev
+        # AND Qt; only one of them may end the race.
+        self.start()
+        self.win.end_evdev_active = True
+        self.win._end_key()
+        assert self.controller.running
+        self.win.end_evdev_active = False
+        self.win._end_key()
+        self.pump()
+        assert not self.controller.running
 
     def test_arm_refused_on_internal_keyboard(self, monkeypatch):
         monkeypatch.setattr("hallofframe.trigger.is_internal_keyboard",
