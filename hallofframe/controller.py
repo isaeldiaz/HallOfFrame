@@ -20,7 +20,8 @@ from typing import Callable
 from . import scratchpad
 from . import storage as storage_mod
 from .audio import AUDIO_FILENAME
-from .calibration import CALIBRATION_FILENAME, Calibration, calibration_path
+from .calibration import (CALIBRATION_FILENAME, Calibration, calibration_path,
+                          reaction_offset_ms)
 from .framebuffer import FrameBuffer
 from .framestore import FrameStore, nearest
 from .mjpeg import Frame
@@ -331,7 +332,7 @@ class CaptureController:
     # --- delta ------------------------------------------------------------
     def _compute_delta(self) -> float:
         timing = self.config.section("timing")
-        reaction_ms = float(timing["reaction_offset_ms"])
+        reaction_ms, _source = reaction_offset_ms(self.config)
         viewing = timing["viewing_mode"]
         if viewing == "screen":
             # §5.4: screen mode cancels latency entirely; Δ = R. No calibration
@@ -798,6 +799,9 @@ def _load_latency(config, buffer) -> float | None:
             raise CalibrationError(f"{CALIBRATION_FILENAME} unreadable")
         raise CalibrationError(
             f"{CALIBRATION_FILENAME} missing — run Calibrate first (§8, §5.5)")
+    if not cal.has_latency:
+        raise CalibrationError(
+            f"{CALIBRATION_FILENAME} has no latency — run Calibrate (latency)")
     try:
         live_res, _live_mean, live_fps = buffer.live_format()
     except ValueError as exc:
@@ -824,6 +828,9 @@ def calibration_status(config, buffer):
         if calibration_path(config.data_root).exists():
             return False, f"{CALIBRATION_FILENAME} unreadable"
         return False, f"no {CALIBRATION_FILENAME} — run Calibrate"
+    if not cal.has_latency:
+        return False, (f"{CALIBRATION_FILENAME} has no latency — run "
+                       "Calibrate (latency)")
     try:
         live_res, _mean, live_fps = buffer.live_format()
     except Exception:

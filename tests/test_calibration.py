@@ -45,6 +45,21 @@ def test_load_valid(data_root):
     assert cal.measured_at == "2026-01-01T00:00:00Z"
 
 
+def test_load_valid_defaults_reaction_none(data_root):
+    calibration_path(data_root).write_text(json.dumps({
+        "latency_median_ms": 94.0,
+        "latency_iqr_ms": 3.0,
+        "resolution": "1440x1080",
+        "fps": 30,
+        "mean_frame_bytes": 12345,
+        "measured_at": "2026-01-01T00:00:00Z",
+    }))
+    cal = Calibration.load(data_root)
+    assert cal.has_latency is True
+    assert cal.reaction_visual_ms is None
+    assert cal.reaction_audio_ms is None
+
+
 def test_load_partial_uses_defaults(data_root):
     calibration_path(data_root).write_text(json.dumps({"latency_median_ms": 10}))
     cal = Calibration.load(data_root)

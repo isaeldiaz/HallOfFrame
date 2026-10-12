@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
 
 from .. import __version__
 from ..buildinfo import build_stamp
-from ..calibration import Calibration, calibration_path
+from ..calibration import Calibration, calibration_path, reaction_offset_ms
 from . import styles
 from .widgets import KeyCap
 
@@ -75,6 +75,19 @@ def environment_rows(config) -> list[tuple[str, str]]:
         ("Viewing mode", config.section("timing")["viewing_mode"]),
         ("Calibrated latency",
          f"{latency:.0f} ms" if latency is not None else "not calibrated"),
+        *reaction_rows(config),
+    ]
+
+
+def reaction_rows(config) -> list[tuple[str, str]]:
+    """Diagnostics rows for the measured reaction times (§5.5.1)."""
+    r, source = reaction_offset_ms(config)
+    cal = Calibration.load(config.data_root)
+    audio = cal.reaction_audio_ms if cal is not None else None
+    return [
+        ("Reaction (visual)", f"{r:.0f} ms ({source})"),
+        ("Reaction (sound)",
+         f"{audio:.0f} ms" if audio is not None else "not measured"),
     ]
 
 

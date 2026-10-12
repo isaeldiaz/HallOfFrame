@@ -12,6 +12,7 @@ The latency formula is applied in the controller; here we only measure.
 from __future__ import annotations
 
 import json
+import random
 import statistics
 import time
 from dataclasses import dataclass
@@ -33,6 +34,16 @@ def calibration_path(data_root) -> Path:
     return Path(data_root) / CALIBRATION_FILENAME
 
 
+def _reaction_median(data, kind: str) -> float | None:
+    """Reaction median (ms) for *kind* from a parsed calibration dict, or None.
+
+    A malformed ``reaction`` object never raises; it only yields None."""
+    try:
+        return float(data["reaction"][kind]["median_ms"])
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True)
 class Calibration:
     """The persisted latency calibration (spec §5.5, §8).
@@ -47,6 +58,9 @@ class Calibration:
     fps: float           # 0 when unknown
     mean_frame_bytes: int
     measured_at: str
+    has_latency: bool = True            # False when the file holds only reaction data
+    reaction_visual_ms: float | None = None
+    reaction_audio_ms: float | None = None
 
     @classmethod
     def load(cls, data_root: Path) -> "Calibration | None":
@@ -67,6 +81,9 @@ class Calibration:
                 fps=float(data.get("fps", 0) or 0),
                 mean_frame_bytes=int(data.get("mean_frame_bytes", 0) or 0),
                 measured_at=str(data.get("measured_at", "") or ""),
+                has_latency="latency_median_ms" in data,
+                reaction_visual_ms=_reaction_median(data, "visual"),
+                reaction_audio_ms=_reaction_median(data, "audio"),
             )
         except Exception:
             return None
@@ -205,5 +222,140 @@ def write_calibration(data_root: Path, latency_median_ms: float, latency_iqr_ms:
         "mean_frame_bytes": mean_frame_bytes,
     }
     path = calibration_path(data_root)
+    try:
+        existing = json.loads(path.read_text())
+    except Exception:
+        existing = {}
+    # latency and reaction are measured separately; each write preserves the other
+    if isinstance(existing, dict) and "reaction" in existing:
+        cal["reaction"] = existing["reaction"]
     path.write_text(json.dumps(cal, indent=2) + "\n")
     return path
+
+
+REACTION_TRIALS = 10
+REACTION_MIN = 6
+REACTION_EARLY_MS = 80.0      # faster than this is a guess, not a reaction
+REACTION_LATE_MS = 1500.0     # slower than this is a miss
+REACTION_DELAY_S = (1.5, 4.0)  # random wait before the stimulus
+REACTION_KINDS = ("visual", "audio")
+
+
+def reaction_stats(samples_ms: list[float]) -> dict:
+    """{'median_ms','iqr_ms','mean_ms','n'}; ValueError when n < REACTION_MIN."""
+    if len(samples_ms) < REACTION_MIN:
+        raise ValueError(
+            f"need at least {REACTION_MIN} samples, got {len(samples_ms)}")
+    samples = sorted(samples_ms)
+    median = statistics.median(samples)
+    try:
+        q = statistics.quantiles(samples, n=4)
+        iqr = q[2] - q[0]
+    except Exception:
+        iqr = 0.0
+    return {
+        "median_ms": median,
+        "iqr_ms": iqr,
+        "mean_ms": statistics.mean(samples),
+        "n": len(samples),
+    }
+
+
+class ReactionRun:
+    """One measurement of `trials` reactions. kind in REACTION_KINDS (ValueError otherwise)."""
+
+    def __init__(self, kind: str, trials: int = REACTION_TRIALS,
+                 rng=random.uniform):
+        if kind not in REACTION_KINDS:
+            raise ValueError(f"unknown reaction kind: {kind!r}")
+        self.kind, self.trials = kind, trials
+        self.samples_ms: list[float] = []
+        self.false_starts = 0
+        self.misses = 0
+        self.state = "idle"      # idle | waiting | shown
+        self.t_stim: float | None = None
+        self._rng = rng
+
+    def next_delay(self) -> float:
+        """Arm the random wait; returns the delay in seconds."""
+        self.state = "waiting"
+        return self._rng(*REACTION_DELAY_S)
+
+    def stimulus(self, t: float) -> None:
+        """Show the stimulus at monotonic time *t*."""
+        self.state = "shown"
+        self.t_stim = t
+
+    def press(self, t: float) -> str:
+        """Classify an operator press at time *t*."""
+        if self.state == "idle":
+            return "ignored"
+        if self.state == "waiting":
+            self.false_starts += 1
+            self.state = "idle"
+            return "early"
+        rt = (t - self.t_stim) * 1000
+        if rt < REACTION_EARLY_MS:
+            self.false_starts += 1
+            self.state = "idle"
+            return "early"
+        if rt > REACTION_LATE_MS:
+            self.misses += 1
+            self.state = "idle"
+            return "late"
+        self.samples_ms.append(rt)
+        self.state = "idle"
+        return "ok"
+
+    def timeout(self) -> str:
+        """Record a miss when the stimulus was never answered."""
+        if self.state != "shown":
+            return "ignored"
+        self.misses += 1
+        self.state = "idle"
+        return "late"
+
+    @property
+    def done(self) -> bool:
+        return len(self.samples_ms) >= self.trials
+
+    def stats(self) -> dict:
+        return reaction_stats(self.samples_ms)
+
+
+def update_reaction(data_root, kind: str, stats: dict, samples_ms: list[float],
+                    press_source: str, measured_at: str | None = None) -> Path:
+    """Merge reaction[kind] into calibration.json (creating the file with only `reaction` when absent)."""
+    if kind not in REACTION_KINDS:
+        raise ValueError(f"unknown reaction kind: {kind!r}")
+    if press_source not in ("evdev", "qt"):
+        raise ValueError(f"unknown press source: {press_source!r}")
+    data_root = Path(data_root)
+    data_root.mkdir(parents=True, exist_ok=True)
+    path = calibration_path(data_root)
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data.setdefault("reaction", {})[kind] = {
+        "median_ms": stats["median_ms"],
+        "iqr_ms": stats["iqr_ms"],
+        "mean_ms": stats["mean_ms"],
+        "n": stats["n"],
+        "samples_ms": samples_ms,
+        "press_source": press_source,
+        "measured_at": measured_at or time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                    time.gmtime()),
+    }
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    return path
+
+
+def reaction_offset_ms(config) -> tuple[float, str]:
+    """(R in ms, source): the measured visual reaction when present, else [timing] reaction_offset_ms ("config")."""
+    cal = Calibration.load(config.data_root)
+    if cal is not None and cal.reaction_visual_ms is not None:
+        return cal.reaction_visual_ms, "measured"
+    return float(config.section("timing")["reaction_offset_ms"]), "config"
