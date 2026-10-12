@@ -161,7 +161,7 @@ class _Row(QWidget):
     time_edited = Signal(int, str)
 
     def __init__(self, data: dict, thumb_w: int, thumb_h: int,
-                 editable: bool, parent=None):
+                 editable: bool, show_bow: bool = True, parent=None):
         super().__init__(parent)
         self.sequence = data["sequence"]
         self.elapsed_s = data["elapsed_s"]
@@ -208,14 +208,15 @@ class _Row(QWidget):
                 f" font-weight:500; color:{styles.TEXT_PRIMARY};")
             self.lay.addWidget(self.time_lbl)
 
-            self.bow_lbl = QLabel(data.get("bow") or "")
-            self.bow_lbl.setProperty("mono", True)
-            self.bow_lbl.setStyleSheet(
-                f"font-family:'{styles.FONT_MONO}'; font-size:30px;"
-                f" color:{styles.TEXT_PRIMARY};")
-            self.bow_lbl.setFixedWidth(90)
-            self.bow_lbl.setAlignment(Qt.AlignCenter)
-            self.lay.addWidget(self.bow_lbl)
+            if show_bow:
+                self.bow_lbl = QLabel(data.get("bow") or "")
+                self.bow_lbl.setProperty("mono", True)
+                self.bow_lbl.setStyleSheet(
+                    f"font-family:'{styles.FONT_MONO}'; font-size:30px;"
+                    f" color:{styles.TEXT_PRIMARY};")
+                self.bow_lbl.setFixedWidth(90)
+                self.bow_lbl.setAlignment(Qt.AlignCenter)
+                self.lay.addWidget(self.bow_lbl)
 
         self.src_lbl = QLabel("")
         self.src_lbl.setProperty("mono", True)
@@ -308,7 +309,7 @@ class _Row(QWidget):
         if self.editable:
             if not self.bow_edit.hasFocus():
                 self.bow_edit.setText(text or "")
-        else:
+        elif hasattr(self, "bow_lbl"):
             self.bow_lbl.setText(text or "")
 
     def set_highlight(self, on: bool) -> None:
@@ -336,9 +337,10 @@ class CrossingList(QWidget):
     select_step = Signal(int)              # +1/-1 (↑/↓ in a field)
     escape_pressed = Signal()              # Esc in a field: release focus
 
-    def __init__(self, *, editable: bool, parent=None):
+    def __init__(self, *, editable: bool, show_bow: bool = True, parent=None):
         super().__init__(parent)
         self._editable = editable
+        self._show_bow = show_bow
         self._rows: dict[int, _Row] = {}
         self._edits: dict[int, QLineEdit] = {}
         self._selected: int | None = None
@@ -394,7 +396,7 @@ class CrossingList(QWidget):
             row.time_edit.escape.connect(self.escape_pressed)
             self._edits[data["sequence"]] = row.bow_edit
         else:
-            row = _Row(data, THUMB_W, THUMB_H, False)
+            row = _Row(data, THUMB_W, THUMB_H, False, show_bow=self._show_bow)
         self._rows[data["sequence"]] = row
         self._rebuild()
 

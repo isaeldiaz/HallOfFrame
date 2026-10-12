@@ -119,9 +119,9 @@ class MainWindow(QMainWindow):
         self.ready = ReadyScreen(buffer)
         self.ready.finish_line_changed.connect(self._finish_line_changed)
         self.armed = ArmedScreen(on_start=lambda: self._armed_start_clicked())
-        self.recording = RaceScreen()
+        self.recording = RaceScreen(show_bow=bool(
+            config.section("scratchpad")["enabled"]))
         self.scratchpad = None
-        self._scratch_last = None
         if bool(config.section("scratchpad")["enabled"]):
             from ..ui.scratchpad_widget import ScratchpadWidget
             self.scratchpad = ScratchpadWidget()
@@ -218,13 +218,21 @@ class MainWindow(QMainWindow):
             self._show_toast(payload["message"])
 
     def _scratch_commit(self, text: str) -> None:
-        if not self.controller.add_scratch(text):
+        if self.controller.add_scratch(text):
+            if self.scratchpad is not None:
+                self.scratchpad.clear_field()
+        else:
             self.scratchpad.flash()
 
     def on_scratch_changed(self, payload: dict) -> None:
         if self.scratchpad is None:
             return
-        self._scratch_last = payload
+        # A late event from a just-ended race must not clobber the live screen
+        # (the writer queue usually drains first, but not under disk pressure).
+        rid = payload.get("race_id")
+        if (rid is not None and self.controller.race_id is not None
+                and rid != self.controller.race_id):
+            return
         self.scratchpad.set_counts(payload["typed"], payload["crossings"])
         self.recording.set_bows(payload["bows"])
 
@@ -475,6 +483,10 @@ class MainWindow(QMainWindow):
         else:
             self.recording.end()
             self.clock_timer.stop()
+            # Drop any number typed but never committed so it cannot leak into
+            # the next race's first crossing.
+            if self.scratchpad is not None:
+                self.scratchpad.clear_field()
 
         self._refresh_band(state)
         self._apply_keymap(state)
@@ -528,6 +540,25 @@ class MainWindow(QMainWindow):
             self.recording.set_clock(time.monotonic() - self.controller.t0)
 
     # -------------------------------------------------------------------- events
+    def _scratch_arm_block(self) -> str | None:
+        """Why the scratchpad forbids arming, or None when it is safe.
+
+        Operator 2 types on the laptop keyboard for the whole heat, so the
+        trigger must be an external evdev button (§13.3). An empty
+        ``device_path`` means the Qt fallback, which the scratchpad cannot use:
+        the focused field would swallow the SPACE/Enter shortcut keys."""
+        if self.scratchpad is None:
+            return None
+        from ..trigger import is_internal_keyboard
+        device = self.config.section("trigger")["device_path"]
+        if not device:
+            return ("Scratchpad needs the external trigger button: "
+                    "[trigger] device_path is empty (§13.3).")
+        if is_internal_keyboard(device):
+            return ("Scratchpad needs the external trigger button: "
+                    "[trigger] device_path is the laptop keyboard (§13.3).")
+        return None
+
     def _arm_start(self) -> None:
         if self.session.phase is Phase.ARMED:
             return
@@ -545,12 +576,10 @@ class MainWindow(QMainWindow):
             self._show_toast("Calibration no longer matches the stream — "
                              "press C to re-calibrate.")
             return
-        if self.scratchpad is not None:
-            from ..trigger import is_internal_keyboard
-            if is_internal_keyboard(self.config.section("trigger")["device_path"]):
-                self._show_toast("Scratchpad needs the external trigger button: "
-                                 "[trigger] device_path is the laptop keyboard (§13.3).")
-                return
+        blocked = self._scratch_arm_block()
+        if blocked is not None:
+            self._show_toast(blocked)
+            return
         try:
             self.session.arm()
         except SessionError as exc:
@@ -636,12 +665,15 @@ class MainWindow(QMainWindow):
         self.ready.reset_provisional()
         self._refresh_race_selector()
         self._recompute_state()
-        if self.scratchpad is not None and self.scratchpad.mismatch():
-            typed = self._scratch_last["typed"]
-            crossings = self._scratch_last["crossings"]
-            self._show_toast(
-                f"Scratchpad: {typed} typed / {crossings} crossings — "
-                "fix bow numbers in review", timeout_ms=0)
+        if self.scratchpad is not None:
+            # Read the committed counts, not the widget/last-event state: the
+            # final ``scratch_changed`` is delivered through the bridge after
+            # this synchronous call, so the widget can lag by one recompute.
+            typed, crossings = self.controller.storage.scratch_counts(race_id)
+            if typed != crossings:
+                self._show_toast(
+                    f"Scratchpad: {typed} typed / {crossings} crossings — "
+                    "fix bow numbers in review", timeout_ms=0)
 
     def _start_text(self, race_id: int) -> str:
         row = self.controller.storage.get_race(race_id)
@@ -931,6 +963,10 @@ class MainWindow(QMainWindow):
         # screen (or leave the session in an illegal phase).
         if self.controller.running or self.session.phase is not Phase.IDLE:
             self._show_toast("Can't resume — a race is already on screen.")
+            return
+        blocked = self._scratch_arm_block()
+        if blocked is not None:
+            self._show_toast(blocked)
             return
         self._clear_resume_banner()
         self.controller.resume_race(race_id)

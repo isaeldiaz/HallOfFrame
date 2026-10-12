@@ -115,7 +115,7 @@ class LastCapturePanel(QWidget):
 class RaceScreen(QWidget):
     """Clock + count + last-capture panel (left) + crossing log (right)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, show_bow: bool = True):
         super().__init__(parent)
         self._t0 = 0.0
         self._running = False
@@ -181,7 +181,7 @@ class RaceScreen(QWidget):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(0)
-        self.log = CrossingList(editable=False)
+        self.log = CrossingList(editable=False, show_bow=show_bow)
         self.log.setFixedWidth(660)
         rv.addWidget(self.log, 1)
         self._right_lay = rv

@@ -109,3 +109,7 @@ class ScratchpadWidget(QWidget):
 
     def focus_field(self) -> None:
         self.field.setFocus()
+
+    def clear_field(self) -> None:
+        """Drop any uncommitted text (called on state changes / after commit)."""
+        self.field.clear()
