@@ -9,8 +9,9 @@
 #   cp hallofframe.example.toml ~/regatta-data/config.toml
 #   $EDITOR ~/regatta-data/config.toml
 #
-# The values below are the application's built-in defaults, so a straight copy
-# runs unchanged; change only what you need.
+# Most values below are the application's built-in defaults, so a straight copy
+# runs; the [trigger] device paths are machine-specific and must match this
+# laptop's devices (check /dev/input/by-id/ and /dev/input/by-path/).
 
 [paths]
 data_root = "~/regatta-data"   # everything (§6.7) is relative to this; the
@@ -64,15 +65,17 @@ window_after_ms = 500
 # device_path empty = Qt fallback; otherwise the evdev device to grab, e.g.
 # /dev/input/event3 (the internal keyboard). grab_device = true is required if
 # using the internal keyboard as the trigger (§6.4). Keycodes are the evdev
-# numeric codes: SPACE=57, ENTER=28, F12=88.
-device_path = "/dev/input/event3"
+# numeric codes: SPACE=57, ENTER=28, F12=88. Prefer the stable
+# /dev/input/by-id/... path for a USB button so it survives a replug.
+device_path = "/dev/input/by-id/usb-LinTx_USB_Keyboard_BF5AEDB1-if01-event-kbd"
 # Optional second evdev device that handles ONLY the end keycodes and is NEVER
 # grabbed, so Qt keeps receiving typing (e.g. future boat-number entry) while
 # the timing device is grabbed during a race. Empty string = single-device
-# behaviour (end handled on device_path too).
-# end_device_path = "/dev/input/event3"
-crossing_keycodes = [57]     # KEY_SPACE — operator choice (§6.4)
-start_keycodes = [28]        # KEY_ENTER
+# behaviour (end handled on device_path too). Point it at the laptop keyboard
+# (stable by-path) so the scratchpad keeps receiving typed digits (§13.3).
+end_device_path = "/dev/input/by-path/platform-i8042-serio-0-event-kbd"
+crossing_keycodes = [28]     # KEY_ENTER — LinTx USB button
+start_keycodes = [28]        # KEY_ENTER — single-key: 1st press = t0, each later press = crossing
 end_keycodes = [88]          # KEY_F12 — finish the race (§6.4)
 # Single-key flow (§5.3): list the SAME keycode in both crossing_keycodes and
 # start_keycodes. The first press while armed starts the race (t0); every later
@@ -104,7 +107,7 @@ thumb_quality = 75           # JPEG quality for the generated thumbnails
 cache_dir = "web-cache"      # thumbnail cache, relative to data_root (absolute allowed)
 
 [scratchpad]
-enabled = false              # §13.3 live bow-number scratchpad; needs an external trigger device
+enabled = true               # §13.3 live bow-number scratchpad; needs an external trigger device
 
 [voice]
 # Phase 8 (voice annotation) — optional, off by default. Present now so the
