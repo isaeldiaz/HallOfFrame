@@ -772,6 +772,10 @@ class MainWindow(QMainWindow):
         if self._review_screen is not None:
             self._review_screen.reset_selected_time()
 
+    def _review_play(self) -> None:
+        if self._review_screen is not None:
+            self._review_screen.play_selected()
+
     # ---------------------------------------------------------------- actions
     def _on_race_selected(self, row) -> None:
         if self._last_state == AppState.RACE_OVER:

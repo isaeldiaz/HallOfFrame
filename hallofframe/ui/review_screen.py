@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 from . import styles
 from .crossing_list import CrossingList
 from .images import load_view
+from ..audio import clip_bounds, play_clip, read_clip, wav_duration_s
 from ..render import format_elapsed, local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
@@ -232,6 +233,10 @@ class ReviewScreen(QWidget):
         # removal (capture ids; reset when a different race is loaded).
         self._undo_stack: list[int] = []
         self._stack_race_id: int | None = None
+        self._voice = controller.config.section("voice")
+        self._audio_path = None
+        self._audio_offset = None
+        self._player = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -257,6 +262,10 @@ class ReviewScreen(QWidget):
         self.edit_btn.setFocusPolicy(Qt.NoFocus)
         self.edit_btn.clicked.connect(self.edit_race_requested)
         header.addWidget(self.edit_btn)
+        self.play_btn = QPushButton("Play audio (P)")
+        self.play_btn.setFocusPolicy(Qt.NoFocus)
+        self.play_btn.clicked.connect(self.play_selected)
+        header.addWidget(self.play_btn)
         header.addStretch(1)
         step_hint = QLabel("Shift+←/→ to step frames · ±500 ms · Esc leaves a field")
         step_hint.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:15px;")
@@ -353,6 +362,15 @@ class ReviewScreen(QWidget):
         self._t0_wall = row["t0_wall"] if row else None
         self._t0_mono = row["t0_monotonic"] if row else None
         self._t0_reconstructed = bool(row["t0_reconstructed"]) if row else False
+        self._audio_offset = row["audio_t0_offset_s"] if row else None
+        self._audio_path = None
+        if row is not None and row["audio_path"]:
+            candidate = self.data_root / row["audio_path"]
+            if candidate.exists():
+                self._audio_path = candidate
+        self.play_btn.setEnabled(self._audio_path is not None)
+        self.play_btn.setToolTip("" if self._audio_path is not None
+                                 else "no recording for this race")
         self.start_edit.setText(
             local_hms(self._t0_wall) if self._t0_wall is not None else "")
         self.list.clear()
@@ -678,6 +696,10 @@ class ReviewScreen(QWidget):
                                             | Qt.AltModifier | Qt.MetaModifier)):
             self.undo_delete()
             return
+        if key == Qt.Key_P and not (mods & (Qt.ShiftModifier | Qt.ControlModifier
+                                            | Qt.AltModifier | Qt.MetaModifier)):
+            self.play_selected()
+            return
         if key == Qt.Key_D and mods & Qt.ShiftModifier:
             self.clone_selected()
             return
@@ -745,6 +767,35 @@ class ReviewScreen(QWidget):
                                    str(self.data_root / cap["primary_image"]))
         self._show_capture(cap["sequence"])
         self._show_primary()
+
+    def play_selected(self) -> None:
+        """Play [press − play_before_s, press + play_after_s] of the race audio."""
+        cap = self._selected_capture()
+        if cap is None:
+            return
+        if self._audio_path is None or self._audio_offset is None:  # `is None`: 0.0 is valid
+            self.notify.emit("No audio recording for this race")
+            return
+        if cap.get("t0_reconstructed"):
+            self.notify.emit("No audio for crossings recorded after a restart")
+            return
+        elapsed = self._press_elapsed(cap)
+        if elapsed is None:
+            self.notify.emit("No audio recording for this race")
+            return
+        bounds = clip_bounds(elapsed, 0.0, self._audio_offset,
+                             float(self._voice["play_before_s"]),
+                             float(self._voice["play_after_s"]),
+                             wav_duration_s(self._audio_path))
+        if bounds is None:
+            self.notify.emit("Crossing is outside the recording")
+            return
+        pcm = read_clip(self._audio_path, *bounds)
+        if self._player is not None and self._player.poll() is None:
+            self._player.kill()
+        self._player = play_clip(pcm)
+        if self._player is None:
+            self.notify.emit("aplay not available — install alsa-utils")
 
     def _select_step(self, delta: int) -> None:
         """Move the selection from a bow field (↑/↓), landing in the new bow."""

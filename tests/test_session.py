@@ -225,3 +225,12 @@ def test_zoom_keys_are_ready_only():
         keys = {k.key for k in KEYMAP[state]}
         assert "Z" not in keys, state
         assert "Shift+Z" not in keys, state
+
+
+def test_review_has_play_cap():
+    keys = {k.key: k for k in KEYMAP[AppState.REVIEW]}
+    assert keys["P"].action == "_review_play"
+    assert keys["P"].shortcut is False
+    for state in (AppState.READY, AppState.STREAM_DOWN, AppState.ARMED,
+                  AppState.RECORDING, AppState.RACE_OVER, AppState.RECALIBRATE):
+        assert "P" not in {k.key for k in KEYMAP[state]}, state
