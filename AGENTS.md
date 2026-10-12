@@ -170,9 +170,15 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   last stderr line (`audio.player_error`). Capture gain is set once at start-up
   from [voice] mixer (audio.apply_mixer, errors → toast); review playback runs
   audio.process_clip (high-pass → gain → press mute → int16 clip) on the clip
-  bytes only. Clicking the `AudioView` envelope re-plays the clip from the
-  clicked point (`seek_requested`), so the operator can scrub by ear; the cached
-  clip is dropped when the crossing selection changes. `[voice] input`/`output`
+  bytes only. Review shows a fixed `AudioView` waveform spanning the race from
+  the first to the last crossing (built when the race is loaded into REVIEW, so
+  it never changes as the selection moves); every crossing is an amber tick and
+  the selected one is red on top, so only the red line moves. Play
+  starts just before the mark (`[voice] play_before_s`) and any keypress stops
+  playback while still performing its action (an `eventFilter` on the QApplication
+  watches keys while REVIEW is up). Clicking the waveform re-plays the recording
+  from that point in the span (`seek_requested`), so the operator can scrub by
+  ear; the cached clip is dropped when the crossing selection changes. `[voice] input`/`output`
   are independent ALSA PCMs for `arecord -D`/`aplay -D` (capture vs. playback, so
   they may name different devices); use `pulse` for the PipeWire default or
   `plughw:CARD=…` to pin a specific device.

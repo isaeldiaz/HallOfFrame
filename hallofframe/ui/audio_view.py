@@ -1,4 +1,4 @@
-"""Envelope view of the played clip: bars, press mark, crossing ticks, playhead (sheet 12b)."""
+"""Fixed race-span envelope: bars, press mark, crossing ticks, playhead (sheet 12b)."""
 from __future__ import annotations
 
 import time
@@ -12,10 +12,15 @@ from . import styles
 
 
 class AudioView(QWidget):
-    """Envelope of the clip last played, a press mark, other-crossing ticks, a playhead."""
+    """Fixed race-span envelope: a press mark, crossing ticks, and a playhead.
+
+    The waveform is loaded once per race (the span from the first to the last
+    crossing) and never changes while crossing the list; only the red press mark
+    moves. The playhead is positioned in span seconds.
+    """
 
     BINS = 200
-    # Seconds into the clip where the operator clicked; review replays from there.
+    # Seconds into the displayed span where the operator clicked; review replays from there.
     seek_requested = Signal(float)
 
     def __init__(self, parent=None):
@@ -32,24 +37,35 @@ class AudioView(QWidget):
         self._timer.setInterval(50)
         self._timer.timeout.connect(self.update)
 
-    def set_clip(self, pcm: bytes, dur_s: float, press_s: float,
-                 others_s: list[float]) -> None:
-        """Store envelope(pcm, BINS) and the marks (seconds into the clip); start the playhead."""
+    def set_waveform(self, pcm: bytes, dur_s: float) -> None:
+        """Store envelope(pcm, BINS) as the fixed span; clears marks, stops the playhead."""
         self._env = envelope(pcm, self.BINS)
         self._dur_s = dur_s
+        self._press_s = None
+        self._others = []
+        self.stop_playhead()
+        self.update()
+
+    def set_marks(self, press_s: float | None, others_s: list[float]) -> None:
+        """Set the selected press mark and the other-crossing ticks (span seconds)."""
         self._press_s = press_s
         self._others = list(others_s)
-        self.set_play_start(0.0)
+        self.update()
+
+    def set_press(self, press_s: float | None) -> None:
+        """Move only the red press mark (span seconds); the waveform stays put."""
+        self._press_s = press_s
+        self.update()
 
     def set_play_start(self, offset_s: float) -> None:
-        """(Re)start the wall-clock playhead at ``offset_s`` seconds into the clip."""
+        """(Re)start the wall-clock playhead at ``offset_s`` seconds into the span."""
         self._play_offset = max(0.0, offset_s)
         self._play_t0 = time.monotonic()
         self._timer.start()
         self.update()
 
     def clear(self) -> None:
-        """Empty state ("no clip played" caption); stops the playhead."""
+        """Empty state ("no waveform" caption); stops the playhead."""
         self._env = []
         self._dur_s = 0.0
         self._press_s = None
@@ -63,7 +79,7 @@ class AudioView(QWidget):
         self._play_t0 = None
 
     def playhead_s(self) -> float | None:
-        """Seconds into the clip, or None when stopped / past dur_s (then the timer is stopped too)."""
+        """Seconds into the span, or None when stopped / past dur_s (then the timer is stopped too)."""
         if self._play_t0 is None:
             return None
         p = self._play_offset + (time.monotonic() - self._play_t0)
@@ -73,7 +89,7 @@ class AudioView(QWidget):
         return p
 
     def mousePressEvent(self, event):  # noqa: N802
-        """Click a point on the envelope to replay the clip from there."""
+        """Click a point on the envelope to replay the recording from there."""
         if event.button() == Qt.LeftButton and self._dur_s > 0:
             w = max(1, self.width() - 1)
             x = min(max(0.0, event.position().x()), float(w))
@@ -93,7 +109,7 @@ class AudioView(QWidget):
             font = painter.font()
             font.setPixelSize(14)
             painter.setFont(font)
-            painter.drawText(0, 0, w, h, Qt.AlignCenter, "no clip played")
+            painter.drawText(0, 0, w, h, Qt.AlignCenter, "no waveform")
             return
         # aplay gives no position feedback, so the playhead is wall-clock from
         # set_play_start — approximate on purpose

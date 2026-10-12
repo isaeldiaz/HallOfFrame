@@ -26,22 +26,43 @@ def _pcm():
     return samples.tobytes()
 
 
-def test_set_clip_stores_state(qapp):
+def test_set_waveform_and_marks_store_state(qapp):
     v = AudioView()
-    v.set_clip(_pcm(), 2.0, 1.0, [0.4, 1.7])
+    v.set_waveform(_pcm(), 2.0)
+    assert not v._timer.isActive()          # no playhead until playback starts
+    v.set_marks(1.0, [0.4, 1.7])
     assert len(v._env) == AudioView.BINS
     assert v._dur_s == 2.0
     assert v._press_s == 1.0
     assert v._others == [0.4, 1.7]
+    v.set_play_start(0.0)
     assert v._timer.isActive()
     assert isinstance(v.playhead_s(), float)
     assert v.playhead_s() >= 0.0
     v.deleteLater()
 
 
+def test_set_press_moves_mark_only(qapp):
+    v = AudioView()
+    v.set_waveform(_pcm(), 2.0)
+    v.set_marks(0.5, [1.0, 1.5])
+    v.set_play_start(0.5)
+    env = list(v._env)
+    play_t0 = v._play_t0
+    v.set_press(1.25)
+    assert v._press_s == 1.25
+    assert v._others == [1.0, 1.5]
+    assert v._env == env
+    assert v._timer.isActive()          # a running playhead is left alone
+    assert v._play_t0 == play_t0
+    v.deleteLater()
+
+
 def test_clear_stops_playhead(qapp):
     v = AudioView()
-    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.set_waveform(_pcm(), 2.0)
+    v.set_marks(1.0, [])
+    v.set_play_start(0.0)
     v.clear()
     assert v._env == []
     assert not v._timer.isActive()
@@ -52,7 +73,8 @@ def test_clear_stops_playhead(qapp):
 def test_press_mark_is_red(qapp):
     v = AudioView()
     v.resize(401, 72)
-    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.set_waveform(_pcm(), 2.0)
+    v.set_marks(1.0, [])
     v.stop_playhead()
     img = v.grab().toImage()
     assert img.pixelColor(200, 36).name() == styles.RED.lower()
@@ -62,7 +84,8 @@ def test_press_mark_is_red(qapp):
 def test_other_tick_is_amber(qapp):
     v = AudioView()
     v.resize(401, 72)
-    v.set_clip(_pcm(), 2.0, 1.0, [0.5])
+    v.set_waveform(_pcm(), 2.0)
+    v.set_marks(1.0, [0.5])
     v.stop_playhead()
     img = v.grab().toImage()
     assert img.pixelColor(100, 36).name() == styles.AMBER.lower()
@@ -80,7 +103,8 @@ def test_empty_paint_smoke(qapp):
 def test_click_emits_seek_at_position(qapp):
     v = AudioView()
     v.resize(401, 72)
-    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.set_waveform(_pcm(), 2.0)
+    v.set_marks(1.0, [])
     v.stop_playhead()
     seen = []
     v.seek_requested.connect(seen.append)
@@ -106,7 +130,8 @@ def test_click_on_empty_emits_nothing(qapp):
 def test_right_click_emits_nothing(qapp):
     v = AudioView()
     v.resize(401, 72)
-    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.set_waveform(_pcm(), 2.0)
+    v.set_marks(1.0, [])
     v.stop_playhead()
     seen = []
     v.seek_requested.connect(seen.append)
@@ -119,7 +144,7 @@ def test_right_click_emits_nothing(qapp):
 
 def test_set_play_start_offsets_playhead(qapp):
     v = AudioView()
-    v.set_clip(_pcm(), 2.0, 1.0, [])
+    v.set_waveform(_pcm(), 2.0)
     v.set_play_start(1.5)
     assert v.playhead_s() == pytest.approx(1.5, abs=0.05)
     v.deleteLater()

@@ -30,8 +30,9 @@ import datetime
 import time
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                               QLineEdit, QPushButton, QScrollArea, QVBoxLayout,
+                               QWidget)
 
 from . import styles
 from .audio_view import AudioView
@@ -239,10 +240,16 @@ class ReviewScreen(QWidget):
         self._audio_path = None
         self._audio_offset = None
         self._player = None
-        # The processed clip behind the envelope, so a click can replay from a
-        # point inside it without re-reading the WAV. Reset when the selection
+        # The processed clip used for playback, so playback can start at a point
+        # inside it without re-reading the WAV. Dropped when the selection
         # changes (a clip of another crossing must never be replayed).
         self._clip: dict | None = None
+        # The fixed waveform: the WAV seconds spanning the first to the last
+        # crossing. Built once per race; the selection only moves the red mark.
+        self._span_start: float | None = None
+        self._span_dur = 0.0
+        self._wave_key: tuple | None = None
+        self._filter_installed = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -402,6 +409,7 @@ class ReviewScreen(QWidget):
                 "bow": c["bow_number"] or "",
                 "deleted": bool(c["deleted"]),
             })
+        self._load_waveform()
         if self._captures:
             # Select the first live crossing; fall back to the first row when
             # every crossing has been deleted.
@@ -413,7 +421,6 @@ class ReviewScreen(QWidget):
             # reviewed race's selection and photo (the screen is reused).
             self._selected_seq = None
             self._current_capture = None
-            self.audio_view.clear()
             self._clip = None
             self.list.set_selected(None)
             self.counter.setText("")
@@ -422,7 +429,6 @@ class ReviewScreen(QWidget):
             self.offset_lbl.setText("")
 
     def _select(self, sequence: int) -> None:
-        self.audio_view.clear()
         self._clip = None
         self.stop_playback()
         self._selected_seq = sequence
@@ -434,6 +440,7 @@ class ReviewScreen(QWidget):
             f"{sequence}</span> of {len(self._captures)}")
         self._show_capture(sequence)
         self._show_primary()
+        self._move_press_mark()
 
     def _show_capture(self, sequence: int) -> None:
         cap = next((c for c in self._captures if c["sequence"] == sequence), None)
@@ -509,6 +516,115 @@ class ReviewScreen(QWidget):
         if self._t0_mono is None:
             return None
         return cap["t_press"] - self._t0_mono
+
+    # --- waveform ---------------------------------------------------------
+    def _press_wav(self, cap: dict) -> float | None:
+        """The crossing's press in WAV seconds (None when it has no usable audio)."""
+        if cap.get("t0_reconstructed"):
+            return None
+        elapsed = self._press_elapsed(cap)
+        if elapsed is None or self._audio_offset is None:
+            return None
+        return elapsed - self._audio_offset
+
+    def _compute_span(self) -> tuple[float, float] | None:
+        """(start, dur) in WAV seconds from the first to the last crossing press.
+
+        Padded by the play window so every crossing's clip is inside the span,
+        then clamped to the recording. Deleted crossings are included so
+        deleting a row never shifts the waveform."""
+        if self._audio_path is None:
+            return None
+        presses = [p for p in (self._press_wav(c) for c in self._captures)
+                   if p is not None]
+        if not presses:
+            return None
+        try:
+            total_s = wav_duration_s(self._audio_path)
+        except Exception:
+            return None
+        lo = max(0.0, min(presses) - float(self._voice["play_before_s"]))
+        hi = min(total_s, max(presses) + float(self._voice["play_after_s"]))
+        if hi <= lo:
+            return None
+        return (lo, hi - lo)
+
+    def _load_waveform(self) -> None:
+        """Build the fixed first→last-crossing envelope for the loaded race.
+
+        The audio is read only when the span changes (the enclosing
+        ``load_captures`` rebuilds the tick marks either way), so crossing the
+        list, cloning or reloading leaves the waveform untouched."""
+        span = self._compute_span() if bool(self._voice["enabled"]) else None
+        if span is None:
+            self._span_start = None
+            self._span_dur = 0.0
+            self._wave_key = None
+            self._clip = None
+            self.audio_view.clear()
+            return
+        start_s, dur_s = span
+        key = (self.race_id, round(start_s, 3), round(dur_s, 3))
+        if key == self._wave_key:
+            self._clip = None
+            self._update_marks()
+            return
+        try:
+            pcm = read_clip(self._audio_path, start_s, dur_s)
+        except Exception:
+            self._span_start = None
+            self._span_dur = 0.0
+            self._wave_key = None
+            self._clip = None
+            self.audio_view.clear()
+            return
+        self._span_start = start_s
+        self._span_dur = dur_s
+        self._wave_key = key
+        self._clip = None
+        self.audio_view.set_waveform(pcm, dur_s)
+        self._update_marks()
+
+    def _press_in_span(self, cap: dict) -> float | None:
+        """The crossing's press in span seconds, or None when it has no audio."""
+        p = self._press_wav(cap)
+        if p is None or self._span_start is None:
+            return None
+        return p - self._span_start
+
+    def _update_marks(self) -> None:
+        """Fill the waveform's marks: all crossing ticks and the selected red one.
+
+        Every crossing (live or deleted) with audio gets an amber tick, so the
+        tick set never changes; the selected crossing is highlighted red on top.
+        Moving the selection therefore only moves the red line."""
+        if self._span_start is None:
+            return
+        others = []
+        for c in self._captures:
+            p = self._press_in_span(c)
+            if p is not None and 0.0 <= p <= self._span_dur:
+                others.append(p)
+        self.audio_view.set_marks(self._selected_press(), others)
+
+    def _selected_press(self) -> float | None:
+        """The selected crossing's press in span seconds, clamped to the span.
+
+        A crossing whose recording started late can sit before the span; the
+        red mark is pinned to the edge rather than drawn off-canvas."""
+        cap = self._selected_capture()
+        if cap is None:
+            return None
+        p = self._press_in_span(cap)
+        if p is None:
+            return None
+        return min(max(p, 0.0), self._span_dur)
+
+    def _move_press_mark(self) -> None:
+        """Move only the red press mark to follow the selection."""
+        if self._span_start is None:
+            return
+        self.audio_view.set_press(self._selected_press())
 
     # --- persistence ------------------------------------------------------
     def _save_start_time(self) -> None:
@@ -660,6 +776,27 @@ class ReviewScreen(QWidget):
         if self.panel.width() != width:
             self.panel.setFixedWidth(width)
 
+    # --- stop playback on any key ----------------------------------------
+    def showEvent(self, event):  # noqa: N802
+        """Watch every key while REVIEW is up, so any press stops playback."""
+        super().showEvent(event)
+        if not self._filter_installed:
+            QApplication.instance().installEventFilter(self)
+            self._filter_installed = True
+
+    def hideEvent(self, event):  # noqa: N802
+        super().hideEvent(event)
+        if self._filter_installed:
+            QApplication.instance().removeEventFilter(self)
+            self._filter_installed = False
+        self.stop_playback()
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        """Stop playback on any key without consuming it: its action still runs."""
+        if event.type() in (QEvent.KeyPress, QEvent.Shortcut):
+            self.stop_playback()
+        return super().eventFilter(obj, event)
+
     # --- keyboard ---------------------------------------------------------
     def event(self, event):
         """Intercept Tab before Qt spends it on focus navigation.
@@ -799,10 +936,11 @@ class ReviewScreen(QWidget):
         self._play_from(0.0)
 
     def _build_clip(self) -> dict | None:
-        """Read and filter the selected crossing's clip; cache it for seeking.
+        """Read and filter the selected crossing's clip; cache it for playback.
 
-        Returns the clip dict (``pcm`` bytes, ``dur_s``, ``sequence``) or None
-        after emitting a toast. The view shows even when ``aplay`` is missing."""
+        Returns the clip dict (``pcm`` bytes, ``dur_s`` and ``start_wav`` — the
+        clip start in WAV seconds) or None after emitting a toast. The waveform
+        shows even when ``aplay`` is missing."""
         cap = self._selected_capture()
         if cap is None:
             return None
@@ -842,18 +980,41 @@ class ReviewScreen(QWidget):
             mute = (press_in_clip - half, press_in_clip + half)
         pcm = process_clip(pcm, gain_db=float(self._voice["gain_db"]),
                            highpass_hz=float(self._voice["highpass_hz"]), mute=mute)
-        others = []
-        for c in self._captures:
-            if c["sequence"] == cap["sequence"] or c.get("deleted"):
-                continue
-            e = self._press_elapsed(c)
-            if e is None:
-                continue
-            p = (e - self._audio_offset) - start_s
-            if 0.0 <= p <= dur_s:
-                others.append(p)
-        self.audio_view.set_clip(pcm, dur_s, press_in_clip, others)
-        self._clip = {"pcm": pcm, "dur_s": dur_s, "sequence": cap["sequence"]}
+        self._clip = {"pcm": pcm, "dur_s": dur_s, "start_wav": start_s}
+        return self._clip
+
+    def _build_free_clip(self, start_wav: float) -> dict | None:
+        """Read and filter a clip starting at an arbitrary WAV time (a click).
+
+        A crossing press inside the window is muted like a clip's own press, so
+        clicking the red mark never replays the button click."""
+        if self._audio_path is None:
+            return None
+        try:
+            total_s = wav_duration_s(self._audio_path)
+        except Exception:
+            return None
+        start_s = max(0.0, min(start_wav, total_s))
+        dur_s = float(self._voice["play_before_s"]) + float(self._voice["play_after_s"])
+        end_s = min(total_s, start_s + dur_s)
+        if end_s <= start_s:
+            return None
+        try:
+            pcm = read_clip(self._audio_path, start_s, end_s - start_s)
+        except Exception:
+            return None
+        mute = None
+        mute_ms = float(self._voice["press_mute_ms"])
+        if mute_ms > 0:
+            inside = [p for p in (self._press_wav(c) for c in self._captures)
+                      if p is not None and start_s <= p <= end_s]
+            if inside:
+                half = mute_ms / 2000.0
+                at = min(inside, key=lambda p: abs(p - start_s)) - start_s
+                mute = (at - half, at + half)
+        pcm = process_clip(pcm, gain_db=float(self._voice["gain_db"]),
+                           highpass_hz=float(self._voice["highpass_hz"]), mute=mute)
+        self._clip = {"pcm": pcm, "dur_s": end_s - start_s, "start_wav": start_s}
         return self._clip
 
     def _play_from(self, offset_s: float) -> None:
@@ -871,22 +1032,32 @@ class ReviewScreen(QWidget):
         self.stop_playback()
         if not pcm:
             return
-        self.audio_view.set_play_start(offset_s)
         self._player = play_clip(pcm, device=str(self._voice["output"]))
         if self._player is None:
             self.notify.emit("aplay not available — install alsa-utils")
             return
+        if self._span_start is not None:
+            span_s = (clip["start_wav"] - self._span_start) + offset_s
+            self.audio_view.set_play_start(max(0.0, span_s))
         self._play_timer.start()
 
-    def _seek_audio(self, offset_s: float) -> None:
-        """Envelope clicked: replay the selected crossing's clip from that point."""
+    def _seek_audio(self, span_s: float) -> None:
+        """Waveform clicked: replay the recording from that point in the span."""
         if not bool(self._voice["enabled"]):
             return
-        if self._clip is None or self._clip.get("sequence") != self._selected_seq:
-            if self._build_clip() is None:
-                self.stop_playback()
+        if self._span_start is None:
+            return
+        wav_t = self._span_start + max(0.0, span_s)
+        clip = self._clip
+        if clip is not None and clip.get("start_wav") is not None:
+            rel = wav_t - clip["start_wav"]
+            if 0.0 <= rel <= clip["dur_s"]:
+                self._play_from(rel)
                 return
-        self._play_from(offset_s)
+        if self._build_free_clip(wav_t) is None:
+            self.stop_playback()
+            return
+        self._play_from(0.0)
 
     def _poll_player(self) -> None:
         """Surface a player that exited with an error (wrong device, card busy)."""
@@ -898,6 +1069,7 @@ class ReviewScreen(QWidget):
             return
         self._play_timer.stop()
         self._player = None
+        self.audio_view.stop_playhead()
         error = player_error(proc)
         self._close_pipes(proc)
         if error:
@@ -913,8 +1085,9 @@ class ReviewScreen(QWidget):
                     pass
 
     def stop_playback(self) -> None:
-        """Stop any clip still playing (called when review is left)."""
+        """Stop any clip still playing and the playhead (review left, key pressed)."""
         self._play_timer.stop()
+        self.audio_view.stop_playhead()
         proc = self._player
         self._player = None
         if proc is None:

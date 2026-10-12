@@ -357,13 +357,16 @@ rows 14, 7, 3, blank and counters 3 / 4 red; fix in review.
 
 **Proves:** spec §13.3.4. Set `[voice] enabled = true` and restart the app; mic
 on, race, speak at a crossing, end. Press `R` on the race-over screen to open
-review, select the crossing, press `P`.
+review, select the crossing, press `P`. The waveform is already up below the
+frame scrubber when REVIEW opens and spans the first-to-last crossing; `↑/↓`
+moves only the red press mark (the amber ticks and the bars stay still).
 
 Pass: `races/<id>_<name>/audio.wav` exists,
 `SELECT audio_path, audio_t0_offset_s FROM race` returns a small positive offset,
 and `P` (also from a focused bow field, and the "Play audio" button) plays the
-clip through the speakers; clicking a point on the envelope replays the clip from
-there. A wrong `[voice] output` device shows an
+clip through the speakers; any keypress stops playback while still doing its
+action; clicking a point on the waveform replays the recording from there. A
+wrong `[voice] output` device shows an
 "aplay failed: …" toast instead of silence; `aplay -L` lists the devices.
 `[voice] input`/`output` are ALSA PCMs and are independent: `"default"` is ALSA
 card 0, *not* the PipeWire default, so a USB headset can be missed (or the built-in
