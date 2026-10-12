@@ -138,12 +138,13 @@ class Key:
     typable: bool = False
     show: bool = True
     shortcut: bool = True
+    feature: str | None = None  # config section whose ``enabled`` gates the cap
 
 
 def _k(key: str, label: str, action: str, hot: bool = False,
        typable: bool = False, show: bool = True,
-       shortcut: bool = True) -> Key:
-    return Key(key, label, action, hot, typable, show, shortcut)
+       shortcut: bool = True, feature: str | None = None) -> Key:
+    return Key(key, label, action, hot, typable, show, shortcut, feature)
 
 
 _READY_KEYS = [
@@ -273,7 +274,7 @@ _REVIEW_KEYS = [
        shortcut=False),
     _k("U", "Undo delete", "_review_undo", shortcut=False),
     _k("0", "Time from press", "_review_time_from_press", shortcut=False),
-    _k("P", "Play audio", "_review_play", shortcut=False),
+    _k("P", "Play audio", "_review_play", shortcut=False, feature="voice"),
     _k("Ins", "Clone crossing", "_review_clone", shortcut=False),
     _k("Shift+D", "Clone crossing", "_review_clone", show=False, shortcut=False),
     _k("E", "Edit race", "_on_e", typable=True),

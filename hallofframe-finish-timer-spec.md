@@ -1452,6 +1452,7 @@ enabled = false              # §13.3 live bow-number scratchpad; needs an exter
 [voice]
 enabled = false              # §13.3.4 booth audio (R2: record + review replay; transcribe* keys are release 3)
 input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
+output = "default"           # ALSA PCM for aplay -D (review playback; a failed aplay is shown as a toast)
 play_before_s = 3.0
 play_after_s = 5.0
 transcribe = false
@@ -2351,7 +2352,10 @@ metered link.
 
 *(Implemented 2026-10-12: `audio.py` — arecord subprocess source, WAV sink with
 per-block header, aplay clip player; recorder starts at `t0`, stops at race end,
-not resumed after a restart; no web serving.)*
+not resumed after a restart; no web serving. Review's Play button and `P` cap
+exist only with `[voice] enabled`; `P` also works from a focused bow/time
+field; `[voice] output` selects the aplay device and a non-zero aplay exit is
+reported as a toast with its last stderr line.)*
 
 **ASR suggestion.** A Transcribe button in review runs an offline Norwegian
 Whisper model (`whisper.cpp` with NB-Whisper; Vosk has no Norwegian model) over

@@ -332,13 +332,17 @@ class MainWindow(QMainWindow):
         kb = self.keybar
         kb.clear()
         for k in KEYMAP.get(state, []):
-            if not k.show:
+            if not k.show or not self._feature_on(k.feature):
                 continue
             callback = None if k.action == "_noop" else getattr(self, k.action)
             kb.add(k.key, k.label, k.hot, callback)
         note = self._note_for(state)
         if note:
             kb.set_note(note)
+
+    def _feature_on(self, feature: str | None) -> bool:
+        """A cap tied to an optional feature (``[voice]``) hides when it is off."""
+        return feature is None or bool(self.config.section(feature)["enabled"])
 
     def _note_for(self, state: AppState) -> str:
         if state == AppState.RECORDING:

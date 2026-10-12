@@ -89,6 +89,7 @@ DEFAULTS: dict[str, Any] = {
     "voice": {
         "enabled": False,
         "input": "default",  # ALSA PCM for arecord -D
+        "output": "default",  # ALSA PCM for aplay -D
         "play_before_s": 3.0,
         "play_after_s": 5.0,
         "transcribe": False,

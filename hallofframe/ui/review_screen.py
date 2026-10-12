@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 from . import styles
 from .crossing_list import CrossingList
 from .images import load_view
-from ..audio import clip_bounds, play_clip, read_clip, wav_duration_s
+from ..audio import clip_bounds, play_clip, player_error, read_clip, wav_duration_s
 from ..render import format_elapsed, local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
@@ -266,11 +266,17 @@ class ReviewScreen(QWidget):
         self.play_btn.setFocusPolicy(Qt.NoFocus)
         self.play_btn.clicked.connect(self.play_selected)
         header.addWidget(self.play_btn)
+        self._play_timer = QTimer(self)
+        self._play_timer.setInterval(200)
+        self._play_timer.timeout.connect(self._poll_player)
         header.addStretch(1)
         step_hint = QLabel("Shift+←/→ to step frames · ±500 ms · Esc leaves a field")
         step_hint.setStyleSheet(f"color:{styles.TEXT_FAINT}; font-size:15px;")
         header.addWidget(step_hint)
         lv.addLayout(header)
+        # Only with [voice] enabled: no recorder, no button, no P cap. (Only
+        # now parented: setVisible on a parentless widget opens a stray window.)
+        self.play_btn.setVisible(bool(self._voice["enabled"]))
 
         start_row = QHBoxLayout()
         start_row.setSpacing(10)
@@ -334,6 +340,7 @@ class ReviewScreen(QWidget):
         self.list.step_frame.connect(self._step_frame)
         self.list.select_step.connect(self._select_step)
         self.list.escape_pressed.connect(self._leave_field)
+        self.list.play_requested.connect(self.play_selected)
         rlay = QVBoxLayout(right)
         rlay.setContentsMargins(0, 0, 0, 0)
         rlay.setSpacing(0)
@@ -770,6 +777,8 @@ class ReviewScreen(QWidget):
 
     def play_selected(self) -> None:
         """Play [press − play_before_s, press + play_after_s] of the race audio."""
+        if not bool(self._voice["enabled"]):
+            return
         cap = self._selected_capture()
         if cap is None:
             return
@@ -801,15 +810,46 @@ class ReviewScreen(QWidget):
             self.notify.emit("No audio recording for this race")
             return
         self.stop_playback()
-        self._player = play_clip(pcm)
+        self._player = play_clip(pcm, device=str(self._voice["output"]))
         if self._player is None:
             self.notify.emit("aplay not available — install alsa-utils")
+            return
+        self._play_timer.start()
+
+    def _poll_player(self) -> None:
+        """Surface a player that exited with an error (wrong device, card busy)."""
+        proc = self._player
+        if proc is None:
+            self._play_timer.stop()
+            return
+        if proc.poll() is None:
+            return
+        self._play_timer.stop()
+        self._player = None
+        error = player_error(proc)
+        self._close_pipes(proc)
+        if error:
+            self.notify.emit(error)
+
+    @staticmethod
+    def _close_pipes(proc) -> None:
+        for pipe in (proc.stdin, proc.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except (OSError, ValueError):
+                    pass
 
     def stop_playback(self) -> None:
         """Stop any clip still playing (called when review is left)."""
-        if self._player is not None and self._player.poll() is None:
-            self._player.kill()
+        self._play_timer.stop()
+        proc = self._player
         self._player = None
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.kill()
+        self._close_pipes(proc)
 
     def _select_step(self, delta: int) -> None:
         """Move the selection from a bow field (↑/↓), landing in the new bow."""

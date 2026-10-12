@@ -93,6 +93,7 @@ class _BowEdit(QLineEdit):
     step_frame = Signal(int)  # +1/-1 (Shift+←/→)
     select_step = Signal(int)  # +1/-1 (↑/↓)
     escape = Signal()          # Esc: release the field, keep the screen
+    play = Signal()            # P: play audio (never a valid bow/time char)
 
     def __init__(self, sequence, *a, **k):
         super().__init__(*a, **k)
@@ -130,6 +131,9 @@ class _BowEdit(QLineEdit):
                 return True
             if key == Qt.Key_Down:
                 self.select_step.emit(1)
+                return True
+            if key == Qt.Key_P and mods == Qt.NoModifier:
+                self.play.emit()
                 return True
         return super().event(event)
 
@@ -336,6 +340,7 @@ class CrossingList(QWidget):
     step_frame = Signal(int)               # +1/-1 (Shift+←/→ in a field)
     select_step = Signal(int)              # +1/-1 (↑/↓ in a field)
     escape_pressed = Signal()              # Esc in a field: release focus
+    play_requested = Signal()              # P in a field: play audio
 
     def __init__(self, *, editable: bool, show_bow: bool = True, parent=None):
         super().__init__(parent)
@@ -390,10 +395,12 @@ class CrossingList(QWidget):
             row.bow_edit.step_frame.connect(self.step_frame)
             row.bow_edit.select_step.connect(self.select_step)
             row.bow_edit.escape.connect(self.escape_pressed)
+            row.bow_edit.play.connect(self.play_requested)
             row.time_edit.advance.connect(self.advance_requested)
             row.time_edit.step_frame.connect(self.step_frame)
             row.time_edit.select_step.connect(self.select_step)
             row.time_edit.escape.connect(self.escape_pressed)
+            row.time_edit.play.connect(self.play_requested)
             self._edits[data["sequence"]] = row.bow_edit
         else:
             row = _Row(data, THUMB_W, THUMB_H, False, show_bow=self._show_bow)

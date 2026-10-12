@@ -47,6 +47,7 @@ class KeyBar(QWidget):
         self.lay.setSpacing(14)
         self.lay.addStretch(1)
         self._note = None
+        self._labels: list[str] = []
         # A full key bar wants ~2300 px. That must not become the window's
         # minimum width (the window is full-screen on a 1920 px panel, and Qt
         # sizes a window up to its layout minimum, pushing content off-screen):
@@ -60,10 +61,16 @@ class KeyBar(QWidget):
             if w:
                 w.deleteLater()
         self._note = None
+        self._labels = []
 
     def add(self, key: str, label: str, hot: bool = False, callback=None) -> None:
         cap = KeyCap(key, label, hot, callback)
         self.lay.insertWidget(self.lay.count() - 1, cap)
+        self._labels.append(label)
+
+    def labels(self) -> list[str]:
+        """Cap labels in display order (tests / diagnostics)."""
+        return list(self._labels)
 
     def set_note(self, text: str) -> None:
         if self._note is None:

@@ -24,6 +24,7 @@ from hallofframe.audio import (
     arecord_argv,
     clip_bounds,
     play_clip,
+    player_error,
     read_clip,
     wav_duration_s,
 )
@@ -310,6 +311,28 @@ def test_arecord_argv():
     assert argv[i:i + 2] == ["-D", "plughw:1,0"]
     assert "16000" in argv
     assert "1" in argv
+
+
+def test_aplay_argv_device():
+    argv = aplay_argv(device="plughw:1,0")
+    i = argv.index("-D")
+    assert argv[i:i + 2] == ["-D", "plughw:1,0"]
+    assert argv[-1] == "-"
+
+
+def test_player_error_reports_last_stderr_line():
+    argv = [sys.executable, "-c",
+            "import sys; sys.stdin.buffer.read();"
+            " sys.stderr.write('ALSA lib pcm.c: x\\naplay: main:830: audio open error:"
+            " Device or resource busy\\n'); sys.exit(1)"]
+    proc = play_clip(b"\x00\x00" * 10, argv=argv)
+    assert proc is not None
+    proc.wait(5)
+    assert player_error(proc) == (
+        "aplay failed: aplay: main:830: audio open error: Device or resource busy")
+    ok = play_clip(b"\x00\x00", argv=[sys.executable, "-c", "import sys; sys.stdin.read()"])
+    ok.wait(5)
+    assert player_error(ok) is None
 
 
 def test_arecord_source_fixed_blocks():

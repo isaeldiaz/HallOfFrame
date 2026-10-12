@@ -115,6 +115,7 @@ enabled = true               # §13.3 live bow-number scratchpad; needs an exter
 # (transcribe*/model) are release 3 and unused until then.
 enabled = true
 input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
+output = "default"           # ALSA PCM for aplay -D (review playback); check with: aplay -L
 play_before_s = 3.0          # review playback window, seconds before the crossing
 play_after_s = 5.0           # ... and after
 # transcribe*/model: release 3 (ASR), unused until then

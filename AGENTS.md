@@ -163,7 +163,11 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   `scratch_changed` event.
 - **Audio (§13.3.4)**: `AudioRecorder` capture thread → bounded queue → writer
   thread; drops become silence; `race.audio_t0_offset_s = t_first_sample − t0`;
-  only with `[voice] enabled`; never on the trigger thread.
+  only with `[voice] enabled`; never on the trigger thread. Review's Play
+  button and the `P` keybar cap (`Key.feature = "voice"`) are hidden when voice
+  is off; `P` also fires from a focused bow/time field. Playback is `aplay -D
+  [voice] output`; `ReviewScreen._poll_player` toasts a non-zero exit with its
+  last stderr line (`audio.player_error`).
 
 ## Data & config (the single source of truth)
 

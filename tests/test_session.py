@@ -231,6 +231,8 @@ def test_session_has_play_cap():
     keys = {k.key: k for k in KEYMAP[AppState.REVIEW]}
     assert keys["P"].action == "_review_play"
     assert keys["P"].shortcut is False
+    assert keys["P"].feature == "voice"
+    assert all(k.feature is None for k in KEYMAP[AppState.REVIEW] if k.key != "P")
     for state in (AppState.READY, AppState.STREAM_DOWN, AppState.ARMED,
                   AppState.RECORDING, AppState.RACE_OVER, AppState.RECALIBRATE):
         assert "P" not in {k.key for k in KEYMAP[state]}, state

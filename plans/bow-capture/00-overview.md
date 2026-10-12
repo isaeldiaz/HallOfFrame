@@ -30,6 +30,7 @@ One sheet = one agent run. Do them in numeric order; each assumes the previous o
 | 11 | audio: controller + build_core | tests/test_controller_audio.py | controller.py, main.py |
 | 12 | audio: review play (P) | tests/test_review_audio.py | ui/review_screen.py, session.py, ui/main_window.py, tests/test_session.py |
 | 12b | audio: envelope view + press mark in review | ui/audio_view.py, tests/test_audio_view.py | audio.py, ui/review_screen.py, tests/test_audio.py, tests/test_review_audio.py |
+| 12c | audio quality: `[voice] mixer` at start-up, playback high-pass/gain/press-mute | — | audio.py, config.py, main.py, ui/review_screen.py, tests/test_audio.py, tests/test_controller_audio.py, tests/test_review_audio.py, example toml, spec, AGENTS.md, TESTING.md |
 | 13 | docs R2 + INSTALL | — | INSTALL.md, hallofframe.example.toml, spec, AGENTS.md, TESTING.md |
 | 14 | asr: config keys + Norwegian number words | asr.py, tests/test_asr.py | config.py, hallofframe.example.toml, tests/test_config.py |
 | 15 | asr: whisper JSON parse + utterance grouping | — | asr.py, tests/test_asr.py |
@@ -44,7 +45,7 @@ One sheet = one agent run. Do them in numeric order; each assumes the previous o
 | Release | Steps | Gate before next release |
 |---|---|---|
 | R1 Scratchpad | 01–08 | full suite green; bench replay of the worked example (sheet 08) |
-| R2 Audio replay | 09–12, 12b, 13 | full suite green; one real recording plays in review on the laptop |
+| R2 Audio replay | 09–12, 12b, 12c, 13 (13 done before 12b/12c; each later sheet carries its own doc lines) | full suite green; one real recording plays in review on the laptop |
 | R3 ASR suggestion | 14–20 | full suite green; one real race transcribed on the laptop (INSTALL §2b check) |
 
 Spec §13.3.4 says R2/R3 wait for a real regatta with R1. Sheets are written for all three now; the coordinator decides when to hand out 09+.
@@ -53,7 +54,7 @@ Spec §13.3.4 says R2/R3 wait for a real regatta with R1. Sheets are written for
 
 
 - R1: `pytest -m "not slow"` green on Windows dev host and Linux laptop; `pytest tests/test_goldens.py` unchanged; bench: `./hallofframe-fake.sh` with `[scratchpad] enabled = true`, `[trigger] device_path` = external button, `end_device_path` = laptop keyboard: arm, 4 presses, type `14`, `7`, `3` + Enter → race list shows 14, 7, 3, blank; counters `3 / 4` red; review: type 21 into row 3, 3 into row 4; export shows 14, 7, 21, 3.
-- R2: on the laptop with a USB headset: race with speech, `R`, `P` plays the call; `audio_t0_offset_s` is a small positive number.
+- R2: on the laptop with a USB headset: race with speech, `R`, `P` plays the call; `audio_t0_offset_s` is a small positive number. After 12c: `[voice] mixer` lowers the hiss at start-up and `press_mute_ms = 100` silences the button click in playback.
 - R3: INSTALL §2b verify commands pass; `T` on the R2 race produces suggestions within the timeout; `A` accepts.
 
 ## Decisions taken (so nobody re-litigates them in a sheet)

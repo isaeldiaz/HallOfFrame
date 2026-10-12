@@ -359,8 +359,13 @@ rows 14, 7, 3, blank and counters 3 / 4 red; fix in review.
 on, race, speak at a crossing, end. Press `R` on the race-over screen to open
 review, select the crossing, press `P`.
 
-Pass: `races/<id>_<name>/audio.wav` exists and
-`SELECT audio_path, audio_t0_offset_s FROM race` returns a small positive offset.
+Pass: `races/<id>_<name>/audio.wav` exists,
+`SELECT audio_path, audio_t0_offset_s FROM race` returns a small positive offset,
+and `P` (also from a focused bow field, and the "Play audio" button) plays the
+clip through the speakers. A wrong `[voice] output` device shows an
+"aplay failed: …" toast instead of silence; `aplay -L` lists the devices.
+With `[voice] enabled = false` the review screen has no Play button and the
+key bar has no `P` cap.
 
 ---
 

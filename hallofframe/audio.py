@@ -257,16 +257,21 @@ class ArecordSource:
                 pass
 
 
-def aplay_argv(binary: str = "aplay") -> list[str]:
-    return [binary, "-q", "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1", "-"]
+def aplay_argv(binary: str = "aplay", device: str = "default") -> list[str]:
+    return [binary, "-q", "-D", device, "-t", "raw", "-f", "S16_LE", "-r", "16000",
+            "-c", "1", "-"]
 
 
-def play_clip(pcm: bytes, *, argv: list[str] | None = None) -> subprocess.Popen | None:
-    """Play raw PCM through aplay; the pipe is fed from a daemon thread."""
-    args = argv if argv is not None else aplay_argv()
+def play_clip(pcm: bytes, *, argv: list[str] | None = None,
+              device: str = "default") -> subprocess.Popen | None:
+    """Play raw PCM through aplay; the pipe is fed from a daemon thread.
+
+    stderr is a pipe so a failed player (wrong device, card busy) can be
+    reported with :func:`player_error` once it exits."""
+    args = argv if argv is not None else aplay_argv(device=device)
     try:
         proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.PIPE)
     except OSError:
         return None
 
@@ -274,8 +279,23 @@ def play_clip(pcm: bytes, *, argv: list[str] | None = None) -> subprocess.Popen 
         try:
             proc.stdin.write(pcm)
             proc.stdin.close()
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError, ValueError):  # ValueError: closed by stop
             pass
 
     threading.Thread(target=feed, daemon=True).start()
     return proc
+
+
+def player_error(proc: subprocess.Popen) -> str | None:
+    """After the player exited: None on success, else a one-line reason."""
+    if proc.returncode in (None, 0):
+        return None
+    text = ""
+    if proc.stderr is not None:
+        try:
+            text = proc.stderr.read().decode("utf-8", "replace")
+        except (OSError, ValueError):
+            pass
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    tail = lines[-1] if lines else f"exit {proc.returncode}"
+    return f"aplay failed: {tail}"

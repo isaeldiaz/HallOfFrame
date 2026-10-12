@@ -1,6 +1,7 @@
 """Review audio replay with P (sheet 12, §13.3.4)."""
 from __future__ import annotations
 
+import io
 import time
 import unittest
 from unittest import mock
@@ -11,6 +12,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.audio import RATE
 from hallofframe.controller import CaptureController
@@ -32,7 +34,8 @@ def review_audio_env(request, data_root, config, storage, buffer, qapp):
     inst.app = qapp
     inst.data_root = root
     inst.config = config(
-        voice={"play_before_s": 1.0, "play_after_s": 1.0},
+        voice={"enabled": getattr(inst, "voice_enabled", True),
+               "play_before_s": 1.0, "play_after_s": 1.0},
         trigger={"device_path": "", "start_keycodes": [28],
                  "end_keycodes": [88], "crossing_keycodes": [57],
                  "grab_device": False},
@@ -123,6 +126,46 @@ class TestReviewAudio(unittest.TestCase):
         play.assert_not_called()
         assert notes == ["No audio for crossings recorded after a restart"]
 
+    def test_p_from_bow_field_plays(self):
+        screen = self.review()
+        screen._select(2)
+        screen.list.focus_bow(2)
+        self.app.processEvents()
+        assert isinstance(self.app.focusWidget(), QLineEdit)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        play.assert_called_once()
+        assert self.app.focusWidget().text() == ""
+
+    def test_play_uses_output_device(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        assert play.call_args.kwargs["device"] == "default"
+
+    def test_player_failure_notifies(self):
+        screen = self.review()
+        screen._select(2)
+        notes = []
+        screen.notify.connect(notes.append)
+        failed = mock.Mock()
+        failed.poll.return_value = 1
+        failed.returncode = 1
+        failed.stdin = None
+        failed.stderr = io.BytesIO(b"aplay: main:830: audio open error: No such file\n")
+        with mock.patch("hallofframe.ui.review_screen.play_clip", return_value=failed):
+            self.key(Qt.Key_P)
+        assert screen._play_timer.isActive()
+        screen._poll_player()
+        assert notes == ["aplay failed: aplay: main:830: audio open error: No such file"]
+        assert not screen._play_timer.isActive()
+        assert screen._player is None
+
+    def test_play_cap_in_keybar(self):
+        self.review()
+        assert "Play audio" in self.win.keybar.labels()
+
     def test_crossing_outside_recording_notifies(self):
         self.storage.set_race_audio(self.race_id, "races/0001_R/audio.wav", 100.0)
         screen = self.review()
@@ -133,3 +176,27 @@ class TestReviewAudio(unittest.TestCase):
             self.key(Qt.Key_P)
         play.assert_not_called()
         assert notes == ["Crossing is outside the recording"]
+
+
+@pytest.mark.usefixtures("review_audio_env")
+class TestReviewAudioDisabled(unittest.TestCase):
+    """[voice] enabled = false: no button, no cap, P is a no-op."""
+
+    voice_enabled = False
+
+    def test_play_hidden_and_inert(self):
+        self.win._open_review()
+        self.app.processEvents()
+        screen = self.win._review_screen
+        assert not screen.play_btn.isVisibleTo(self.win)
+        assert "Play audio" not in self.win.keybar.labels()
+        screen._select(2)
+        notes = []
+        screen.notify.connect(notes.append)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.app.sendEvent(self.app.focusWidget() or self.win,
+                               QKeyEvent(QEvent.KeyPress, Qt.Key_P, Qt.NoModifier))
+            self.app.processEvents()
+            screen.play_btn.click()
+        play.assert_not_called()
+        assert notes == []
