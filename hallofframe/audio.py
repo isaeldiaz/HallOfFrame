@@ -1,6 +1,8 @@
 """Booth audio: one 16 kHz mono WAV per race, played back around each crossing (spec §13.3.4)."""
 from __future__ import annotations
 
+import array
+import math
 import queue
 import subprocess
 import threading
@@ -299,3 +301,26 @@ def player_error(proc: subprocess.Popen) -> str | None:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     tail = lines[-1] if lines else f"exit {proc.returncode}"
     return f"aplay failed: {tail}"
+
+
+def envelope(pcm: bytes, bins: int) -> list[float]:
+    """RMS per bin, normalised so the loudest bin is 1.0 (all 0.0 when silent or empty).
+    int16 LE samples split into `bins` equal slices (the last takes the remainder)."""
+    if bins <= 0:
+        return []
+    samples = array.array("h")
+    samples.frombytes(pcm)
+    n = len(samples)
+    out: list[float] = []
+    for i in range(bins):
+        lo = i * n // bins
+        hi = (i + 1) * n // bins
+        chunk = samples[lo:hi]
+        if not chunk:
+            out.append(0.0)
+        else:
+            out.append(math.sqrt(sum(x * x for x in chunk) / len(chunk)))
+    peak = max(out)
+    if peak == 0.0:
+        return [0.0] * bins
+    return [v / peak for v in out]

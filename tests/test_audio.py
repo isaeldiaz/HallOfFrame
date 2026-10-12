@@ -23,6 +23,7 @@ from hallofframe.audio import (
     aplay_argv,
     arecord_argv,
     clip_bounds,
+    envelope,
     play_clip,
     player_error,
     read_clip,
@@ -375,3 +376,20 @@ def test_play_clip_feeds_stdin():
     assert proc is not None
     assert proc.wait(5) == 0
     assert play_clip(pcm, argv=["/nonexistent/aplay"]) is None
+
+
+def test_envelope_normalised():
+    samples = array.array("h", [0] * (2 * RATE))
+    for i in range(RATE, 2 * RATE):
+        samples[i] = int(10000 * math.sin(2 * math.pi * 1000 * i / RATE))
+    env = envelope(samples.tobytes(), 4)
+    assert env[0] == 0.0
+    assert env[1] == 0.0
+    assert abs(env[2] - 1.0) <= 1e-6
+    assert abs(env[3] - 1.0) <= 1e-6
+
+
+def test_envelope_empty_and_silent():
+    assert envelope(b"", 5) == [0.0] * 5
+    assert envelope(bytes(3200), 5) == [0.0] * 5
+    assert envelope(b"\x01\x00" * 100, 0) == []

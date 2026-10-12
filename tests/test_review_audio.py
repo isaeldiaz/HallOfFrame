@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QLineEdit
 
 from hallofframe.audio import RATE
 from hallofframe.controller import CaptureController
+from hallofframe.ui.audio_view import AudioView
 from test_audio import rms, write_tone_wav
 
 pytestmark = pytest.mark.qt
@@ -200,3 +201,50 @@ class TestReviewAudioDisabled(unittest.TestCase):
             screen.play_btn.click()
         play.assert_not_called()
         assert notes == []
+
+
+@pytest.mark.usefixtures("review_audio_env")
+class TestReviewAudioView(unittest.TestCase):
+    """P fills the envelope view with a press mark and other-crossing ticks (sheet 12b)."""
+
+    def review(self):
+        self.win._open_review()
+        self.app.processEvents()
+        return self.win._review_screen
+
+    def key(self, key):
+        target = self.app.focusWidget() or self.win
+        self.app.sendEvent(target, QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier))
+        self.app.processEvents()
+
+    def test_p_fills_audio_view(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip"):
+            self.key(Qt.Key_P)
+        view = screen.audio_view
+        assert view._dur_s == 2.0
+        assert abs(view._press_s - 1.0) <= 1e-6
+        assert len(view._others) == 2
+        assert abs(view._others[0] - 0.0) <= 1e-6
+        assert abs(view._others[1] - 2.0) <= 1e-6
+        assert len(view._env) == AudioView.BINS
+
+    def test_view_shown_even_without_aplay(self):
+        screen = self.review()
+        screen._select(2)
+        notes = []
+        screen.notify.connect(notes.append)
+        with mock.patch("hallofframe.ui.review_screen.play_clip", return_value=None):
+            self.key(Qt.Key_P)
+        assert notes
+        assert screen.audio_view._env != []
+
+    def test_select_clears_audio_view(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip"):
+            self.key(Qt.Key_P)
+        assert screen.audio_view._env != []
+        screen._select(1)
+        assert screen.audio_view._env == []

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from . import styles
+from .audio_view import AudioView
 from .crossing_list import CrossingList
 from .images import load_view
 from ..audio import clip_bounds, play_clip, player_error, read_clip, wav_duration_s
@@ -322,6 +323,8 @@ class ReviewScreen(QWidget):
 
         self.scrubber = _Scrubber()
         lv.addWidget(self.scrubber)
+        self.audio_view = AudioView()
+        lv.addWidget(self.audio_view)
         # The photo column yields first on a narrow screen: the crossing list is
         # what the operator is aiming at, and nothing in this column may set a
         # floor that pushes the list past the right edge.
@@ -411,6 +414,7 @@ class ReviewScreen(QWidget):
             self.offset_lbl.setText("")
 
     def _select(self, sequence: int) -> None:
+        self.audio_view.clear()
         self._selected_seq = sequence
         self.list.set_selected(sequence)
         idx = next((i for i, c in enumerate(self._captures)
@@ -809,6 +813,19 @@ class ReviewScreen(QWidget):
         except Exception:
             self.notify.emit("No audio recording for this race")
             return
+        start_s, dur_s = bounds
+        press_in_clip = (elapsed - self._audio_offset) - start_s
+        others = []
+        for c in self._captures:
+            if c["sequence"] == cap["sequence"] or c.get("deleted"):
+                continue
+            e = self._press_elapsed(c)
+            if e is None:
+                continue
+            p = (e - self._audio_offset) - start_s
+            if 0.0 <= p <= dur_s:
+                others.append(p)
+        self.audio_view.set_clip(pcm, dur_s, press_in_clip, others)
         self.stop_playback()
         self._player = play_clip(pcm, device=str(self._voice["output"]))
         if self._player is None:
