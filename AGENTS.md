@@ -167,7 +167,10 @@ tests/               pytest suites (controller, export, framebuffer, mjpeg).
   button and the `P` keybar cap (`Key.feature = "voice"`) are hidden when voice
   is off; `P` also fires from a focused bow/time field. Playback is `aplay -D
   [voice] output`; `ReviewScreen._poll_player` toasts a non-zero exit with its
-  last stderr line (`audio.player_error`).
+  last stderr line (`audio.player_error`). Capture gain is set once at start-up
+  from [voice] mixer (audio.apply_mixer, errors → toast); review playback runs
+  audio.process_clip (high-pass → gain → press mute → int16 clip) on the clip
+  bytes only.
 
 ## Data & config (the single source of truth)
 

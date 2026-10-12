@@ -37,7 +37,8 @@ from . import styles
 from .audio_view import AudioView
 from .crossing_list import CrossingList
 from .images import load_view
-from ..audio import clip_bounds, play_clip, player_error, read_clip, wav_duration_s
+from ..audio import (clip_bounds, play_clip, player_error, process_clip,
+                     read_clip, wav_duration_s)
 from ..render import format_elapsed, local_hms, parse_elapsed
 
 # Width of the crossing list. Wide enough for a row (thumbnail, mono elapsed,
@@ -815,6 +816,13 @@ class ReviewScreen(QWidget):
             return
         start_s, dur_s = bounds
         press_in_clip = (elapsed - self._audio_offset) - start_s
+        mute_ms = float(self._voice["press_mute_ms"])
+        mute = None
+        if mute_ms > 0:
+            half = mute_ms / 2000.0
+            mute = (press_in_clip - half, press_in_clip + half)
+        pcm = process_clip(pcm, gain_db=float(self._voice["gain_db"]),
+                           highpass_hz=float(self._voice["highpass_hz"]), mute=mute)
         others = []
         for c in self._captures:
             if c["sequence"] == cap["sequence"] or c.get("deleted"):

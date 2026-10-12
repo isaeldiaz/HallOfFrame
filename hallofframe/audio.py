@@ -324,3 +324,81 @@ def envelope(pcm: bytes, bins: int) -> list[float]:
     if peak == 0.0:
         return [0.0] * bins
     return [v / peak for v in out]
+
+
+def parse_mixer_entry(entry: str) -> tuple[str, str]:
+    """'Mic Boost 0%' → ('Mic Boost', '0%'); the value is the last token. ValueError if fewer than two tokens."""
+    parts = entry.split()
+    if len(parts) < 2:
+        raise ValueError(entry)
+    return " ".join(parts[:-1]), parts[-1]
+
+
+def mixer_argv(card: str, control: str, value: str, binary: str = "amixer") -> list[str]:
+    """[binary, '-q'] + (['-c', card] if card else []) + ['sset', control, value]."""
+    argv = [binary, "-q"]
+    if card:
+        argv += ["-c", card]
+    argv += ["sset", control, value]
+    return argv
+
+
+def apply_mixer(card: str, entries: list[str], *, runner=subprocess.run,
+                binary: str = "amixer") -> list[str]:
+    """Run one amixer sset per entry; return one message per failure (empty = all applied). Never raises."""
+    messages: list[str] = []
+    for entry in entries:
+        try:
+            control, value = parse_mixer_entry(entry)
+        except ValueError:
+            messages.append(f"{entry}: expected '<control> <value>'")
+            continue
+        try:
+            res = runner(mixer_argv(card, control, value, binary=binary),
+                         capture_output=True, timeout=5.0)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            messages.append(f"{entry}: {exc}")
+            continue
+        if res.returncode != 0:
+            text = res.stderr.decode("utf-8", "replace")
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            tail = lines[-1] if lines else f"exit {res.returncode}"
+            messages.append(f"{entry}: {tail}")
+    return messages
+
+
+def process_clip(pcm: bytes, *, gain_db: float = 0.0, highpass_hz: float = 0.0,
+                 mute: tuple[float, float] | None = None, rate: int = RATE) -> bytes:
+    """Playback filter chain on int16 LE mono: high-pass → gain → mute → clip to int16."""
+    if gain_db == 0.0 and highpass_hz <= 0.0 and mute is None:
+        return pcm
+    samples = array.array("h")
+    samples.frombytes(pcm)
+    n = len(samples)
+    values = [float(x) for x in samples]
+    if highpass_hz > 0.0:
+        rc = 1.0 / (2.0 * math.pi * highpass_hz)
+        dt = 1.0 / rate
+        a = rc / (rc + dt)
+        prev_x = 0.0
+        prev_y = 0.0
+        out = []
+        for x in values:
+            y = a * (prev_y + x - prev_x)
+            out.append(y)
+            prev_x = x
+            prev_y = y
+        values = out
+    if gain_db != 0.0:
+        factor = 10.0 ** (gain_db / 20.0)
+        values = [v * factor for v in values]
+    if mute is not None:
+        start, end = mute
+        lo = max(0, round(start * rate))
+        hi = min(n, round(end * rate))
+        for i in range(lo, hi):
+            values[i] = 0.0
+    out_samples = array.array("h")
+    for v in values:
+        out_samples.append(max(-32768, min(32767, round(v))))
+    return out_samples.tobytes()

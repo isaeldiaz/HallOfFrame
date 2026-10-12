@@ -1453,6 +1453,11 @@ enabled = false              # §13.3 live bow-number scratchpad; needs an exter
 enabled = false              # §13.3.4 booth audio (R2: record + review replay; transcribe* keys are release 3)
 input = "default"            # ALSA PCM for arecord -D ("default" = system default via PipeWire/Pulse; "plughw:1,0" for a USB headset)
 output = "default"           # ALSA PCM for aplay -D (review playback; a failed aplay is shown as a toast)
+mixer_card = ""              # amixer -c <card>; "" = default card ("amixer -c 0 scontrols" lists controls)
+mixer = []                   # ["Capture 60%", "Mic Boost 0%"]: amixer sset entries applied at app start
+gain_db = 0.0                # playback make-up gain (dB); clipped to int16 after gain
+highpass_hz = 0.0            # playback one-pole high-pass; 0 disables (150 cuts hum/thumps)
+press_mute_ms = 0            # playback: mute ±press_mute_ms/2 around t_press (button click); 0 disables
 play_before_s = 3.0
 play_after_s = 5.0
 transcribe = false
@@ -2355,7 +2360,9 @@ per-block header, aplay clip player; recorder starts at `t0`, stops at race end,
 not resumed after a restart; no web serving. Review's Play button and `P` cap
 exist only with `[voice] enabled`; `P` also works from a focused bow/time
 field; `[voice] output` selects the aplay device and a non-zero aplay exit is
-reported as a toast with its last stderr line.)*
+reported as a toast with its last stderr line; [voice] mixer/mixer_card apply
+amixer sset at start-up, gain_db/highpass_hz/press_mute_ms filter the review
+playback only (file stays raw).)*
 
 **ASR suggestion.** A Transcribe button in review runs an offline Norwegian
 Whisper model (`whisper.cpp` with NB-Whisper; Vosk has no Norwegian model) over

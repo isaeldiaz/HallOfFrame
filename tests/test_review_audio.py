@@ -36,7 +36,8 @@ def review_audio_env(request, data_root, config, storage, buffer, qapp):
     inst.data_root = root
     inst.config = config(
         voice={"enabled": getattr(inst, "voice_enabled", True),
-               "play_before_s": 1.0, "play_after_s": 1.0},
+               "play_before_s": 1.0, "play_after_s": 1.0,
+               "gain_db": 6.0206, "highpass_hz": 0.0, "press_mute_ms": 100},
         trigger={"device_path": "", "start_keycodes": [28],
                  "end_keycodes": [88], "crossing_keycodes": [57],
                  "grab_device": False},
@@ -177,6 +178,30 @@ class TestReviewAudio(unittest.TestCase):
             self.key(Qt.Key_P)
         play.assert_not_called()
         assert notes == ["Crossing is outside the recording"]
+
+    def test_p_processes_clip_with_config(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.process_clip",
+                        side_effect=lambda pcm, **kw: pcm) as proc, \
+                mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        proc.assert_called_once()
+        kw = proc.call_args.kwargs
+        assert kw["gain_db"] == 6.0206
+        assert kw["highpass_hz"] == 0.0
+        assert kw["mute"] == pytest.approx((0.95, 1.05), abs=1e-6)
+        assert play.call_args[0][0] is proc.call_args[0][0]
+
+    def test_p_mutes_the_press(self):
+        screen = self.review()
+        screen._select(2)
+        with mock.patch("hallofframe.ui.review_screen.play_clip") as play:
+            self.key(Qt.Key_P)
+        pcm = play.call_args[0][0]
+        assert rms(pcm[30400:33600]) == 0
+        assert rms(pcm[33600:38400]) > 10000
+        assert rms(pcm[0:28800]) == 0
 
 
 @pytest.mark.usefixtures("review_audio_env")

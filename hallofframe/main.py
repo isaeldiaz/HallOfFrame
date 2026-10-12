@@ -126,10 +126,15 @@ def build_core(config):
     controller = CaptureController(config, storage, buffer)
 
     voice = config.section("voice")
+    mixer_errors: list[str] = []
     if bool(voice["enabled"]):
         from .audio import ArecordSource, AudioRecorder
         controller.attach_recorder(
             AudioRecorder(lambda: ArecordSource(str(voice["input"]))))
+        if voice["mixer"]:
+            from .audio import apply_mixer
+            mixer_errors = apply_mixer(str(voice["mixer_card"]),
+                                       [str(e) for e in voice["mixer"]])
 
     auth = None
     if stream["username"]:
@@ -147,6 +152,7 @@ def build_core(config):
         "controller": controller,
         "reader": reader,
         "transport": transport,
+        "mixer_errors": mixer_errors,
     }
 
 
@@ -273,6 +279,10 @@ def main(argv=None) -> int:
     bridge.capture_deleted.connect(win.on_capture_deleted)
     bridge.scratch_changed.connect(win.on_scratch_changed)
     bridge.warning.connect(win._show_toast)
+    # mixer runs once at start-up on the main thread, before any race
+    for err in core["mixer_errors"]:
+        logger.warning("audio", "mixer_failed", detail=err)
+        win._show_toast(f"audio mixer: {err}")
     # The controller emits capture-added / image-ready from its persistence or
     # deferred-timer threads; reroute them through the bridge instead of pointing
     # them straight at Qt widgets. race_ended is emitted from end_race(), which

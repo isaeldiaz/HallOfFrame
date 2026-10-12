@@ -365,7 +365,10 @@ and `P` (also from a focused bow field, and the "Play audio" button) plays the
 clip through the speakers. A wrong `[voice] output` device shows an
 "aplay failed: …" toast instead of silence; `aplay -L` lists the devices.
 With `[voice] enabled = false` the review screen has no Play button and the
-key bar has no `P` cap.
+key bar has no `P` cap. With `[voice] mixer = ["Capture 60%", "Mic Boost 0%"]`
+(names from `amixer -c <card> scontrols`) the hiss drops; a bad control name
+shows an "audio mixer: …" toast at start-up. With `press_mute_ms = 100` the
+button click is silent in `P` playback; `highpass_hz = 150` removes hum.
 
 ---
 

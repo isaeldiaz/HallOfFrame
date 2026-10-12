@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import wave
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,11 +22,15 @@ from hallofframe.audio import (
     AudioRecorder,
     WavSink,
     aplay_argv,
+    apply_mixer,
     arecord_argv,
     clip_bounds,
     envelope,
+    mixer_argv,
+    parse_mixer_entry,
     play_clip,
     player_error,
+    process_clip,
     read_clip,
     wav_duration_s,
 )
@@ -393,3 +398,92 @@ def test_envelope_empty_and_silent():
     assert envelope(b"", 5) == [0.0] * 5
     assert envelope(bytes(3200), 5) == [0.0] * 5
     assert envelope(b"\x01\x00" * 100, 0) == []
+
+
+def test_parse_mixer_entry():
+    assert parse_mixer_entry("Mic Boost 0%") == ("Mic Boost", "0%")
+    assert parse_mixer_entry("  Capture   60%  ") == ("Capture", "60%")
+    with pytest.raises(ValueError):
+        parse_mixer_entry("Capture")
+
+
+def test_mixer_argv():
+    assert mixer_argv("1", "Mic Boost", "0%") == [
+        "amixer", "-q", "-c", "1", "sset", "Mic Boost", "0%"]
+    assert mixer_argv("", "Capture", "60%") == [
+        "amixer", "-q", "sset", "Capture", "60%"]
+
+
+def test_apply_mixer_collects_failures():
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append((argv, kw))
+        if "Nope" in argv:
+            return SimpleNamespace(
+                returncode=1, stderr=b"amixer: Unable to find simple control 'Nope',0\n")
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    messages = apply_mixer("0", ["Capture 60%", "Nope 50%", "Broken"], runner=runner)
+    assert messages == [
+        "Nope 50%: amixer: Unable to find simple control 'Nope',0",
+        "Broken: expected '<control> <value>'",
+    ]
+    assert [argv for argv, _ in calls] == [
+        ["amixer", "-q", "-c", "0", "sset", "Capture", "60%"],
+        ["amixer", "-q", "-c", "0", "sset", "Nope", "50%"],
+    ]
+    assert all(kw == {"capture_output": True, "timeout": 5.0} for _, kw in calls)
+
+
+def test_apply_mixer_runner_oserror():
+    def runner(argv, **kw):
+        raise OSError("no amixer")
+
+    messages = apply_mixer("0", ["Capture 60%"], runner=runner)
+    assert len(messages) == 1
+    assert messages[0].startswith("Capture 60%: ")
+    assert "no amixer" in messages[0]
+
+
+def _samples(value, n=100):
+    return array.array("h", [value] * n).tobytes()
+
+
+def test_process_clip_neutral_is_identity():
+    pcm = b"\x10\x27" * 100
+    assert process_clip(pcm) is pcm
+
+
+def test_process_clip_gain_and_clip():
+    out = process_clip(_samples(1000), gain_db=6.0206)
+    assert all(x == 2000 for x in array.array("h", out))
+    out = process_clip(_samples(20000), gain_db=6.0206)
+    assert all(x == 32767 for x in array.array("h", out))
+    out = process_clip(_samples(-20000), gain_db=6.0206)
+    assert all(x == -32768 for x in array.array("h", out))
+
+
+def test_process_clip_mute():
+    pcm = _samples(1000, 16000)
+    out = process_clip(pcm, mute=(0.25, 0.75))
+    a = array.array("h")
+    a.frombytes(out)
+    assert all(x == 0 for x in a[4000:12000])
+    assert a[3999] == 1000
+    assert a[12000] == 1000
+    assert len(out) == len(pcm)
+
+
+def test_process_clip_highpass_removes_dc_keeps_tone():
+    dc = array.array("h", [10000] * 16000)
+    out = process_clip(dc.tobytes(), highpass_hz=150.0)
+    a = array.array("h")
+    a.frombytes(out)
+    assert 9400 <= a[0] <= 9500
+    assert rms(out[-6400:]) < 1.0
+
+    tone = array.array("h", [int(10000 * math.sin(2 * math.pi * 1000 * i / RATE))
+                             for i in range(16000)])
+    out_t = process_clip(tone.tobytes(), highpass_hz=150.0)
+    assert rms(out_t) > 0.95 * rms(tone.tobytes())

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -190,3 +191,36 @@ def test_build_core_attaches_recorder(data_root, config):
     finally:
         core2["controller"].stop()
         core2["storage"].close()
+
+
+def test_build_core_applies_mixer(data_root, config):
+    cfg = config(transport={"enabled": False},
+                 voice={"enabled": True, "mixer": ["Capture 60%"], "mixer_card": "0"})
+    with mock.patch("hallofframe.audio.apply_mixer",
+                    return_value=["Capture 60%: boom"]) as am:
+        core = build_core(cfg)
+    try:
+        am.assert_called_once_with("0", ["Capture 60%"])
+        assert core["mixer_errors"] == ["Capture 60%: boom"]
+    finally:
+        core["controller"].stop()
+        core["storage"].close()
+
+
+def test_build_core_skips_mixer_when_off(data_root, config):
+    with mock.patch("hallofframe.audio.apply_mixer") as am:
+        core = build_core(config(transport={"enabled": False},
+                                 voice={"enabled": True, "mixer": []}))
+        try:
+            assert core["mixer_errors"] == []
+        finally:
+            core["controller"].stop()
+            core["storage"].close()
+        core2 = build_core(config(transport={"enabled": False},
+                                  voice={"enabled": False, "mixer": ["Capture 60%"]}))
+        try:
+            assert core2["mixer_errors"] == []
+        finally:
+            core2["controller"].stop()
+            core2["storage"].close()
+        am.assert_not_called()
