@@ -30,6 +30,7 @@ class _TriggerBridge(QObject):
     image_ready = Signal(int, str)  # (sequence, primary_path_rel)
     capture_deleted = Signal(int)   # (sequence)
     scratch_changed = Signal(object)  # (payload dict)
+    warning = Signal(str)           # toast message from a worker thread
 
 
 class _NullTransport:
@@ -243,11 +244,13 @@ def main(argv=None) -> int:
     bridge.image_ready.connect(win.on_image_ready)
     bridge.capture_deleted.connect(win.on_capture_deleted)
     bridge.scratch_changed.connect(win.on_scratch_changed)
+    bridge.warning.connect(win._show_toast)
     # The controller emits capture-added / image-ready from its persistence or
     # deferred-timer threads; reroute them through the bridge instead of pointing
     # them straight at Qt widgets. race_ended is emitted from end_race(), which
     # always runs on the GUI thread (button or queued evdev end), so it can call
-    # the window directly. warning goes to the toast (same as before).
+    # the window directly. warning also comes from the persistence thread (a
+    # failed write/recompute), so it must cross the bridge like the rest.
     def _on_controller_event(kind: str, payload: dict) -> None:
         if kind == "capture_added":
             bridge.capture.emit(payload["capture"])
@@ -260,7 +263,7 @@ def main(argv=None) -> int:
         elif kind == "scratch_changed":
             bridge.scratch_changed.emit(payload)
         elif kind == "warning":
-            win._show_toast(payload["message"])
+            bridge.warning.emit(payload["message"])
 
     core["controller"].events = _on_controller_event
 

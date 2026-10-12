@@ -337,7 +337,7 @@ class CaptureController:
     def add_scratch(self, text: str) -> bool:
         """Queue one typed bow number for the running race. False (nothing queued)
         when no race is running or normalize(text) is None."""
-        if not self.running or self.race_id is None:
+        if not self.scratchpad_enabled or not self.running or self.race_id is None:
             return False
         t = scratchpad.normalize(text)
         if t is None:
@@ -352,7 +352,7 @@ class CaptureController:
     def undo_scratch(self) -> None:
         """Soft-delete the last typed number of the running race, then recompute. No-op when not running.
         Enqueued (never synchronous) so it runs AFTER any insert still in the queue."""
-        if not self.running or self.race_id is None:
+        if not self.scratchpad_enabled or not self.running or self.race_id is None:
             return
         rid = self.race_id
         def _job():
@@ -445,7 +445,13 @@ class CaptureController:
                       payload["delta_used"], image_flag,
                       bool(payload["debounce_suspect"]))
         self._emit_capture(cap)
-        self._recompute_scratch(race_id)
+        # Best-effort: a scratchpad failure must never abort the deferred image
+        # selection below. The time is already committed, so losing the photo
+        # would be irreversible; surface the error and carry on (§13.3.3).
+        try:
+            self._recompute_scratch(race_id)
+        except Exception as exc:
+            self._warn(f"scratchpad recompute failed: {exc}")
 
         # Deferred image selection: schedule after window_after + margin so the
         # after-window frames exist (spec §6.5). The timer removes itself from
@@ -712,7 +718,7 @@ class CaptureController:
     def undo_last(self) -> None:
         if self.race_id is None:
             return
-        rows = self.storage.captures_for_race(self.race_id, include_deleted=True)
+        rows = self.storage.captures_for_race(self.race_id)
         if not rows:
             return
         cap = rows[-1]
