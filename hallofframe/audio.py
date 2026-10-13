@@ -4,6 +4,7 @@ from __future__ import annotations
 import array
 import math
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -476,4 +477,174 @@ class BeepPlayer:
             try:
                 proc.stderr.close()
             except (OSError, ValueError):
+                pass
+
+
+def parse_pcm_list(text: str) -> list[tuple[str, str]]:
+    """Parse `arecord -L`/`aplay -L`: unindented line = PCM name, following indented lines = description (joined with ' · '). Skips 'null'."""
+    entries: list[tuple[str, str]] = []
+    name: str | None = None
+    desc: list[str] = []
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        if raw[0] not in " \t":
+            if name is not None and name != "null":
+                entries.append((name, " · ".join(desc)))
+            name = raw.strip()
+            desc = []
+        elif name is not None:
+            desc.append(raw.strip())
+    if name is not None and name != "null":
+        entries.append((name, " · ".join(desc)))
+    return entries
+
+
+def list_pcms(kind: str, *, runner=subprocess.run) -> list[tuple[str, str]]:
+    """kind 'input' → arecord -L, 'output' → aplay -L. Never raises; [] on OSError/timeout/non-zero exit."""
+    if kind not in ("input", "output"):
+        raise ValueError(kind)
+    binary = "arecord" if kind == "input" else "aplay"
+    try:
+        res = runner([binary, "-L"], capture_output=True, timeout=5.0, text=True)
+    except (OSError, subprocess.TimeoutExpired):
+        parsed: list[tuple[str, str]] = []
+    else:
+        parsed = parse_pcm_list(res.stdout or "") if res.returncode == 0 else []
+    if not any(name == "default" for name, _ in parsed):
+        parsed.insert(0, ("default", "System default"))
+    return parsed
+
+
+def parse_mixer_contents(text: str) -> list[dict]:
+    """Parse `amixer scontents` blocks → [{'name','capture','playback','percent','switch'}]."""
+    blocks: list[list[str]] = []
+    for line in text.splitlines():
+        if line.startswith("Simple mixer control"):
+            blocks.append([line])
+        elif blocks:
+            blocks[-1].append(line)
+    out: list[dict] = []
+    for block in blocks:
+        header = block[0]
+        name = header.split("'", 2)[1] if "'" in header else header
+        caps = next((ln for ln in block if "Capabilities:" in ln), "")
+        if not any(k in caps for k in ("cvolume", "pvolume", "volume")):
+            continue
+        percent = None
+        switch = None
+        for line in block[1:]:
+            if percent is None:
+                m = re.search(r"\[(\d+)%\]", line)
+                if m:
+                    percent = int(m.group(1))
+            if switch is None:
+                m = re.search(r"\[(on|off)\]", line)
+                if m:
+                    switch = m.group(1) == "on"
+        out.append({"name": name, "capture": "cvolume" in caps,
+                    "playback": "pvolume" in caps, "percent": percent,
+                    "switch": switch})
+    return out
+
+
+def mixer_controls(card: str, *, runner=subprocess.run, binary: str = "amixer") -> list[dict]:
+    """amixer [-c card] scontents; never raises; [] on failure."""
+    argv = [binary] + (["-c", card] if card else []) + ["scontents"]
+    try:
+        res = runner(argv, capture_output=True, timeout=5.0, text=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if res.returncode != 0:
+        return []
+    return parse_mixer_contents(res.stdout or "")
+
+
+def set_mixer(card: str, control: str, value: str, *, runner=subprocess.run,
+              binary: str = "amixer") -> str | None:
+    """One amixer sset; None on success, else the failure message (apply_mixer semantics)."""
+    messages = apply_mixer(card, [f"{control} {value}"], runner=runner, binary=binary)
+    return messages[0] if messages else None
+
+
+def _block_rms(pcm: bytes) -> float:
+    """RMS of little-endian int16 PCM (un-normalised)."""
+    samples = array.array("h")
+    samples.frombytes(pcm)
+    if not samples:
+        return 0.0
+    return math.sqrt(sum(x * x for x in samples) / len(samples))
+
+
+class LevelMeter:
+    """Reads a Source on a daemon thread and reports RMS per block; never raises into the GUI."""
+
+    def __init__(self, source_factory, on_level, *, on_error=None, on_block=None):
+        self._source_factory = source_factory
+        self._on_level = on_level
+        self._on_error = on_error
+        self._on_block = on_block
+        self._thread: threading.Thread | None = None
+        self._source = None
+        self._stop = threading.Event()
+        self.running = False
+
+    def start(self) -> None:
+        """Open the source on the thread; open failure → on_error(str)."""
+        if self.running:
+            return
+        self._stop.clear()
+        self.running = True
+        self._thread = threading.Thread(target=self._run, name="level-meter", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            src = self._source = self._source_factory()
+            src.open()
+        except Exception as exc:
+            self.running = False
+            self._report(str(exc))
+            return
+        try:
+            while not self._stop.is_set():
+                block = src.read()
+                if block == b"":
+                    break
+                try:
+                    self._on_level(_block_rms(block))
+                except Exception:
+                    pass
+                if self._on_block is not None:
+                    try:
+                        self._on_block(block)
+                    except Exception:
+                        pass
+        finally:
+            self.running = False
+            self._source = None
+            try:
+                src.close()
+            except Exception:
+                pass
+
+    def stop(self, timeout: float = 1.0) -> None:
+        """Close source, join. Idempotent and safe before start()."""
+        self._stop.set()
+        src = self._source
+        if src is not None:
+            try:
+                src.close()
+            except Exception:
+                pass
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+        self.running = False
+
+    def _report(self, message: str) -> None:
+        if self._on_error is not None:
+            try:
+                self._on_error(message)
+            except Exception:
                 pass

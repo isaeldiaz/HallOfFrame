@@ -4,14 +4,20 @@ config.toml is HAND-EDITED and never written by the application (spec v1.2
 §6.7, §8). Everything machine-produced — the latency calibration result — lives
 in the calibration file; the application derives ``delta`` from that plus
 ``reaction_offset_ms`` out of config.toml at race start (spec §5.4, §8).
+``settings.json`` (calibration-dialog output) overrides config.toml per
+section/key at load time; the app never writes config.toml.
 """
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+SETTINGS_FILENAME = "settings.json"   # machine-written overrides: {"<section>": {"<key>": value}}
 
 
 class ConfigError(Exception):
@@ -110,6 +116,11 @@ DEFAULTS: dict[str, Any] = {
 class Config:
     data: dict[str, Any]
     path: Path
+    overrides: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def settings_path(self) -> Path:
+        return self.data_root / SETTINGS_FILENAME
 
     @property
     def data_root(self) -> Path:
@@ -127,10 +138,34 @@ class Config:
         user = self.data.get(name, {})
         merged = dict(DEFAULTS[name])
         merged.update(user)
+        merged.update(self.overrides.get(name, {}))
         for key, value in merged.items():
             if isinstance(value, str) and "{event_name}" in value:
                 merged[key] = value.replace("{event_name}", self.event_name)
         return merged
+
+    def load_overrides(self) -> None:
+        """Read settings.json into ``self.overrides``; garbage is ignored."""
+        overrides: dict[str, Any] = {}
+        try:
+            raw = json.loads(self.settings_path.read_text())
+        except (OSError, ValueError):
+            raw = None
+        if isinstance(raw, dict):
+            for section, values in raw.items():
+                if isinstance(section, str) and isinstance(values, dict):
+                    overrides[section] = values
+        self.overrides = overrides
+
+    def write_overrides(self, section: str, values: dict[str, Any]) -> Path:
+        """Merge *values* into the section and write the whole file as JSON."""
+        if section not in DEFAULTS:
+            raise ValueError(section)
+        self.overrides.setdefault(section, {}).update(values)
+        path = self.settings_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.overrides, indent=2, sort_keys=True) + "\n")
+        return path
 
 
 def _validate(raw: dict[str, Any], path: Path) -> None:
@@ -157,4 +192,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     with open(cfg_path, "rb") as fh:
         raw = tomllib.load(fh)
     _validate(raw, cfg_path)
-    return Config(data=raw, path=cfg_path)
+    cfg = Config(data=raw, path=cfg_path)
+    # settings.json (calibration dialog output) overrides config.toml; the app never writes config.toml
+    cfg.load_overrides()
+    return cfg

@@ -22,18 +22,24 @@ from hallofframe.audio import (
     ArecordSource,
     AudioRecorder,
     BeepPlayer,
+    LevelMeter,
     WavSink,
     aplay_argv,
     apply_mixer,
     arecord_argv,
     clip_bounds,
     envelope,
+    list_pcms,
     mixer_argv,
+    mixer_controls,
+    parse_mixer_contents,
     parse_mixer_entry,
+    parse_pcm_list,
     play_clip,
     player_error,
     process_clip,
     read_clip,
+    set_mixer,
     tone_pcm,
     wav_duration_s,
 )
@@ -548,3 +554,135 @@ def test_beep_player_oserror():
     bp = BeepPlayer("default", popen=popen, clock=FakeClock())
     assert bp.prepare() is False
     assert bp.fire() is None
+
+
+PCM_TEXT = """null
+    Discard all samples (playback) or generate zero samples (capture)
+default
+    Default ALSA Output (currently PipeWire Media Server)
+sysdefault:CARD=PCH
+    HDA Intel PCH, ALC293 Analog
+    Default Audio Device
+plughw:CARD=Headset,DEV=0
+    Logitech USB Headset, USB Audio
+    Hardware device with all software conversions
+"""
+MIXER_TEXT = """Simple mixer control 'Master',0
+  Capabilities: pvolume pswitch
+  Playback channels: Mono
+  Limits: Playback 0 - 87
+  Mono: Playback 87 [100%] [0.00dB] [on]
+Simple mixer control 'Capture',0
+  Capabilities: cvolume cswitch
+  Capture channels: Front Left - Front Right
+  Limits: Capture 0 - 63
+  Front Left: Capture 38 [60%] [12.00dB] [on]
+  Front Right: Capture 38 [60%] [12.00dB] [on]
+Simple mixer control 'Mic Boost',0
+  Capabilities: volume
+  Playback channels: Front Left - Front Right
+  Capture channels: Front Left - Front Right
+  Limits: 0 - 3
+  Front Left: 0 [0%]
+  Front Right: 0 [0%]
+Simple mixer control 'Auto-Mute Mode',0
+  Capabilities: enum
+  Items: 'Disabled' 'Enabled'
+  Item0: 'Enabled'
+"""
+
+
+def test_parse_pcm_list():
+    assert parse_pcm_list(PCM_TEXT) == [
+        ("default", "Default ALSA Output (currently PipeWire Media Server)"),
+        ("sysdefault:CARD=PCH", "HDA Intel PCH, ALC293 Analog · Default Audio Device"),
+        ("plughw:CARD=Headset,DEV=0",
+         "Logitech USB Headset, USB Audio · Hardware device with all software conversions"),
+    ]
+
+
+def test_list_pcms_runner():
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=PCM_TEXT)
+
+    assert len(list_pcms("input", runner=runner)) == 3
+    assert len(list_pcms("output", runner=runner)) == 3
+    assert calls == [["arecord", "-L"], ["aplay", "-L"]]
+    with pytest.raises(ValueError):
+        list_pcms("x")
+
+
+def test_list_pcms_failure_is_empty_default():
+    def boom(argv, **kw):
+        raise OSError("no arecord")
+
+    def fail(argv, **kw):
+        return SimpleNamespace(returncode=1, stdout="")
+
+    assert list_pcms("input", runner=boom) == [("default", "System default")]
+    assert list_pcms("input", runner=fail) == [("default", "System default")]
+
+
+def test_parse_mixer_contents():
+    assert parse_mixer_contents(MIXER_TEXT) == [
+        {"name": "Master", "capture": False, "playback": True,
+         "percent": 100, "switch": True},
+        {"name": "Capture", "capture": True, "playback": False,
+         "percent": 60, "switch": True},
+        {"name": "Mic Boost", "capture": False, "playback": False,
+         "percent": 0, "switch": None},
+    ]
+
+
+def test_mixer_controls_runner():
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=MIXER_TEXT)
+
+    assert len(mixer_controls("1", runner=runner)) == 3
+    assert calls[-1] == ["amixer", "-c", "1", "scontents"]
+    assert len(mixer_controls("", runner=runner)) == 3
+    assert calls[-1] == ["amixer", "scontents"]
+
+
+def test_set_mixer():
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        if "Nope" in argv:
+            return SimpleNamespace(
+                returncode=1, stderr=b"amixer: Unable to find simple control 'Nope',0\n")
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    assert set_mixer("0", "Capture", "60%", runner=runner) is None
+    message = set_mixer("0", "Nope", "50%", runner=runner)
+    assert message == "Nope 50%: amixer: Unable to find simple control 'Nope',0"
+    assert calls[0] == ["amixer", "-q", "-c", "0", "sset", "Capture", "60%"]
+
+
+def test_level_meter_reports_rms():
+    block = b"\x10\x27" * 1600
+    src = FakeSource([block, block, block, b""])
+    levels = []
+    blocks = []
+    m = LevelMeter(lambda: src, levels.append, on_block=blocks.append)
+    m.start()
+    assert _wait_for(lambda: not m.running)
+    assert levels == [pytest.approx(10000.0)] * 3
+    assert len(blocks) == 3
+    m.stop()
+    m.stop()
+
+
+def test_level_meter_open_error():
+    errs = []
+    m = LevelMeter(lambda: FailingSource(), lambda r: None, on_error=errs.append)
+    m.start()
+    assert _wait_for(lambda: len(errs) == 1)
+    assert m.running is False
