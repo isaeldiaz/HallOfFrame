@@ -14,3 +14,4 @@
 12b fbfbd29 10 tests (tests/test_audio_view.py, tests/test_audio.py, tests/test_review_audio.py) 507 passed (+7 Windows host artifacts), 4 deselected OK
 12c 772347f 12 tests (tests/test_audio.py, tests/test_controller_audio.py, tests/test_review_audio.py) 519 passed (+7 Windows host artifacts), 4 deselected OK
 21 6c98f43 21 tests (tests/test_reaction.py, tests/test_calibration.py) 572 passed (+7 Windows host artifacts), 4 deselected OK
+21 note: the sheet's test table listed `iqr_ms == pytest.approx(37.5)`; that value was wrong. Sheet's own algorithm (`statistics.quantiles(samples, n=4)` as in `compute_latency`; default 'exclusive' → `[212.5, 235, 257.5]`, `q[2]-q[0]`) gives 45.0, which `tests/test_reaction.py` asserts and `calibration.py` returns. The sheet value has been corrected to 45.0.

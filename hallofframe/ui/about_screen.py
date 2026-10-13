@@ -94,7 +94,8 @@ def reaction_rows(config) -> list[tuple[str, str]]:
 def calibrated_latency(config) -> float | None:
     """The calibrated latency median (ms), or None when uncalibrated (§5.5)."""
     cal = Calibration.load(config.data_root)
-    return cal.latency_median_ms if cal is not None else None
+    return (cal.latency_median_ms
+            if cal is not None and cal.has_latency else None)
 
 
 def path_rows(config) -> list[tuple[str, str]]:

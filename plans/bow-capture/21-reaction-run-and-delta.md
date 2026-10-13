@@ -90,7 +90,7 @@ Source strings: `"measured"` / `"config"`. `Calibration.load(config.data_root)`;
 `tests/test_reaction.py` (create; `from hallofframe.calibration import ...`; `from unittest import mock`):
 | Test | Steps | Expected |
 |---|---|---|
-| `test_reaction_stats` | `reaction_stats([200, 210, 220, 230, 240, 250, 260, 270])` | `median_ms == 235`; `iqr_ms == pytest.approx(37.5)`; `mean_ms == 235`; `n == 8` |
+| `test_reaction_stats` | `reaction_stats([200, 210, 220, 230, 240, 250, 260, 270])` | `median_ms == 235`; `iqr_ms == pytest.approx(45.0)`; `mean_ms == 235`; `n == 8` (37.5 was an erratum: the sheet's own algorithm, `statistics.quantiles(n=4)` as in `compute_latency`, yields `[212.5, 235, 257.5]` → `45.0`) |
 | `test_reaction_stats_too_few` | `reaction_stats([200]*5)` | `pytest.raises(ValueError)` |
 | `test_run_bad_kind` | `ReactionRun("tactile")` | `pytest.raises(ValueError)` |
 | `test_run_ok_press` | `run = ReactionRun("visual", trials=2, rng=lambda a, b: 2.0)`; `run.next_delay() == 2.0` and `run.state == "waiting"`; `run.stimulus(10.0)`; `run.press(10.25)` | returns `"ok"`; `samples_ms == [250.0]`; `state == "idle"`; `done is False`; repeat (`next_delay`, `stimulus(20.0)`, `press(20.3)`) → `done is True`, `samples_ms == [250.0, 300.0]` |

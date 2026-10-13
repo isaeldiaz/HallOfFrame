@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import array
+import io
 import math
 import queue
 import sys
@@ -20,6 +21,7 @@ from hallofframe.audio import (
     SAMPLE_WIDTH,
     ArecordSource,
     AudioRecorder,
+    BeepPlayer,
     WavSink,
     aplay_argv,
     apply_mixer,
@@ -32,6 +34,7 @@ from hallofframe.audio import (
     player_error,
     process_clip,
     read_clip,
+    tone_pcm,
     wav_duration_s,
 )
 
@@ -487,3 +490,61 @@ def test_process_clip_highpass_removes_dc_keeps_tone():
                              for i in range(16000)])
     out_t = process_clip(tone.tobytes(), highpass_hz=150.0)
     assert rms(out_t) > 0.95 * rms(tone.tobytes())
+
+
+def test_tone_pcm_shape():
+    pcm = tone_pcm(1000.0, 0.1)
+    assert len(pcm) == 3200
+    assert rms(pcm) == pytest.approx(12000 / math.sqrt(2), rel=0.02)
+
+
+class _RecordingStdin(io.BytesIO):
+    def close(self):
+        self.written = self.getvalue()
+        super().close()
+
+
+class _FakeProc:
+    def __init__(self):
+        self.stdin = _RecordingStdin()
+        self.stderr = None
+        self.returncode = None
+        self.terminated = 0
+        self.waited = 0
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminated += 1
+
+    def wait(self, timeout=None):
+        self.waited += 1
+        return 0
+
+
+def test_beep_player_prepare_fire():
+    proc = _FakeProc()
+    seen = {}
+
+    def popen(args, **kwargs):
+        seen["args"] = args
+        return proc
+
+    bp = BeepPlayer("plughw:1,0", popen=popen, clock=FakeClock(5.0),
+                    pcm=b"\x01\x02" * 4)
+    assert bp.prepare() is True
+    assert seen["args"] == aplay_argv(device="plughw:1,0")
+    assert bp.fire() == 5.0
+    assert proc.stdin.written == b"\x01\x02" * 4
+    bp.close()
+    assert proc.terminated == 1
+
+
+def test_beep_player_oserror():
+    def popen(*args, **kwargs):
+        raise OSError("no aplay")
+
+    bp = BeepPlayer("default", popen=popen, clock=FakeClock())
+    assert bp.prepare() is False
+    assert bp.fire() is None

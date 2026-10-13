@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import calibration as cal
 from ..framebuffer import FrameBuffer
 from . import styles
 from .images import load_scaled
+from .reaction_page import ReactionPage
 
 _SAMPLES = 40
 _MIN_READABLE = 8
@@ -83,7 +84,13 @@ class FullScreenCounter(QWidget):
         self.label.setText(" ".join(f"{ms:08d}"))
 
 
-class CalibrationDialog(QDialog):
+class LatencyPage(QWidget):
+    """Latency calibration phase: full-screen counter → capture → read values."""
+
+    run_started = Signal()
+    run_finished = Signal()
+    finished_ok = Signal()
+
     def __init__(self, buffer: FrameBuffer, data_root, config, parent=None):
         super().__init__(parent)
         self.buffer = buffer
@@ -91,11 +98,6 @@ class CalibrationDialog(QDialog):
         self.config = config
         self.captured: list = []
 
-        # The app-wide stylesheet sets light text on every widget, but QDialog
-        # keeps the platform's light background by default — text would be
-        # light-on-light. Force the dark console background here.
-        self.setStyleSheet(f"QWidget{{ background:{styles.BG}; color:{styles.TEXT_PRIMARY}; }}")
-        self.setWindowTitle("Calibrate latency")
         lay = QVBoxLayout(self)
         hint = QLabel(
             "Point the phone at the full-screen counter at ~0.5 m so it fills "
@@ -155,7 +157,7 @@ class CalibrationDialog(QDialog):
             self._capture_impl()
         except Exception as exc:
             self.counter.close()
-            self.show()
+            self.run_finished.emit()
             self.capture_btn.setEnabled(True)
             QMessageBox.critical(self, "Calibration", f"Capture error: {exc}")
 
@@ -166,9 +168,9 @@ class CalibrationDialog(QDialog):
         self.status.setText("Capturing... keep the phone on the counter.")
         self._cap_timer = QTimer(self)
         self._cap_timer.timeout.connect(self._sample)
-        # Hide the modal dialog so the full-screen counter is the only thing on
+        # Hide the page so the full-screen counter is the only thing on
         # screen (spec §5.5 constraint 2 is sequential). Re-shown in _finish_capture.
-        self.hide()
+        self.run_started.emit()
         # IMPORTANT: do NOT start the sampling timer immediately. An immediate
         # tick (interval 0) accesses the shared FrameBuffer while the full-screen
         # counter is still being mapped, which prevents the counter window from
@@ -208,7 +210,7 @@ class CalibrationDialog(QDialog):
 
     def _finish_capture(self, partial: bool = False) -> None:
         self.counter.close()
-        self.show()  # bring the dialog back over the (now closed) counter
+        self.run_finished.emit()  # bring the dialog back over the closed counter
         self.capture_btn.setEnabled(True)
         frames = self.captured
         if len(frames) < _SAMPLES:
@@ -297,7 +299,121 @@ class CalibrationDialog(QDialog):
             f"(n={result['n']})\n"
             f"IQR      = {result['latency_iqr_ms']:.1f} ms\n\n"
             f"Latency written to {cal.CALIBRATION_FILENAME}.")
+        self.finished_ok.emit()
+
+    def cancel(self) -> None:
+        """Stop an in-flight capture without writing (used when skipping the phase)."""
+        timer = getattr(self, "_cap_timer", None)
+        if timer is not None:
+            timer.stop()
+        counter = getattr(self, "counter", None)
+        if counter is not None:
+            counter.close()
+
+
+class CalibrationDialog(QDialog):
+    """Multi-phase calibration: each phase reports completion, or is skipped.
+
+    Skipping one phase advances to the next; the dialog closes after the last
+    phase (completed or skipped). Presses (evdev) arrive via :meth:`on_press`.
+    """
+
+    notify = Signal(str)
+
+    def __init__(self, buffer: FrameBuffer, data_root, config, parent=None,
+                 *, evdev: bool = False):
+        super().__init__(parent)
+        self.data_root = data_root
+        self.config = config
+        self.latency = LatencyPage(buffer, data_root, config, self)
+        self.reaction = ReactionPage(data_root, config.section("voice"),
+                                     evdev=evdev, parent=self)
+        self._pages = [("Latency", self.latency), ("Reaction", self.reaction)]
+        self._index = 0
+        self.skipped: set[int] = set()
+
+        # The app-wide stylesheet sets light text on every widget, but QDialog
+        # keeps the platform's light background by default — text would be
+        # light-on-light. Force the dark console background here.
+        self.setStyleSheet(f"QWidget{{ background:{styles.BG}; color:{styles.TEXT_PRIMARY}; }}")
+        self.setWindowTitle("Calibrate")
+
+        lay = QVBoxLayout(self)
+        self.phase_label = QLabel()
+        lay.addWidget(self.phase_label)
+        self.stack = QStackedWidget()
+        for _name, page in self._pages:
+            self.stack.addWidget(page)
+        lay.addWidget(self.stack, 1)
+
+        nav = QHBoxLayout()
+        self.back_btn = QPushButton("Back")
+        self.back_btn.clicked.connect(self._back)
+        nav.addWidget(self.back_btn)
+        nav.addStretch(1)
+        self.skip_btn = QPushButton("Skip this phase")
+        self.skip_btn.setToolTip("Skip only this phase and move on.")
+        self.skip_btn.clicked.connect(self._skip)
+        nav.addWidget(self.skip_btn)
+        self.finish_btn = QPushButton("Finish")
+        self.finish_btn.clicked.connect(self._finish)
+        nav.addWidget(self.finish_btn)
+        lay.addLayout(nav)
+
+        self.latency.run_started.connect(self.hide)
+        self.latency.run_finished.connect(self.show)
+        self.latency.finished_ok.connect(self._advance)
+        self.reaction.run_started.connect(self.hide)
+        self.reaction.run_finished.connect(self.show)
+        self.reaction.notify.connect(self.notify)
+        self._show_phase()
+
+    # --- navigation -------------------------------------------------------
+    def _show_phase(self) -> None:
+        self.stack.setCurrentIndex(self._index)
+        name = self._pages[self._index][0]
+        self.phase_label.setText(
+            f"Phase {self._index + 1} of {len(self._pages)} — {name}")
+        self.back_btn.setEnabled(self._index > 0)
+        self.skip_btn.setEnabled(True)
+
+    def _advance(self) -> None:
+        if self._index < len(self._pages) - 1:
+            self._index += 1
+            self._show_phase()
+        else:
+            self.accept()
+
+    def _back(self) -> None:
+        if self._index > 0:
+            self._index -= 1
+            self._show_phase()
+
+    def _skip(self) -> None:
+        page = self._pages[self._index][1]
+        cancel = getattr(page, "cancel", None)
+        if cancel is not None:
+            cancel()
+        self.skipped.add(self._index)
+        self._advance()
+
+    def _finish(self) -> None:
         self.accept()
+
+    # --- evdev routing ----------------------------------------------------
+    def on_press(self, t: float) -> None:
+        """Kernel-timestamped press while the dialog is open → reaction page."""
+        self.reaction.on_press(t)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.reaction.abort()
+        self.latency.cancel()
+        super().closeEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key_Escape:
+            self.reaction.abort()
+        super().keyPressEvent(event)
 
 
 def _measure_fps(frames):

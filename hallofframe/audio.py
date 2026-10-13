@@ -402,3 +402,78 @@ def process_clip(pcm: bytes, *, gain_db: float = 0.0, highpass_hz: float = 0.0,
     for v in values:
         out_samples.append(max(-32768, min(32767, round(v))))
     return out_samples.tobytes()
+
+
+def tone_pcm(freq_hz: float = 1000.0, dur_s: float = 0.1, amplitude: int = 12000,
+             rate: int = RATE) -> bytes:
+    """int16 LE mono sine; round(dur_s*rate) samples."""
+    n = int(round(dur_s * rate))
+    out = array.array("h")
+    step = 2.0 * math.pi * freq_hz / rate
+    for i in range(n):
+        out.append(int(round(amplitude * math.sin(step * i))))
+    return out.tobytes()
+
+
+class BeepPlayer:
+    """One aplay per beep: prepare() spawns it (device open, waiting on stdin),
+    fire() writes the tone."""
+
+    def __init__(self, device: str = "default", *, popen=subprocess.Popen,
+                 clock=time.monotonic, pcm: bytes | None = None):
+        self.device = device
+        self._popen = popen
+        self._clock = clock
+        self._pcm = tone_pcm() if pcm is None else pcm
+        self._proc: subprocess.Popen | None = None
+
+    def prepare(self) -> bool:
+        """Spawn aplay, blocked on stdin; False when it cannot be started."""
+        self.close()
+        try:
+            self._proc = self._popen(
+                aplay_argv(device=self.device), stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except OSError:
+            self._proc = None
+            return False
+        return True
+
+    def fire(self) -> float | None:
+        """Write the tone at the stimulus instant; the timestamp is taken first."""
+        if self._proc is None or self._proc.stdin is None:
+            return None
+        t = self._clock()
+        try:
+            self._proc.stdin.write(self._pcm)
+            self._proc.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            return None
+        return t
+
+    def error(self) -> str | None:
+        """None while running/OK, else the aplay failure line."""
+        if self._proc is None or self._proc.poll() is None:
+            return None
+        return player_error(self._proc)
+
+    def close(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        if proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        if proc.stderr is not None:
+            try:
+                proc.stderr.close()
+            except (OSError, ValueError):
+                pass

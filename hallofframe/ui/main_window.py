@@ -99,6 +99,9 @@ class MainWindow(QMainWindow):
         # listener: that keyboard's F12 then arrives through evdev, so the Qt
         # F12 shortcut must stand down or every race ends twice.
         self.end_evdev_active = False
+        # Set while the calibration dialog is open: evdev presses go to it
+        # instead of start/crossing.
+        self.press_hook = None
         self._logger = logger
 
         self.setWindowTitle("HallOfFrame — Finish-Line Timer")
@@ -408,7 +411,8 @@ class MainWindow(QMainWindow):
 
     def _cal_latency_ms(self) -> float | None:
         cal = Calibration.load(self.config.data_root)
-        return cal.latency_median_ms if cal is not None else None
+        return (cal.latency_median_ms
+                if cal is not None and cal.has_latency else None)
 
     # ------------------------------------------------------------------- status
     def _update_status(self) -> None:
@@ -615,6 +619,10 @@ class MainWindow(QMainWindow):
                              f"({device}) to start.", timeout_ms=0)
 
     def on_evdev_start(self, t_press: float) -> None:
+        if (self.press_hook is not None
+                and self.session.phase not in (Phase.ARMED, Phase.RECORDING)):
+            self.press_hook(t_press)
+            return
         if self.session.phase is not Phase.ARMED:
             return
         # WP7: an unlisted race records under a provisional (timestamp) key with
@@ -642,6 +650,10 @@ class MainWindow(QMainWindow):
         self._recompute_state()
 
     def on_evdev_crossing(self, t_press: float, code: int, suspect: bool = False) -> None:
+        if (self.press_hook is not None
+                and self.session.phase not in (Phase.ARMED, Phase.RECORDING)):
+            self.press_hook(t_press)
+            return
         # Single-key flow (§5.3): when the trigger key is armed, the first press
         # IS t0 (start). On the main thread via the bridge, so reading the
         # session phase here is safe. Once a race is running, every press is a
@@ -857,9 +869,17 @@ class MainWindow(QMainWindow):
         if self._last_state in (AppState.ARMED, AppState.RECORDING):
             self._show_toast("Calibration is unavailable during a race — F12 ends it.")
             return
-        dlg = CalibrationDialog(self.buffer, self.config.data_root, self.config, self)
+        dlg = CalibrationDialog(self.buffer, self.config.data_root, self.config,
+                                self, evdev=self.evdev_active)
         dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.notify.connect(self._show_toast)
+        self.press_hook = dlg.on_press
+        dlg.finished.connect(self._clear_press_hook)
+        dlg.destroyed.connect(self._clear_press_hook)
         dlg.show()
+
+    def _clear_press_hook(self, *_args) -> None:
+        self.press_hook = None
 
     def _export(self) -> None:
         race_id = self.session.focused_race_id or self.controller.race_id
