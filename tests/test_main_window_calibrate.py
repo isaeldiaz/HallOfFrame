@@ -79,3 +79,30 @@ def test_calibrate_refused_during_race(qapp, config, storage, buffer):
         assert win.press_hook is None
     finally:
         _teardown(win, ctl)
+
+
+def test_hook_bypassed_while_armed(qapp, config, storage, buffer):
+    win, ctl = _build(config, storage, buffer, qapp)
+    try:
+        hook = mock.Mock()
+        win.press_hook = hook
+        win.controller.start_race = mock.Mock()
+        win.session.arm()
+        win.on_evdev_crossing(5.0, 57)
+        hook.assert_not_called()
+        win.controller.start_race.assert_called_once()
+    finally:
+        _teardown(win, ctl)
+
+
+def test_dialog_evdev_flag(qapp, config, storage, buffer):
+    win, ctl = _build(config, storage, buffer, qapp)
+    try:
+        win.evdev_active = True
+        win._calibrate()
+        qapp.processEvents()
+        dlg = win.findChild(CalibrationDialog)
+        assert dlg is not None
+        assert dlg.reaction.evdev is True
+    finally:
+        _teardown(win, ctl)

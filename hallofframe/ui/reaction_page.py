@@ -36,6 +36,7 @@ class StimulusWindow(QWidget):
     """Full-screen black window; ``show_stimulus()`` turns it white with "GO"."""
 
     qt_press = Signal(float)  # Space/Return → time.monotonic() (Qt fallback only)
+    aborted = Signal()        # Esc → ReactionPage.abort (the dialog is hidden)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,6 +86,8 @@ class StimulusWindow(QWidget):
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
             self.qt_press.emit(time.monotonic())
+        elif event.key() == Qt.Key_Escape:
+            self.aborted.emit()
         else:
             super().keyPressEvent(event)
 
@@ -168,6 +171,9 @@ class ReactionPage(QWidget):
         self.result.setText("")
         self.save_btn.setEnabled(False)
         self.stimulus.present()
+        # Esc reaches the stimulus window (top-level, focused), not the hidden
+        # dialog, so abort has to come from the window's own key handler.
+        self.stimulus.aborted.connect(self.abort)
         if not self.evdev:
             self.stimulus.qt_press.connect(self.on_press)
             self._qt_connected = True

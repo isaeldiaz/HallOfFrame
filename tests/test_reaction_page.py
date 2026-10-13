@@ -7,7 +7,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtGui import QKeyEvent
 
 from fakes import FakeClock, FakeScheduler
 from hallofframe.calibration import Calibration, ReactionRun, calibration_path
@@ -18,6 +19,7 @@ pytestmark = pytest.mark.qt
 
 class FakeStimulus(QObject):
     qt_press = Signal(float)
+    aborted = Signal()
 
     def __init__(self, clock):
         super().__init__()
@@ -64,11 +66,11 @@ class FakeBeep:
         self.closed += 1
 
 
-def _build(data_root, clock, sched, stim, beep, *, evdev=True):
+def _build(data_root, clock, sched, stim, beep, *, evdev=True, trials=6):
     return ReactionPage(
         data_root, {"output": "default"}, evdev=evdev, clock=clock,
         schedule=sched,
-        run_factory=lambda k: ReactionRun(k, trials=6, rng=lambda a, b: 2.0),
+        run_factory=lambda k: ReactionRun(k, trials=trials, rng=lambda a, b: 2.0),
         stimulus_factory=lambda: stim, beep_factory=lambda: beep)
 
 
@@ -143,3 +145,89 @@ def test_beep_unavailable_aborts(qapp, data_root):
     page.start()
     assert messages == ["aplay not available — install alsa-utils"]
     assert page.run is None
+
+
+def test_press_before_start_ignored(qapp, data_root):
+    clock, sched = FakeClock(100.0), FakeScheduler()
+    stim, beep = FakeStimulus(clock), FakeBeep(clock)
+    page = _build(data_root, clock, sched, stim, beep)
+    page.on_press(1.0)
+    assert page.run is None
+    assert page.status.text() == ""
+
+
+def test_audio_kind_uses_beep(qapp, data_root):
+    clock, sched = FakeClock(100.0), FakeScheduler()
+    stim, beep = FakeStimulus(clock), FakeBeep(clock)
+    page = _build(data_root, clock, sched, stim, beep, trials=6)
+    page.kind_audio.setChecked(True)
+    page.start()
+    for _ in range(6):
+        _tick(clock, sched, 2.0)
+        page.on_press(clock() + 0.25)
+        _tick(clock, sched, 0.8)
+    assert beep.prepared == 6
+    assert beep.fired == 6
+    assert stim.shown == 0
+    page._save()
+    assert Calibration.load(data_root).reaction_audio_ms == 250.0
+
+
+def test_qt_fallback_uses_stimulus_keys(qapp, data_root):
+    clock, sched = FakeClock(100.0), FakeScheduler()
+    stim, beep = FakeStimulus(clock), FakeBeep(clock)
+    page = _build(data_root, clock, sched, stim, beep, evdev=False, trials=6)
+    page.start()
+    _tick(clock, sched, 2.0)
+    clock.advance(0.3)
+    stim.qt_press.emit(clock())
+    assert page.run.samples_ms == [pytest.approx(300.0)]
+    for _ in range(5):
+        _tick(clock, sched, 0.8)
+        _tick(clock, sched, 2.0)
+        page.on_press(clock() + 0.25)
+    _tick(clock, sched, 0.8)
+    page._save()
+    data = json.loads(calibration_path(data_root).read_text())
+    assert data["reaction"]["visual"]["press_source"] == "qt"
+
+
+def test_abort_closes_everything(qapp, data_root):
+    clock, sched = FakeClock(100.0), FakeScheduler()
+    stim, beep = FakeStimulus(clock), FakeBeep(clock)
+    page = _build(data_root, clock, sched, stim, beep)
+    finished = []
+    page.run_finished.connect(lambda: finished.append(1))
+    page.start()
+    _tick(clock, sched, 1.0)
+    page.abort()
+    assert stim.closed == 1
+    assert finished == [1]
+    assert page.run is None
+    _tick(clock, sched, 5.0)
+    assert stim.shown == 0
+
+
+def test_stimulus_escape_aborts(qapp, data_root):
+    clock, sched = FakeClock(100.0), FakeScheduler()
+    stim, beep = FakeStimulus(clock), FakeBeep(clock)
+    page = _build(data_root, clock, sched, stim, beep)
+    finished = []
+    page.run_finished.connect(lambda: finished.append(1))
+    page.start()
+    _tick(clock, sched, 1.0)
+    stim.aborted.emit()
+    assert page.run is None
+    assert stim.closed == 1
+    assert finished == [1]
+
+
+def test_stimulus_window_escape_emits_aborted(qapp):
+    from hallofframe.ui.reaction_page import StimulusWindow
+
+    window = StimulusWindow()
+    got = []
+    window.aborted.connect(lambda: got.append(1))
+    window.keyPressEvent(
+        QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    assert got == [1]
