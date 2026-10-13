@@ -9,8 +9,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QProgressBar, QPushButton, QSlider, QSpinBox,
-                               QVBoxLayout, QWidget)
+                               QProgressBar, QPushButton, QScrollArea, QSlider,
+                               QSpinBox, QVBoxLayout, QWidget)
 
 from .. import audio
 from .audio_view import AudioView
@@ -75,7 +75,16 @@ class AudioPage(QWidget):
         lay.addWidget(devices)
 
         self.mixer_box = QGroupBox("Mixer")
-        self.mixer_layout = QVBoxLayout(self.mixer_box)
+        self.mixer_scroll = QScrollArea()
+        self.mixer_scroll.setWidgetResizable(True)
+        # A laptop HDA card exposes ~10 controls; cap the list so the stacked
+        # page never grows the dialog past the screen.
+        self.mixer_scroll.setMaximumHeight(220)
+        self.mixer_host = QWidget()
+        self.mixer_layout = QVBoxLayout(self.mixer_host)
+        self.mixer_scroll.setWidget(self.mixer_host)
+        mixer_outer = QVBoxLayout(self.mixer_box)
+        mixer_outer.addWidget(self.mixer_scroll)
         lay.addWidget(self.mixer_box)
 
         filters = QGroupBox("Playback filters")
@@ -158,6 +167,7 @@ class AudioPage(QWidget):
         # deleted would call setValue() on a dead C++ object.
         for timer in self._mixer_timers.values():
             timer.stop()
+            timer.deleteLater()
         while self.mixer_layout.count():
             item = self.mixer_layout.takeAt(0)
             widget = item.widget()
@@ -230,6 +240,10 @@ class AudioPage(QWidget):
     def _stop_meter(self) -> None:
         if self.meter is not None:
             self.meter.stop()
+        # Unchecking Listen during a loopback stops the meter, so no more blocks
+        # arrive; abort the collection or the Record button stays "Recording…".
+        if self._collecting:
+            self._abort_loopback()
 
     def _on_level(self, rms: float) -> None:
         self.meter_bar.setValue(min(100, int(rms / _FULL_SCALE)))

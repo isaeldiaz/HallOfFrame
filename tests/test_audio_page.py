@@ -260,6 +260,22 @@ def test_loopback_meter_error_recovers(qapp, config):
     assert page.loop_btn.text() == "Record 3 s and play back"
 
 
+def test_unlisten_during_loopback_recovers(qapp, config):
+    page, _, _ = _make(config)
+    page.listen_btn.click()
+    page.loop_btn.click()
+    assert page._collecting is True
+    assert page.loop_btn.isEnabled() is False
+    block = b"\x00\x00" * 100
+    for _ in range(5):
+        page.meter.feed(100.0, block)
+    page.listen_btn.setChecked(False)
+    qapp.processEvents()
+    assert page._collecting is False
+    assert page.loop_btn.isEnabled()
+    assert page.loop_btn.text() == "Record 3 s and play back"
+
+
 def test_refresh_keeps_accepted_output(qapp, config):
     page, cfg, _ = _make(config)
     page.output_combo.setCurrentIndex(1)

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QScrollArea,
                                QStackedWidget, QVBoxLayout, QWidget)
 
@@ -115,6 +115,10 @@ class LatencyPage(QWidget):
             "all. At least "
             f"{_MIN_READABLE} readable images are required.")
         hint.setWordWrap(True)
+        # A wrapped label reports the full unwrapped width as its hint; cap it
+        # so word wrap cannot inflate the dialog width.
+        hint.setMinimumWidth(0)
+        hint.setMaximumWidth(900)
         lay.addWidget(hint)
 
         row = QHBoxLayout()
@@ -132,7 +136,6 @@ class LatencyPage(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.entries_host)
-        self.scroll.setMinimumHeight(420)
         lay.addWidget(self.scroll, 1)
 
         self.value_fields: list[QLineEdit] = []
@@ -346,7 +349,14 @@ class CalibrationDialog(QDialog):
         lay.addWidget(self.phase_label)
         self.stack = QStackedWidget()
         for _name, page in self._pages:
-            self.stack.addWidget(page)
+            # Each phase scrolls instead of growing the dialog: a stacked
+            # widget's size hint is the max over all pages, so an uncapped page
+            # (e.g. a laptop HDA mixer with ~10 controls) could exceed the panel.
+            scroller = QScrollArea()
+            scroller.setWidgetResizable(True)
+            scroller.setFrameShape(QFrame.NoFrame)
+            scroller.setWidget(page)
+            self.stack.addWidget(scroller)
         lay.addWidget(self.stack, 1)
 
         nav = QHBoxLayout()
@@ -362,6 +372,13 @@ class CalibrationDialog(QDialog):
         self.finish_btn.clicked.connect(self._finish)
         nav.addWidget(self.finish_btn)
         lay.addLayout(nav)
+
+        # Size to the panel (1920x1080 internal laptop screens): never fixed, so
+        # any page can scroll rather than push the dialog off-screen.
+        avail = (self.screen().availableGeometry() if self.screen()
+                 else QRect(0, 0, 1920, 1080))
+        self.resize(min(960, avail.width() - 80), min(820, avail.height() - 80))
+        self.setMinimumSize(640, 480)
 
         self.latency.run_started.connect(self.hide)
         self.latency.run_finished.connect(self.show)

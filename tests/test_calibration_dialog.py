@@ -7,9 +7,10 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QDialog, QScrollArea
 
 from hallofframe.calibration import calibration_path
+from hallofframe.ui.audio_page import AudioPage
 from hallofframe.ui.calibration_dialog import CalibrationDialog
 
 pytestmark = pytest.mark.qt
@@ -17,6 +18,33 @@ pytestmark = pytest.mark.qt
 
 def _dialog(buffer, config):
     return CalibrationDialog(buffer, config.data_root, config)
+
+
+def test_dialog_fits_screen(qapp, buffer, config):
+    cfg = config()
+    dlg = _dialog(buffer, cfg)
+    dlg.show()
+    qapp.processEvents()
+    assert dlg.height() <= 820
+    assert dlg.width() <= 960
+    assert dlg.stack.count() == len(dlg._pages)
+    for i, (_name, page) in enumerate(dlg._pages):
+        scroller = dlg.stack.widget(i)
+        assert isinstance(scroller, QScrollArea)
+        assert scroller.widget() is page
+
+
+def test_audio_mixer_scrolls(qapp, config):
+    controls = [
+        {"name": f"Control {i}", "capture": i % 2 == 0,
+         "playback": i % 2 == 1, "percent": 50, "switch": True}
+        for i in range(20)
+    ]
+    page = AudioPage(config(), list_pcms=lambda kind: [],
+                     mixer_controls=lambda card, **kw: list(controls),
+                     set_mixer=lambda *a, **k: None)
+    assert page.mixer_scroll.maximumHeight() <= 220
+    assert len(page.sliders) == 20
 
 
 def test_skip_advances_one_phase(qapp, buffer, config):

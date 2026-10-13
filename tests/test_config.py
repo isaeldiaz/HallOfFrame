@@ -65,7 +65,7 @@ def test_write_overrides_unknown_section(config):
 
 
 def test_load_config_reads_settings(tmp_path):
-    (tmp_path / "config.toml").write_text(f'[paths]\ndata_root = "{tmp_path}"\n')
+    (tmp_path / "config.toml").write_text(f'[paths]\ndata_root = "{tmp_path.as_posix()}"\n')
     (tmp_path / "settings.json").write_text('{"voice": {"input": "hw:9,0"}}')
     cfg = load_config(tmp_path / "config.toml")
     assert cfg.section("voice")["input"] == "hw:9,0"
