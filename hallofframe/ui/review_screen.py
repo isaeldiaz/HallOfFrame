@@ -215,6 +215,10 @@ class ReviewScreen(QWidget):
     edit_race_requested = Signal()
     notify = Signal(str)  # one-line operator message, shown as the app toast
 
+    @property
+    def _voice(self) -> dict:
+        return self.controller.config.section("voice")
+
     def __init__(self, controller, data_root, race_id: int | None = None,
                  parent=None):
         super().__init__(parent)
@@ -236,7 +240,6 @@ class ReviewScreen(QWidget):
         # removal (capture ids; reset when a different race is loaded).
         self._undo_stack: list[int] = []
         self._stack_race_id: int | None = None
-        self._voice = controller.config.section("voice")
         self._audio_path = None
         self._audio_offset = None
         self._player = None

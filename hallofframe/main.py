@@ -130,7 +130,8 @@ def build_core(config):
     if bool(voice["enabled"]):
         from .audio import ArecordSource, AudioRecorder
         controller.attach_recorder(
-            AudioRecorder(lambda: ArecordSource(str(voice["input"]))))
+            AudioRecorder(lambda: ArecordSource(
+                str(config.section("voice")["input"]))))
         if voice["mixer"]:
             from .audio import apply_mixer
             mixer_errors = apply_mixer(str(voice["mixer_card"]),

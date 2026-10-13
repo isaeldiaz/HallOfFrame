@@ -22,10 +22,10 @@ def _dialog(buffer, config):
 def test_skip_advances_one_phase(qapp, buffer, config):
     cfg = config()
     dlg = _dialog(buffer, cfg)
-    assert dlg.phase_label.text() == "Phase 1 of 2 — Latency"
+    assert dlg.phase_label.text() == "Phase 1 of 3 — Latency"
     dlg.skip_btn.click()
     assert dlg._index == 1
-    assert dlg.phase_label.text() == "Phase 2 of 2 — Reaction"
+    assert dlg.phase_label.text() == "Phase 2 of 3 — Reaction"
     assert dlg.skipped == {0}
     assert not calibration_path(cfg.data_root).exists()
 
@@ -37,7 +37,9 @@ def test_skip_last_phase_closes(qapp, buffer, config):
     qapp.processEvents()
     dlg.skip_btn.click()  # skip latency -> reaction
     assert dlg._index == 1
-    dlg.skip_btn.click()  # skip reaction -> finish
+    dlg.skip_btn.click()  # skip reaction -> audio
+    assert dlg._index == 2
+    dlg.skip_btn.click()  # skip audio -> finish
     assert dlg.result() == QDialog.Accepted
     assert not dlg.isVisible()
     assert not calibration_path(cfg.data_root).exists()

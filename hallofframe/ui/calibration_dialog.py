@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
 from .. import calibration as cal
 from ..framebuffer import FrameBuffer
 from . import styles
+from .audio_page import AudioPage
 from .images import load_scaled
 from .reaction_page import ReactionPage
 
@@ -328,7 +329,9 @@ class CalibrationDialog(QDialog):
         self.latency = LatencyPage(buffer, data_root, config, self)
         self.reaction = ReactionPage(data_root, config.section("voice"),
                                      evdev=evdev, parent=self)
-        self._pages = [("Latency", self.latency), ("Reaction", self.reaction)]
+        self.audio = AudioPage(config)
+        self._pages = [("Latency", self.latency), ("Reaction", self.reaction),
+                       ("Audio", self.audio)]
         self._index = 0
         self.skipped: set[int] = set()
 
@@ -366,6 +369,7 @@ class CalibrationDialog(QDialog):
         self.reaction.run_started.connect(self.hide)
         self.reaction.run_finished.connect(self.show)
         self.reaction.notify.connect(self.notify)
+        self.audio.notify.connect(self.notify)
         self._show_phase()
 
     # --- navigation -------------------------------------------------------
@@ -408,6 +412,7 @@ class CalibrationDialog(QDialog):
     def closeEvent(self, event) -> None:  # noqa: N802
         self.reaction.abort()
         self.latency.cancel()
+        self.audio.stop()
         super().closeEvent(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
