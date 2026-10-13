@@ -233,6 +233,68 @@ def test_dialog_has_audio_tab_and_stops_meter(qapp, buffer, config):
     assert dlg.audio.meter.running is False
 
 
+def test_slider_debounce_collapses_rapid_changes(qapp, config):
+    calls = []
+
+    def set_mixer(card, control, value, **kw):
+        calls.append((card, control, value))
+        return None
+
+    page, _, _ = _make(config, set_mixer=set_mixer)
+    slider = page.sliders["Capture"]
+    for value in range(61, 71):
+        slider.setValue(value)
+    assert calls == []
+    QTest.qWait(250)
+    assert calls == [("0", "Capture", "70%")]
+
+
+def test_loopback_meter_error_recovers(qapp, config):
+    page, _, _ = _make(config)
+    page.loop_btn.click()
+    assert page.loop_btn.isEnabled() is False
+    page.meter._on_error("audio: boom")
+    qapp.processEvents()
+    assert page._collecting is False
+    assert page.loop_btn.isEnabled()
+    assert page.loop_btn.text() == "Record 3 s and play back"
+
+
+def test_refresh_keeps_accepted_output(qapp, config):
+    page, cfg, _ = _make(config)
+    page.output_combo.setCurrentIndex(1)
+    page.accept_btn.click()
+    accepted = cfg.section("voice")["output"]
+    page.refresh()
+    assert page.output_combo.currentData() == accepted
+
+
+def test_dialog_finish_stops_meter(qapp, buffer, config):
+    cfg = config(voice={"enabled": True})
+    with mock.patch("hallofframe.ui.audio_page.audio.LevelMeter", FakeMeter):
+        dlg = CalibrationDialog(buffer, cfg.data_root, cfg, evdev=False)
+        dlg.skip_btn.click()  # latency -> reaction
+        dlg.skip_btn.click()  # reaction -> audio
+        assert dlg._index == 2
+        dlg.audio.listen_btn.click()
+        assert dlg.audio.meter.running
+        dlg.finish_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.audio.meter.running is False
+
+
+def test_dialog_reject_stops_meter(qapp, buffer, config):
+    cfg = config(voice={"enabled": True})
+    with mock.patch("hallofframe.ui.audio_page.audio.LevelMeter", FakeMeter):
+        dlg = CalibrationDialog(buffer, cfg.data_root, cfg, evdev=False)
+        dlg.skip_btn.click()
+        dlg.skip_btn.click()
+        dlg.audio.listen_btn.click()
+        assert dlg.audio.meter.running
+        dlg.reject()
+    assert dlg.audio.meter.running is False
+
+
 def test_skip_audio_phase_stops_meter(qapp, buffer, config):
     cfg = config(voice={"enabled": True})
     with mock.patch("hallofframe.ui.audio_page.audio.LevelMeter", FakeMeter):

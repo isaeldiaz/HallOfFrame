@@ -501,7 +501,8 @@ def parse_pcm_list(text: str) -> list[tuple[str, str]]:
 
 
 def list_pcms(kind: str, *, runner=subprocess.run) -> list[tuple[str, str]]:
-    """kind 'input' → arecord -L, 'output' → aplay -L. Never raises; [] on OSError/timeout/non-zero exit."""
+    """kind 'input' → arecord -L, 'output' → aplay -L. Never raises; a failed or
+    empty listing yields just [("default", "System default")]."""
     if kind not in ("input", "output"):
         raise ValueError(kind)
     binary = "arecord" if kind == "input" else "aplay"

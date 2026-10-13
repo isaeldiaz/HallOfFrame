@@ -680,6 +680,18 @@ def test_level_meter_reports_rms():
     m.stop()
 
 
+def test_level_meter_reports_rms_varying():
+    # One loud sample in a 1600-sample block: RMS is 250, peak/mean-abs would
+    # report something else, so this pins the actual RMS math.
+    block = b"\x10\x27" + b"\x00\x00" * 1599
+    src = FakeSource([block, b""])
+    levels = []
+    m = LevelMeter(lambda: src, levels.append)
+    m.start()
+    assert _wait_for(lambda: not m.running)
+    assert levels == [pytest.approx(250.0)]
+
+
 def test_level_meter_open_error():
     errs = []
     m = LevelMeter(lambda: FailingSource(), lambda r: None, on_error=errs.append)

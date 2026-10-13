@@ -132,6 +132,8 @@ class AudioPage(QWidget):
     # --- enumeration ------------------------------------------------------
     def refresh(self) -> None:
         """Re-list PCMs and mixer controls."""
+        # Re-read the section so a value accepted since construction survives a refresh.
+        self.voice = self.config.section("voice")
         self._populate_combo(self.input_combo,
                              self._list_pcms("input") + self._extra_inputs,
                              str(self.voice["input"]))
@@ -152,6 +154,10 @@ class AudioPage(QWidget):
             combo.setCurrentIndex(idx)
 
     def _rebuild_mixer(self) -> None:
+        # Stop pending debounces first: a timer that fires after its slider is
+        # deleted would call setValue() on a dead C++ object.
+        for timer in self._mixer_timers.values():
+            timer.stop()
         while self.mixer_layout.count():
             item = self.mixer_layout.takeAt(0)
             widget = item.widget()
@@ -209,8 +215,15 @@ class AudioPage(QWidget):
             self._stop_meter()
 
     def _start_meter(self) -> None:
+        # An already-running meter must not be orphaned (also covers Listen
+        # pressed during a loopback).
+        if self.meter is not None and self.meter.running:
+            self.meter.stop()
+        # Capture the device in the GUI thread: the factory runs on the meter
+        # thread and must not read a QComboBox there.
+        device = self.input_name
         self.meter = self._meter_factory(
-            lambda: self._source_factory(self.input_name), self.level.emit,
+            lambda: self._source_factory(device), self.level.emit,
             on_error=self.meter_error.emit, on_block=self.block.emit)
         self.meter.start()
 
@@ -224,7 +237,17 @@ class AudioPage(QWidget):
     def _on_meter_error(self, message: str) -> None:
         if self.listen_btn.isChecked():
             self.listen_btn.setChecked(False)
+        self._stop_meter()
+        if self._collecting:
+            self._abort_loopback()
         self.notify.emit(message)
+
+    def _abort_loopback(self) -> None:
+        """A failed source must not leave the loopback button stuck recording."""
+        self._collecting = False
+        self._loop_blocks = []
+        self.loop_btn.setEnabled(True)
+        self.loop_btn.setText("Record 3 s and play back")
 
     # --- loopback / tone --------------------------------------------------
     def _loopback(self) -> None:

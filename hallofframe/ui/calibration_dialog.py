@@ -370,6 +370,9 @@ class CalibrationDialog(QDialog):
         self.reaction.run_finished.connect(self.show)
         self.reaction.notify.connect(self.notify)
         self.audio.notify.connect(self.notify)
+        # accept()/reject() bypass closeEvent, so stop the meter/player on any
+        # exit (Finish, Esc, Back-to-close, window close) via the finished signal.
+        self.finished.connect(lambda *_: self.audio.stop())
         self._show_phase()
 
     # --- navigation -------------------------------------------------------
