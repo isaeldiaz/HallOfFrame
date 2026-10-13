@@ -276,6 +276,31 @@ def test_unlisten_during_loopback_recovers(qapp, config):
     assert page.loop_btn.text() == "Record 3 s and play back"
 
 
+def test_loopback_watchdog_recovers(qapp, config):
+    page, _, play = _make(config)
+    page.loop_btn.click()
+    assert page.loop_btn.isEnabled() is False
+    page._on_loop_timeout()
+    qapp.processEvents()
+    assert page._collecting is False
+    assert page.loop_btn.isEnabled()
+    assert page.loop_btn.text() == "Record 3 s and play back"
+    assert play.calls == []
+
+
+def test_loopback_silence_warns(qapp, config):
+    page, _, play = _make(config)
+    notes = []
+    page.notify.connect(notes.append)
+    page.loop_btn.click()
+    block = b"\x00\x00" * 1600
+    for _ in range(30):
+        page.meter.feed(0.0, block)
+    qapp.processEvents()
+    assert notes == ["audio: loopback recorded silence — raise the capture level"]
+    assert len(play.calls) == 1
+
+
 def test_refresh_keeps_accepted_output(qapp, config):
     page, cfg, _ = _make(config)
     page.output_combo.setCurrentIndex(1)

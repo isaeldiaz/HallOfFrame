@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QProgressBar, QPushButton, QScrollArea, QSlider,
-                               QSpinBox, QVBoxLayout, QWidget)
+                               QGroupBox, QHBoxLayout, QLabel, QLayout,
+                               QLineEdit, QProgressBar, QPushButton,
+                               QScrollArea, QSlider, QSpinBox, QVBoxLayout,
+                               QWidget)
 
 from .. import audio
 from .audio_view import AudioView
 
 _LOOP_BLOCKS = 30   # 30 x 100 ms = 3 s of loopback
+_LOOP_TIMEOUT_MS = 4500   # watchdog: a dead/silent input must not strand the button
 _FULL_SCALE = 327.67
 
 
@@ -61,6 +63,12 @@ class AudioPage(QWidget):
         dlay = QFormLayout(devices)
         self.input_combo = QComboBox()
         self.output_combo = QComboBox()
+        for combo in (self.input_combo, self.output_combo):
+            # Without this a combo sizes its minimum to its widest entry (long
+            # PCM descriptions), forcing the whole page wider than the screen.
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(10)
+            combo.setMinimumWidth(0)
         dlay.addRow("Input (arecord)", self.input_combo)
         dlay.addRow("Output (aplay)", self.output_combo)
         card_row = QHBoxLayout()
@@ -82,6 +90,9 @@ class AudioPage(QWidget):
         self.mixer_scroll.setMaximumHeight(220)
         self.mixer_host = QWidget()
         self.mixer_layout = QVBoxLayout(self.mixer_host)
+        # Make the host's minimum height track its rows, or the scroll area
+        # compresses (and clips) them instead of showing a scrollbar.
+        self.mixer_layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.mixer_scroll.setWidget(self.mixer_host)
         mixer_outer = QVBoxLayout(self.mixer_box)
         mixer_outer.addWidget(self.mixer_scroll)
@@ -135,6 +146,9 @@ class AudioPage(QWidget):
         self._play_timer = QTimer(self)
         self._play_timer.setInterval(100)
         self._play_timer.timeout.connect(self._poll_player)
+        self._loop_timer = QTimer(self)
+        self._loop_timer.setSingleShot(True)
+        self._loop_timer.timeout.connect(self._on_loop_timeout)
 
         self.refresh()
 
@@ -258,10 +272,20 @@ class AudioPage(QWidget):
 
     def _abort_loopback(self) -> None:
         """A failed source must not leave the loopback button stuck recording."""
+        self._loop_timer.stop()
         self._collecting = False
         self._loop_blocks = []
         self.loop_btn.setEnabled(True)
         self.loop_btn.setText("Record 3 s and play back")
+
+    def _on_loop_timeout(self) -> None:
+        """No/too little audio arrived: un-stick the button and say why."""
+        if not self._collecting:
+            return
+        got = len(self._loop_blocks)
+        self._abort_loopback()
+        self.notify.emit(
+            f"audio: loopback got {got} block(s) in 3 s — check the input device")
 
     # --- loopback / tone --------------------------------------------------
     def _loopback(self) -> None:
@@ -272,6 +296,7 @@ class AudioPage(QWidget):
             self._start_meter()
         self.loop_btn.setEnabled(False)
         self.loop_btn.setText("Recording… 3 s")
+        self._loop_timer.start(_LOOP_TIMEOUT_MS)
 
     def _on_block(self, block: bytes) -> None:
         if not self._collecting:
@@ -281,12 +306,16 @@ class AudioPage(QWidget):
             self._finish_loopback()
 
     def _finish_loopback(self) -> None:
+        self._loop_timer.stop()
         self._collecting = False
         if self._loop_started_meter:
             self._stop_meter()
         pcm = audio.process_clip(b"".join(self._loop_blocks),
                                  gain_db=float(self.gain_spin.value()),
                                  highpass_hz=float(self.highpass_spin.value()))
+        if audio.envelope(pcm, 1) == [0.0]:
+            self.notify.emit(
+                "audio: loopback recorded silence — raise the capture level")
         self.audio_view.set_waveform(pcm, 3.0)
         self.audio_view.set_marks(0.0, [])
         self._play(pcm)
